@@ -27,7 +27,7 @@ where
         get_transport: fn(transports: &TTransports) -> &TTransport,
     ) -> AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
     where
-        TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+        TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
         TMessage: Send + Sync + 'static,
         TReply: Send + Sync + 'static,
     {
@@ -44,7 +44,7 @@ pub struct AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessag
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
 {
     auth_spec_builder: Option<AuthSpecBuilder<TState, TCredentials, TTransports>>,
     get_transport: fn(transports: &TTransports) -> &TTransport,
@@ -59,7 +59,7 @@ where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {

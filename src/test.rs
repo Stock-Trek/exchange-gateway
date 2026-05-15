@@ -10,9 +10,10 @@ mod test {
     use std::collections::HashMap;
     use stock_trek::error::result::StockTrekResult;
 
+    #[allow(dead_code)]
     pub async fn test() {
         let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports>::new()
-            .begin_leg::<MyHttpTransport, Req, Res>(|t| &t.http)
+            .begin_leg(|t| &t.http)
             .gather_value(
                 |state, _credentials| state.abc,
                 |message, value| {
@@ -35,15 +36,18 @@ mod test {
         println!("{:?}", a);
     }
 
+    #[allow(dead_code)]
     struct MyCredentials {
         pub api_key: ApiKeyCredentials,
     }
 
+    #[allow(dead_code)]
     struct MyState {
         abc: i64,
     }
 
     struct MyTransports {
+        #[allow(dead_code)]
         pub http: MyHttpTransport,
     }
 
@@ -51,9 +55,11 @@ mod test {
     impl HttpTransport<Req, Res> for MyHttpTransport {}
 
     struct Req {
+        #[allow(dead_code)]
         headers: HashMap<String, String>,
     }
     struct Res {
+        #[allow(dead_code)]
         body: String,
     }
 
@@ -70,24 +76,31 @@ mod test {
     }
 
     impl MyTransports {
+        #[allow(dead_code)]
         pub fn new(http: MyHttpTransport) -> Self {
             Self { http }
         }
     }
 
     #[async_trait]
-    impl Transport<Req, Res> for MyHttpTransport {
+    impl Transport for MyHttpTransport {
+        type Message = Req;
+        type Reply = Res;
+
         fn new(_url: String) -> Self {
             Self {}
         }
-        fn new_message(&self) -> StockTrekResult<Req> {
-            Ok(Req {
+        fn new_message(&self) -> StockTrekResult<Self::Message> {
+            Ok(Self::Message {
                 headers: HashMap::new(),
             })
         }
-        async fn send_and_wait_for_reply(&self, _message: Req) -> StockTrekResult<Res> {
-            Ok(Res {
-                body: "dsfdsfds".to_string(),
+        async fn send_and_wait_for_reply(
+            &self,
+            _message: Self::Message,
+        ) -> StockTrekResult<Self::Reply> {
+            Ok(Self::Reply {
+                body: "fdsfds".to_string(),
             })
         }
     }

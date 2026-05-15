@@ -5,7 +5,9 @@ pub struct StoreValue<TValue, TReply, TState>
 where
     TValue: Clone,
 {
+    #[allow(dead_code)]
     unpack_value: UnpackValue<TValue, TReply>,
+    #[allow(dead_code)]
     set_value: SetValue<TValue, TState>,
 }
 
@@ -28,6 +30,7 @@ impl<TValue, TReply, TState> StoreValue<TValue, TReply, TState>
 where
     TValue: Clone,
 {
+    #[allow(dead_code)]
     fn store_value(&self, reply: &TReply, state: &mut TState) -> StockTrekResult<()> {
         let value = (self.unpack_value)(reply)?;
         (self.set_value)(state, &value)?;

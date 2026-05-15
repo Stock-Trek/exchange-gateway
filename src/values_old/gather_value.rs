@@ -30,7 +30,7 @@ pub struct GatherValueWrapper<
 > where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessage, TReply>,
+    TTransport: Transport<Message = TMessage, Reply = TReply>,
     TGetValue: GetValue<TValue, TState, TCredentials>,
     TPackValue: PackValue<TValue, TMessage>,
 {
@@ -58,7 +58,7 @@ impl<TValue, TState, TCredentials, TTransport, TMessage, TReply, TGetValue, TPac
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessage, TReply>,
+    TTransport: Transport<Message = TMessage, Reply = TReply>,
     TGetValue: GetValue<TValue, TState, TCredentials>,
     TPackValue: PackValue<TValue, TMessage>,
 {
@@ -91,7 +91,7 @@ impl<TValue, TState, TCredentials, TTransport, TMessage, TReply, TGetValue, TPac
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessage, TReply>,
+    TTransport: Transport<Message = TMessage, Reply = TReply>,
     TGetValue: GetValue<TValue, TState, TCredentials>,
     TPackValue: PackValue<TValue, TMessage>,
 {

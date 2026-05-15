@@ -1,8 +1,9 @@
 use crate::transport::transport::Transport;
 
-pub trait HttpTransport<TMessage, TReply>: Transport<TMessage, TReply> {}
+pub trait HttpTransport<TMessage, TReply>: Transport<Message = TMessage, Reply = TReply> {}
 
 pub struct HttpMessageBuilder<THttpMessage> {
+    #[allow(dead_code)]
     setter: fn(&THttpMessage),
 }
 

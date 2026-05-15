@@ -11,9 +11,11 @@ pub struct GatherValue<TValue, TState, TCredentials, TTransport, TMessage, TRepl
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessage, TReply>,
+    TTransport: Transport<Message = TMessage, Reply = TReply>,
 {
+    #[allow(dead_code)]
     get_value: GetValue<TValue, TState, TCredentials>,
+    #[allow(dead_code)]
     pack_value: PackValue<TValue, TMessage>,
     _phantom_transport: PhantomData<TTransport>,
     _phantom_reply: PhantomData<TReply>,
@@ -24,7 +26,7 @@ impl<TValue, TState, TCredentials, TTransport, TMessage, TReply>
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessage, TReply>,
+    TTransport: Transport<Message = TMessage, Reply = TReply>,
 {
     pub fn new(
         get_value: GetValue<TValue, TState, TCredentials>,
@@ -44,8 +46,9 @@ impl<TValue, TState, TCredentials, TTransport, TMessage, TReply>
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessage, TReply>,
+    TTransport: Transport<Message = TMessage, Reply = TReply>,
 {
+    #[allow(dead_code)]
     fn gather(
         &self,
         state: &TState,

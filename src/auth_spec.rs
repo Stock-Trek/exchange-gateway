@@ -44,7 +44,7 @@ pub trait AuthLegTrait<TState, TCredentials, TTransports> {
 
 pub struct AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
 {
     get_transport: fn(transports: &TTransports) -> &TTransport,
     gather_values: Vec<Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>>,
@@ -58,7 +58,7 @@ where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
@@ -87,7 +87,7 @@ where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
