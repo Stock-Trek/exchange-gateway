@@ -7,24 +7,21 @@ use crate::{
 };
 use stock_trek::error::result::StockTrekResult;
 
-pub struct GetHash<TState, TCredentials, THashableValue, TToBytes>
+pub struct GetHash<TState, TCredentials, THashableValue>
 where
     TCredentials: Credential,
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
 {
     get_hashable_value: Box<dyn GetValue<THashableValue, TState, TCredentials>>,
-    hash_encoder: HasherEncoder<THashableValue, TToBytes>,
+    hash_encoder: HasherEncoder<THashableValue>,
 }
 
-impl<TState, TCredentials, THashableValue, TToBytes>
-    GetHash<TState, TCredentials, THashableValue, TToBytes>
+impl<TState, TCredentials, THashableValue> GetHash<TState, TCredentials, THashableValue>
 where
     TCredentials: Credential,
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
 {
     pub fn new(
         get_hashable_value: Box<dyn GetValue<THashableValue, TState, TCredentials>>,
-        to_bytes: TToBytes,
+        to_bytes: fn(&THashableValue) -> &Vec<u8>,
         hash_algorithm: HashAlgorithm,
         encoding: Encoding,
     ) -> Self {
@@ -35,11 +32,10 @@ where
     }
 }
 
-impl<TState, TCredentials, THashableValue, TToBytes> GetValue<String, TState, TCredentials>
-    for GetHash<TState, TCredentials, THashableValue, TToBytes>
+impl<TState, TCredentials, THashableValue> GetValue<String, TState, TCredentials>
+    for GetHash<TState, TCredentials, THashableValue>
 where
     TCredentials: Credential,
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
 {
     fn get(&self, state: &TState, credential: &TCredentials) -> StockTrekResult<String> {
         let hashable_value = self.get_hashable_value.get(state, credential)?;

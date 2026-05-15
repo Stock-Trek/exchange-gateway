@@ -1,32 +1,61 @@
 use crate::{
-    adapters::{
-        adapter::{
-            ConvertedOrder, ExchangeAdapter, ExchangeAdapterTrait, ExchangeAuthentication,
-            ExchangeCapabilities, ExchangeMetadata, ExchangeOrderConverter,
-        },
-        capability::Capability,
-        increment_sizes::{IncrementSizes, IncrementSizesBuilder},
-        metadata::{OrderMetadataValue, RequestPart, RestOrderMetadata, WebsocketOrderMetadata},
-        transport::OrderTransport,
+    adapt::{
+        adapter::Adapter, adapter_creator::AdapterCreatorTrait,
+        increment_sizes::IncrementSizesBuilder,
     },
-    asset_id::AssetId,
-    error::result::StockTrekResult,
-    exchange_id::ExchangeId,
-    order::{order_request::OrderRequest, trading_pair::TradingPair},
+    convert::order_request_mapper::OrderRequestMapperTrait,
 };
-use chrono::Utc;
 use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
+use stock_trek::{
+    asset_id::AssetId,
+    capability::{Capability, MultiLegCapability, QuoteQuantityCapability},
+    exchange_id::ExchangeId,
+    order::order_request::OrderRequest,
+};
 use strum::Display;
-use urlencoding::encode;
 
-pub struct BinanceAdapter {
-    increments: HashMap<TradingPair, IncrementSizes>,
-    capabilities: Vec<Capability>,
-    rest_order_metadata: Vec<RestOrderMetadata>,
-    websocket_order_metadata: Vec<WebsocketOrderMetadata>,
+pub struct BinanceAdapterCreator;
+
+impl AdapterCreatorTrait for BinanceAdapterCreator {
+    fn exchange_id(&self) -> ExchangeId {
+        ExchangeId("Binance".to_string())
+    }
+    fn create_adapter(&self) -> Adapter {
+        let increments = IncrementSizesBuilder::new()
+            .with(
+                AssetId::Bitcoin,
+                AssetId::Tether,
+                Decimal::from_i128_with_scale(1, 3),
+                Decimal::from_i128_with_scale(1, 3),
+            )
+            .build();
+        let capabilities = vec![
+            Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
+            Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
+            Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
+            Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
+            Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
+        ];
+        Adapter {
+            id: ExchangeId("Binance".to_string()),
+            capabilities,
+            increments,
+            symbol_ticker_divider: None,
+            ticker_overrides: HashMap::new(),
+            order_request_mapper: Box::new(BinanceOrderRequestMapper),
+        }
+    }
+}
+
+struct BinanceOrderRequestMapper;
+
+impl OrderRequestMapperTrait for BinanceOrderRequestMapper {
+    fn map_order_request(&self, _order_request: &OrderRequest<AssetId, Decimal>) -> Value {
+        Value::Null
+    }
 }
 
 // impl OrderConverter<SingleOrder, BinanceSingleOrderParams> for BinanceAdapter {
@@ -572,106 +601,6 @@ pub struct BinanceAdapter {
 //         self.wrap_websocket_params(params)
 //     }
 // }
-
-impl BinanceAdapter {
-    pub fn new() -> ExchangeAdapter {
-        let one = Decimal::ONE;
-        let one_tenth = one / Decimal::TEN;
-        let one_hundredth = one_tenth / Decimal::TEN;
-        let one_thousandth = one_hundredth / Decimal::TEN;
-        let increments = IncrementSizesBuilder::new()
-            .with(
-                AssetId::Bitcoin,
-                AssetId::Tether,
-                one_thousandth,
-                one_thousandth,
-            )
-            .build();
-        let capabilities = vec![
-            Capability::OneTriggersOco,
-            Capability::OneTriggersOther,
-            Capability::OneTriggersOco,
-        ];
-        let rest_order_metadata = vec![
-            RestOrderMetadata::new(
-                OrderMetadataValue::ApiKey,
-                RequestPart::query_param("X-MBX-APIKEY"),
-            ),
-            RestOrderMetadata::new(
-                OrderMetadataValue::Signature,
-                RequestPart::query_param("signature"),
-            ),
-        ];
-        let websocket_order_metadata = vec![WebsocketOrderMetadata::new(
-            OrderMetadataValue::Signature,
-            "params.signature",
-        )];
-        Box::new(Self {
-            increments,
-            capabilities,
-            rest_order_metadata,
-            websocket_order_metadata,
-        })
-    }
-}
-
-impl ExchangeAdapterTrait for BinanceAdapter {}
-
-impl ExchangeMetadata for BinanceAdapter {
-    fn id(&self) -> ExchangeId {
-        ExchangeId("Binance".to_string())
-    }
-    fn increments(&self) -> &HashMap<TradingPair, IncrementSizes> {
-        &self.increments
-    }
-}
-
-impl ExchangeCapabilities for BinanceAdapter {
-    fn capabilities(&self) -> &Vec<Capability> {
-        &self.capabilities
-    }
-}
-
-impl ExchangeAuthentication for BinanceAdapter {
-    fn rest_order_metadata(&self) -> &Vec<RestOrderMetadata> {
-        &self.rest_order_metadata
-    }
-    fn websocket_order_metadata(&self) -> &Vec<WebsocketOrderMetadata> {
-        &self.websocket_order_metadata
-    }
-}
-
-impl ExchangeOrderConverter for BinanceAdapter {
-    fn convert(
-        &self,
-        order: &OrderRequest<AssetId, Decimal>,
-        transport: OrderTransport,
-    ) -> StockTrekResult<ConvertedOrder> {
-        let base = &AssetId::Bitcoin;
-        let quote = &AssetId::Tether;
-        let symbol = self.to_symbol(base, quote);
-        let side = BinanceOrderSide::BUY;
-        let type_ = BinanceOrderType::MARKET;
-        let time_in_force = BinanceTimeInForce::IOC;
-        let quantity = Decimal::ONE;
-        let price = Decimal::ONE;
-        let receive_window = 5000;
-        let timestamp = Utc::now().timestamp_millis();
-        let query_string = format!(
-            "symbol={}&side={}&type={}&timeInForce={}&quantity={}&price={}&recvWindwo={}&timestamp={}",
-            symbol, side, type_, time_in_force, quantity, price, receive_window, timestamp
-        );
-        let url_encoded_query_string = encode(&query_string);
-        let signature_data = url_encoded_query_string.as_bytes().to_vec();
-        // TODO
-
-        let unsigned = Value::Null;
-        Ok(ConvertedOrder {
-            unsigned,
-            signature_data,
-        })
-    }
-}
 
 #[derive(Debug, Display, Serialize)]
 pub enum BinanceRestParams {

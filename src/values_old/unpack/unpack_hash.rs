@@ -4,21 +4,15 @@ use crate::values::{
 };
 use stock_trek::error::result::StockTrekResult;
 
-pub struct UnpackHash<TReply, THashableValue, TToBytes>
-where
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
-{
+pub struct UnpackHash<TReply, THashableValue> {
     unpack_hashable_value: Box<dyn UnpackValue<THashableValue, TReply>>,
-    hash_encoder: HasherEncoder<THashableValue, TToBytes>,
+    hash_encoder: HasherEncoder<THashableValue>,
 }
 
-impl<TReply, THashableValue, TToBytes> UnpackHash<TReply, THashableValue, TToBytes>
-where
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
-{
+impl<TReply, THashableValue> UnpackHash<TReply, THashableValue> {
     pub fn new(
         unpack_hashable_value: Box<dyn UnpackValue<THashableValue, TReply>>,
-        to_bytes: TToBytes,
+        to_bytes: fn(&THashableValue) -> &Vec<u8>,
         hash_algorithm: HashAlgorithm,
         encoding: Encoding,
     ) -> Self {
@@ -29,11 +23,7 @@ where
     }
 }
 
-impl<TReply, THashableValue, TToBytes> UnpackValue<String, TReply>
-    for UnpackHash<TReply, THashableValue, TToBytes>
-where
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
-{
+impl<TReply, THashableValue> UnpackValue<String, TReply> for UnpackHash<TReply, THashableValue> {
     fn unpack(&self, reply: &TReply) -> StockTrekResult<String> {
         let hashable_value = self.unpack_hashable_value.unpack(reply)?;
         let encoded = self.hash_encoder.hash_encode(&hashable_value)?;

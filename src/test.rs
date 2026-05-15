@@ -1,78 +1,97 @@
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use crate::{
-        auth_spec::AuthSpec,
-        authenticator::Authenticator,
+        auth_spec_builder::AuthSpecBuilder,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        exchange_client::ExchangeClient,
         transport::{
             http_transport::{HttpPart, HttpTransport},
             transport::Transport,
         },
-        values::{get::get_uuid::GetUuid, set::set_state_value::SetStateValue},
     };
+    use async_trait::async_trait;
     use stock_trek::error::result::StockTrekResult;
 
-    pub fn test() {
-        let client = MyClient {};
-        let auth_spec = AuthSpec::<Creds, Rest, State>::new(
-            vec![MoveValue(|c, t, s| GetUuid, |c, t, s| SetStateValue)],
-            vec![],
-        );
-        let credentials = Creds {
-            api_key: ApiKeyCredentials::new("dsffsd".to_string(), "fdsfds".as_bytes().to_vec()),
+    pub async fn test() {
+        let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports>::new()
+            .begin_leg::<MyHttpTransport, HttpPart, Req, Res>(|t| &t.http)
+            .gather_value(
+                |state, _credentials| state.abc,
+                |message, value| {
+                    message
+                        .headers
+                        .insert("HEADER".to_string(), value.to_string());
+                },
+            )
+            .store_value(
+                |reply| Ok(reply.body.clone()),
+                |state, value| state.abc = value.len() as i64,
+            )
+            .build_leg()
+            .build_spec();
+        let credentials = MyCredentials {
+            api_key: ApiKeyCredentials::new("fdnskfndjks".to_string(), Vec::new()),
         };
-        let transport = Rest {};
-        let authenticator = Authenticator::new(client, auth_spec, credentials, transport);
-        authenticator.start();
+        let transports = MyTransports::new(MyHttpTransport);
+        let a = auth_spec.auth(&credentials, &transports).await;
     }
 
-    struct MyClient {}
-
-    impl ExchangeClient for MyClient {
-        fn on_order_accepted(&self, order: Order) {}
-        fn send_order_request(
-            &self,
-            order: stock_trek::prelude::OrderRequest<AssetId, rust_decimal::prelude::Decimal>,
-        ) {
-        }
-    }
-    struct Creds {
-        api_key: ApiKeyCredentials,
+    struct MyCredentials {
+        pub api_key: ApiKeyCredentials,
     }
 
-    struct State {}
+    struct MyState {
+        abc: i64,
+    }
 
-    struct Rest {}
+    struct MyTransports {
+        pub http: MyHttpTransport,
+    }
 
-    struct Req {}
-    struct Res {}
+    struct MyHttpTransport;
+    impl HttpTransport<Req, Res> for MyHttpTransport {}
 
-    impl Destroy for Creds {
+    struct Req {
+        headers: HashMap<String, String>,
+    }
+    struct Res {
+        body: String,
+    }
+
+    impl Destroy for MyCredentials {
         fn destroy(&mut self) {
             self.api_key.destroy();
         }
     }
 
-    impl Default for State {
+    impl Default for MyState {
         fn default() -> Self {
-            Self {}
+            Self { abc: 123 }
         }
     }
 
-    impl HttpTransport<Req, Res> for Rest {
-        async fn send_message(&self, message: Req) -> StockTrekResult<Res> {
-            Ok(Res {})
+    impl MyTransports {
+        pub fn new(http: MyHttpTransport) -> Self {
+            Self { http }
         }
     }
 
-    impl Transport<HttpPart, Req, Res> for Rest {
-        fn new(url: String) -> Self {
+    #[async_trait]
+    impl Transport<HttpPart, Req, Res> for MyHttpTransport {
+        fn new(_url: String) -> Self {
             Self {}
         }
         fn new_message(&self) -> StockTrekResult<Req> {
-            Ok(Req {})
+            Ok(Req {
+                headers: HashMap::new(),
+            })
+        }
+        async fn send_and_wait_for_reply(&self, _message: Req) -> StockTrekResult<Res> {
+            Ok(Res {
+                body: "dsfdsfds".to_string(),
+            })
         }
     }
 }

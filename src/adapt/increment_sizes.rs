@@ -1,5 +1,6 @@
 use rust_decimal::{Decimal, RoundingStrategy, prelude::FromPrimitive};
 use std::collections::HashMap;
+use stock_trek::{asset_id::AssetId, order::trading_pair::TradingPair};
 
 #[derive(Clone)]
 pub struct IncrementSizes {
@@ -53,5 +54,11 @@ impl IncrementSizesBuilder {
     }
     pub fn build(&self) -> HashMap<TradingPair, IncrementSizes> {
         self.map.clone()
+    }
+}
+
+impl Default for IncrementSizesBuilder {
+    fn default() -> Self {
+        IncrementSizesBuilder::new()
     }
 }

@@ -1,34 +1,35 @@
-use crate::{auth_spec::AuthSpec, destroy::Destroy, exchange_client::ExchangeClient};
+use crate::{auth_spec::AuthSpec, destroy::Destroy, exchange_listener::ExchangeListener};
 use stock_trek::error::result::StockTrekResult;
 
-pub struct Authenticator<TState, TCredentials, TTransports, TClient>
+#[allow(dead_code)]
+pub struct Authenticator<TState, TCredentials, TTransports, TListener>
 where
-    TState: Default,
-    TCredentials: Destroy,
-    TClient: ExchangeClient,
+    TState: Default + Send + Sync + 'static,
+    TCredentials: Destroy + Send + Sync + 'static,
+    TListener: ExchangeListener + 'static,
 {
     spec: AuthSpec<TState, TCredentials, TTransports>,
-    client: TClient,
+    listener: TListener,
     credentials: TCredentials,
     state: TState,
     transport: TTransports,
 }
 
-impl<TState, TCredentials, TTransports, TClient>
-    Authenticator<TState, TCredentials, TTransports, TClient>
+impl<TState, TCredentials, TTransports, TListener>
+    Authenticator<TState, TCredentials, TTransports, TListener>
 where
-    TState: Default,
-    TCredentials: Destroy,
-    TClient: ExchangeClient,
+    TState: Default + Send + Sync + 'static,
+    TCredentials: Destroy + Send + Sync + 'static,
+    TListener: ExchangeListener,
 {
     pub fn new(
         spec: AuthSpec<TState, TCredentials, TTransports>,
         credentials: TCredentials,
         transports: TTransports,
-        client: TClient,
+        listener: TListener,
     ) -> Self {
         Self {
-            client,
+            listener,
             spec,
             credentials,
             state: TState::default(),
@@ -37,15 +38,16 @@ where
     }
     pub async fn start(&self) -> StockTrekResult<()> {
         // TODO
+        Ok(())
     }
 }
 
-impl<TState, TCredentials, TTransports, TClient> Destroy
-    for Authenticator<TState, TCredentials, TTransports, TClient>
+impl<TState, TCredentials, TTransports, TListener> Destroy
+    for Authenticator<TState, TCredentials, TTransports, TListener>
 where
-    TState: Default,
-    TCredentials: Destroy,
-    TClient: ExchangeClient,
+    TState: Default + Send + Sync + 'static,
+    TCredentials: Destroy + Send + Sync + 'static,
+    TListener: ExchangeListener,
 {
     fn destroy(&mut self) {
         self.credentials.destroy();

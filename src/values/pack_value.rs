@@ -1,8 +1,6 @@
 use stock_trek::error::result::StockTrekResult;
 
-pub trait PackValue<TValue, TMessagePart, TMessage>
+pub type PackValue<TValue, TMessage>
 where
     TValue: Clone,
-{
-    fn pack(&self, message: &mut TMessage, value: &TValue) -> StockTrekResult<()>;
-}
+= fn(message: &mut TMessage, value: &TValue) -> StockTrekResult<()>;

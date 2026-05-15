@@ -2,6 +2,7 @@ use crate::{credentials::credential::Credential, values::get_value::GetValue};
 use chrono::Utc;
 use stock_trek::error::result::StockTrekResult;
 
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GetTimestamp {
     Millis,
     Seconds,

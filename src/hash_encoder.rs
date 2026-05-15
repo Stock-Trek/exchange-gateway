@@ -1,38 +1,37 @@
 use base64::{Engine, engine::general_purpose};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
-use std::marker::PhantomData;
 use stock_trek::error::result::StockTrekResult;
+use strum::Display;
 
-pub struct HasherEncoder<THashableValue, TToBytes>
-where
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
-{
-    to_bytes: TToBytes,
+pub struct HasherEncoder<THashableValue> {
+    to_bytes: fn(&THashableValue) -> &Vec<u8>,
     hash_algorithm: HashAlgorithm,
     encoding: Encoding,
-    _phantom_hashable_value: PhantomData<THashableValue>,
 }
 
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HashAlgorithm {
     Sha256,
     Sha512,
 }
 
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Encoding {
     Hex,
     Base64,
 }
 
-impl<THashableValue, TToBytes> HasherEncoder<THashableValue, TToBytes>
-where
-    TToBytes: Fn(&THashableValue) -> &Vec<u8>,
-{
-    pub fn new(to_bytes: TToBytes, hash_algorithm: HashAlgorithm, encoding: Encoding) -> Self {
+impl<THashableValue> HasherEncoder<THashableValue> {
+    pub fn new(
+        to_bytes: fn(&THashableValue) -> &Vec<u8>,
+        hash_algorithm: HashAlgorithm,
+        encoding: Encoding,
+    ) -> Self {
         Self {
             to_bytes,
             hash_algorithm,
             encoding,
-            _phantom_hashable_value: PhantomData,
         }
     }
     pub fn hash_encode(&self, hashable_value: &THashableValue) -> StockTrekResult<String> {
