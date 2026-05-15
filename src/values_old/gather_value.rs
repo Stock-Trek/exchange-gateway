@@ -23,7 +23,6 @@ pub struct GatherValueWrapper<
     TState,
     TCredentials,
     TTransport,
-    TMessagePart,
     TMessage,
     TReply,
     TGetValue,
@@ -31,9 +30,9 @@ pub struct GatherValueWrapper<
 > where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
     TGetValue: GetValue<TValue, TState, TCredentials>,
-    TPackValue: PackValue<TValue, TMessagePart, TMessage>,
+    TPackValue: PackValue<TValue, TMessage>,
 {
     get_value: TGetValue,
     pack_value: TPackValue,
@@ -41,28 +40,16 @@ pub struct GatherValueWrapper<
     _phantom_state: PhantomData<TState>,
     _phantom_credentials: PhantomData<TCredentials>,
     _phantom_transport: PhantomData<TTransport>,
-    _phantom_message_part: PhantomData<TMessagePart>,
     _phantom_message: PhantomData<TMessage>,
     _phantom_reply: PhantomData<TReply>,
 }
 
-impl<
-    TValue,
-    TState,
-    TCredentials,
-    TTransport,
-    TMessagePart,
-    TMessage,
-    TReply,
-    TGetValue,
-    TPackValue,
->
+impl<TValue, TState, TCredentials, TTransport, TMessage, TReply, TGetValue, TPackValue>
     GatherValueWrapper<
         TValue,
         TState,
         TCredentials,
         TTransport,
-        TMessagePart,
         TMessage,
         TReply,
         TGetValue,
@@ -71,9 +58,9 @@ impl<
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
     TGetValue: GetValue<TValue, TState, TCredentials>,
-    TPackValue: PackValue<TValue, TMessagePart, TMessage>,
+    TPackValue: PackValue<TValue, TMessage>,
 {
     pub fn new(get_value: TGetValue, pack_value: TPackValue) -> Self {
         Self {
@@ -83,30 +70,19 @@ where
             _phantom_state: PhantomData,
             _phantom_credentials: PhantomData,
             _phantom_transport: PhantomData,
-            _phantom_message_part: PhantomData,
             _phantom_message: PhantomData,
             _phantom_reply: PhantomData,
         }
     }
 }
 
-impl<
-    TValue,
-    TState,
-    TCredentials,
-    TTransport,
-    TMessagePart,
-    TMessage,
-    TReply,
-    TGetValue,
-    TPackValue,
-> GatherValue<TState, TCredentials, TMessage>
+impl<TValue, TState, TCredentials, TTransport, TMessage, TReply, TGetValue, TPackValue>
+    GatherValue<TState, TCredentials, TMessage>
     for GatherValueWrapper<
         TValue,
         TState,
         TCredentials,
         TTransport,
-        TMessagePart,
         TMessage,
         TReply,
         TGetValue,
@@ -115,9 +91,9 @@ impl<
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
     TGetValue: GetValue<TValue, TState, TCredentials>,
-    TPackValue: PackValue<TValue, TMessagePart, TMessage>,
+    TPackValue: PackValue<TValue, TMessage>,
 {
     fn gather(
         &self,

@@ -1,22 +1,18 @@
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
     use crate::{
         auth_spec_builder::AuthSpecBuilder,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        transport::{
-            http_transport::{HttpPart, HttpTransport},
-            transport::Transport,
-        },
+        transport::{http_transport::HttpTransport, transport::Transport},
     };
     use async_trait::async_trait;
+    use std::collections::HashMap;
     use stock_trek::error::result::StockTrekResult;
 
     pub async fn test() {
         let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports>::new()
-            .begin_leg::<MyHttpTransport, HttpPart, Req, Res>(|t| &t.http)
+            .begin_leg::<MyHttpTransport, Req, Res>(|t| &t.http)
             .gather_value(
                 |state, _credentials| state.abc,
                 |message, value| {
@@ -36,6 +32,7 @@ mod test {
         };
         let transports = MyTransports::new(MyHttpTransport);
         let a = auth_spec.auth(&credentials, &transports).await;
+        println!("{:?}", a);
     }
 
     struct MyCredentials {
@@ -79,7 +76,7 @@ mod test {
     }
 
     #[async_trait]
-    impl Transport<HttpPart, Req, Res> for MyHttpTransport {
+    impl Transport<Req, Res> for MyHttpTransport {
         fn new(_url: String) -> Self {
             Self {}
         }

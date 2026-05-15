@@ -3,7 +3,6 @@ use crate::{
     destroy::Destroy,
     transport::transport::Transport,
 };
-use std::marker::PhantomData;
 use stock_trek::error::result::StockTrekResult;
 
 pub struct AuthSpecBuilder<TState, TCredentials, TTransports>
@@ -23,13 +22,12 @@ where
     pub fn new() -> Self {
         Self { legs: Vec::new() }
     }
-    pub fn begin_leg<TTransport, TMessagePart, TMessage, TReply>(
+    pub fn begin_leg<TTransport, TMessage, TReply>(
         mut self,
         get_transport: fn(transports: &TTransports) -> &TTransport,
-    ) -> AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
+    ) -> AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
     where
-        TTransport: Transport<TMessagePart, TMessage, TReply> + Send + Sync + 'static,
-        TMessagePart: Send + Sync + 'static,
+        TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
         TMessage: Send + Sync + 'static,
         TReply: Send + Sync + 'static,
     {
@@ -42,35 +40,26 @@ where
     }
 }
 
-pub struct AuthLegBuilder<
-    TState,
-    TCredentials,
-    TTransports,
-    TTransport,
-    TMessagePart,
-    TMessage,
-    TReply,
-> where
+pub struct AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
-    TTransport: Transport<TMessagePart, TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
 {
     auth_spec_builder: Option<AuthSpecBuilder<TState, TCredentials, TTransports>>,
     get_transport: fn(transports: &TTransports) -> &TTransport,
     gather_values: Vec<Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>>,
     store_values:
         Vec<Box<dyn Fn(&TReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>>,
-    _phantom_message_part: PhantomData<TMessagePart>,
 }
 
-impl<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
-    AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
+impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+    AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessagePart, TMessage, TReply> + Send + Sync + 'static,
-    TMessagePart: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
@@ -83,7 +72,6 @@ where
             get_transport,
             gather_values: Vec::new(),
             store_values: Vec::new(),
-            _phantom_message_part: PhantomData,
         }
     }
     pub fn gather_value<TValue>(
@@ -119,19 +107,12 @@ where
         self
     }
     pub fn build_leg(&mut self) -> AuthSpecBuilder<TState, TCredentials, TTransports> {
-        let auth_leg = AuthLeg::<
-            TState,
-            TCredentials,
-            TTransports,
-            TTransport,
-            TMessagePart,
-            TMessage,
-            TReply,
-        >::new(
-            self.get_transport,
-            std::mem::take(&mut self.gather_values),
-            std::mem::take(&mut self.store_values),
-        );
+        let auth_leg =
+            AuthLeg::<TState, TCredentials, TTransports, TTransport, TMessage, TReply>::new(
+                self.get_transport,
+                std::mem::take(&mut self.gather_values),
+                std::mem::take(&mut self.store_values),
+            );
         let mut builder = self
             .auth_spec_builder
             .take()

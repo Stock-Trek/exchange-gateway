@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use stock_trek::error::result::StockTrekResult;
 
 #[async_trait]
-pub trait Transport<TMessagePart, TMessage, TReply> {
+pub trait Transport<TMessage, TReply> {
     fn new(url: String) -> Self
     where
         Self: Sized;

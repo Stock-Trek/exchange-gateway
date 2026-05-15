@@ -7,25 +7,24 @@ use crate::{
 };
 use stock_trek::error::result::StockTrekResult;
 
-pub struct GatherValue<TValue, TState, TCredentials, TTransport, TMessagePart, TMessage, TReply>
+pub struct GatherValue<TValue, TState, TCredentials, TTransport, TMessage, TReply>
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
 {
     get_value: GetValue<TValue, TState, TCredentials>,
     pack_value: PackValue<TValue, TMessage>,
     _phantom_transport: PhantomData<TTransport>,
-    _phantom_message_part: PhantomData<TMessagePart>,
     _phantom_reply: PhantomData<TReply>,
 }
 
-impl<TValue, TState, TCredentials, TTransport, TMessagePart, TMessage, TReply>
-    GatherValue<TValue, TState, TCredentials, TTransport, TMessagePart, TMessage, TReply>
+impl<TValue, TState, TCredentials, TTransport, TMessage, TReply>
+    GatherValue<TValue, TState, TCredentials, TTransport, TMessage, TReply>
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
 {
     pub fn new(
         get_value: GetValue<TValue, TState, TCredentials>,
@@ -35,18 +34,17 @@ where
             get_value,
             pack_value,
             _phantom_transport: PhantomData,
-            _phantom_message_part: PhantomData,
             _phantom_reply: PhantomData,
         }
     }
 }
 
-impl<TValue, TState, TCredentials, TTransport, TMessagePart, TMessage, TReply>
-    GatherValue<TValue, TState, TCredentials, TTransport, TMessagePart, TMessage, TReply>
+impl<TValue, TState, TCredentials, TTransport, TMessage, TReply>
+    GatherValue<TValue, TState, TCredentials, TTransport, TMessage, TReply>
 where
     TValue: Clone,
     TCredentials: Destroy,
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
 {
     fn gather(
         &self,

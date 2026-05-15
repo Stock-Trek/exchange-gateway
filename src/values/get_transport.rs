@@ -2,10 +2,10 @@ use crate::transport::transport::Transport;
 use std::marker::PhantomData;
 use stock_trek::error::result::StockTrekResult;
 
-pub type GetTransport<TTransports, TTransport, TMessagePart, TMessage, TReply>
+pub type GetTransport<TTransports, TTransport, TMessage, TReply>
 where
-    TTransport: Transport<TMessagePart, TMessage, TReply>,
+    TTransport: Transport<TMessage, TReply>,
 = (
     fn(transports: &TTransports) -> StockTrekResult<TTransport>,
-    PhantomData<(TMessagePart, TMessage, TReply)>,
+    PhantomData<(TMessage, TReply)>,
 );

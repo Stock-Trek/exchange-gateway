@@ -1,25 +1,23 @@
 use crate::values::pack_value::PackValue;
 use stock_trek::error::result::StockTrekResult;
 
-pub struct PackMessage<TMessagePart, TMessage, TValue>
+pub struct PackMessage<TMessage, TValue>
 where
     TValue: Clone,
 {
-    setter: fn(&TMessagePart, &mut TMessage, TValue),
-    part: TMessagePart,
+    setter: fn(&mut TMessage, TValue),
 }
 
-impl<TMessagePart, TMessage, TValue> PackMessage<TMessagePart, TMessage, TValue>
+impl<TMessage, TValue> PackMessage<TMessage, TValue>
 where
     TValue: Clone,
 {
-    pub fn new(setter: fn(&TMessagePart, &mut TMessage, TValue), part: TMessagePart) -> Self {
+    pub fn new(setter: fn(&mut TMessage, TValue)) -> Self {
         Self { setter, part }
     }
 }
 
-impl<TMessagePart, TMessage, TValue> PackValue<TValue, TMessagePart, TMessage>
-    for PackMessage<TMessagePart, TMessage, TValue>
+impl<TMessage, TValue> PackValue<TValue, TMessage> for PackMessage<TMessage, TValue>
 where
     TValue: Clone,
 {

@@ -1,6 +1,5 @@
 use crate::{destroy::Destroy, transport::transport::Transport};
 use async_trait::async_trait;
-use std::marker::PhantomData;
 use stock_trek::error::result::StockTrekResult;
 
 pub struct AuthSpec<TState, TCredentials, TTransports>
@@ -43,25 +42,23 @@ pub trait AuthLegTrait<TState, TCredentials, TTransports> {
     ) -> StockTrekResult<()>;
 }
 
-pub struct AuthLeg<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
+pub struct AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
-    TTransport: Transport<TMessagePart, TMessage, TReply> + Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
 {
     get_transport: fn(transports: &TTransports) -> &TTransport,
     gather_values: Vec<Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>>,
     store_values:
         Vec<Box<dyn Fn(&TReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>>,
-    _phantom_message_part: PhantomData<TMessagePart>,
 }
 
-impl<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
-    AuthLeg<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
+impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+    AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessagePart, TMessage, TReply> + Send + Sync + 'static,
-    TMessagePart: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
@@ -78,21 +75,19 @@ where
             get_transport,
             gather_values,
             store_values,
-            _phantom_message_part: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
+impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
     AuthLegTrait<TState, TCredentials, TTransports>
-    for AuthLeg<TState, TCredentials, TTransports, TTransport, TMessagePart, TMessage, TReply>
+    for AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessagePart, TMessage, TReply> + Send + Sync + 'static,
-    TMessagePart: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
