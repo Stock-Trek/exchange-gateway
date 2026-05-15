@@ -1,7 +1,7 @@
 use crate::{credentials::credential::Credential, destroy::Destroy};
 
 pub struct UsernamePasswordCredentials {
-    username: String,
+    pub username: String,
     password: Vec<u8>,
 }
 
@@ -12,8 +12,8 @@ impl UsernamePasswordCredentials {
 }
 
 impl Credential for UsernamePasswordCredentials {
-    fn credential(&self) -> Vec<u8> {
-        self.password.clone()
+    fn credential(&self) -> &Vec<u8> {
+        &self.password
     }
 }
 
