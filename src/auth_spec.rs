@@ -1,5 +1,6 @@
 use crate::{destroy::Destroy, transport::transport::Transport};
 use async_trait::async_trait;
+use chrono::Duration;
 use stock_trek::error::result::StockTrekResult;
 
 pub struct AuthSpec<TState, TCredentials, TTransports>
@@ -21,12 +22,12 @@ where
     }
     pub async fn auth(
         &self,
+        state: &mut TState,
         credentials: &TCredentials,
         transports: &TTransports,
     ) -> StockTrekResult<()> {
-        let mut state = TState::default();
         for leg in &self.legs {
-            leg.do_leg(&mut state, credentials, transports).await?;
+            leg.do_leg(state, credentials, transports).await?;
         }
         Ok(())
     }
@@ -47,6 +48,7 @@ where
     TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
 {
     get_transport: fn(transports: &TTransports) -> &TTransport,
+    timeout: Duration,
     gather_values: Vec<Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>>,
     store_values:
         Vec<Box<dyn Fn(&TReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>>,
@@ -64,6 +66,7 @@ where
 {
     pub fn new(
         get_transport: fn(transports: &TTransports) -> &TTransport,
+        timeout: Duration,
         gather_values: Vec<
             Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>,
         >,
@@ -73,6 +76,7 @@ where
     ) -> Self {
         Self {
             get_transport,
+            timeout,
             gather_values,
             store_values,
         }
@@ -102,7 +106,9 @@ where
         for gather in &self.gather_values {
             gather(state, credentials, &mut message);
         }
-        let reply = transport.send_and_wait_for_reply(message).await?;
+        let reply = transport
+            .send_and_wait_for_reply(message, self.timeout)
+            .await?;
         for store in &self.store_values {
             store(&reply, state)?;
         }

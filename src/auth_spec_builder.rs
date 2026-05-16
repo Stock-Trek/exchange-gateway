@@ -3,6 +3,7 @@ use crate::{
     destroy::Destroy,
     transport::transport::Transport,
 };
+use chrono::Duration;
 use stock_trek::error::result::StockTrekResult;
 
 pub struct AuthSpecBuilder<TState, TCredentials, TTransports>
@@ -25,6 +26,7 @@ where
     pub fn begin_leg<TTransport, TMessage, TReply>(
         mut self,
         get_transport: fn(transports: &TTransports) -> &TTransport,
+        timeout: Duration,
     ) -> AuthLegBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
     where
         TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
@@ -33,7 +35,7 @@ where
     {
         let legs = std::mem::take(&mut self.legs);
         let builder = AuthSpecBuilder { legs };
-        AuthLegBuilder::new(builder, get_transport)
+        AuthLegBuilder::new(builder, get_transport, timeout)
     }
     pub fn build_spec(&mut self) -> AuthSpec<TState, TCredentials, TTransports> {
         AuthSpec::<TState, TCredentials, TTransports>::new(std::mem::take(&mut self.legs))
@@ -48,6 +50,7 @@ where
 {
     auth_spec_builder: Option<AuthSpecBuilder<TState, TCredentials, TTransports>>,
     get_transport: fn(transports: &TTransports) -> &TTransport,
+    timeout: Duration,
     gather_values: Vec<Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>>,
     store_values:
         Vec<Box<dyn Fn(&TReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>>,
@@ -66,10 +69,12 @@ where
     fn new(
         auth_spec_builder: AuthSpecBuilder<TState, TCredentials, TTransports>,
         get_transport: fn(transports: &TTransports) -> &TTransport,
+        timeout: Duration,
     ) -> Self {
         Self {
             auth_spec_builder: Some(auth_spec_builder),
             get_transport,
+            timeout,
             gather_values: Vec::new(),
             store_values: Vec::new(),
         }
@@ -110,6 +115,7 @@ where
         let auth_leg =
             AuthLeg::<TState, TCredentials, TTransports, TTransport, TMessage, TReply>::new(
                 self.get_transport,
+                self.timeout,
                 std::mem::take(&mut self.gather_values),
                 std::mem::take(&mut self.store_values),
             );

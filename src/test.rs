@@ -2,18 +2,21 @@
 mod test {
     use crate::{
         auth_spec_builder::AuthSpecBuilder,
+        authenticator::Authenticator,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
+        exchange_listener::ExchangeListener,
         transport::{http_transport::HttpTransport, transport::Transport},
     };
     use async_trait::async_trait;
+    use chrono::Duration;
     use std::collections::HashMap;
-    use stock_trek::error::result::StockTrekResult;
+    use stock_trek::{error::result::StockTrekResult, order::order_response::OrderResponse};
 
     #[allow(dead_code)]
     pub async fn test() {
         let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports>::new()
-            .begin_leg(|t| &t.http)
+            .begin_leg(|t| &t.http, Duration::seconds(20))
             .gather_value(
                 |state, _credentials| state.abc,
                 |message, value| {
@@ -32,8 +35,16 @@ mod test {
             api_key: ApiKeyCredentials::new("fdnskfndjks".to_string(), Vec::new()),
         };
         let transports = MyTransports::new(MyHttpTransport);
-        let a = auth_spec.auth(&credentials, &transports).await;
-        println!("{:?}", a);
+        let listener = MyListener;
+        let authenticator = Authenticator::new(auth_spec, listener, credentials, transports);
+        if let Ok(_) = authenticator.start().await {
+            // TODO
+        }
+    }
+
+    struct MyListener;
+    impl ExchangeListener for MyListener {
+        fn on_order_placed(&self, _order_response: OrderResponse) {}
     }
 
     #[allow(dead_code)]
@@ -98,6 +109,7 @@ mod test {
         async fn send_and_wait_for_reply(
             &self,
             _message: Self::Message,
+            _timeout: Duration,
         ) -> StockTrekResult<Self::Reply> {
             Ok(Self::Reply {
                 body: "fdsfds".to_string(),
