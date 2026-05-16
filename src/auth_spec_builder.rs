@@ -11,7 +11,7 @@ where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
 {
-    legs: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
+    authentication: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
 }
 
 impl<TState, TCredentials, TTransports> AuthSpecBuilder<TState, TCredentials, TTransports>
@@ -21,7 +21,9 @@ where
     TTransports: Send + Sync + 'static,
 {
     pub fn new() -> Self {
-        Self { legs: Vec::new() }
+        Self {
+            authentication: Vec::new(),
+        }
     }
     pub fn begin_leg<TTransport, TMessage, TReply>(
         mut self,
@@ -33,12 +35,12 @@ where
         TMessage: Send + Sync + 'static,
         TReply: Send + Sync + 'static,
     {
-        let legs = std::mem::take(&mut self.legs);
-        let builder = AuthSpecBuilder { legs };
+        let authentication = std::mem::take(&mut self.authentication);
+        let builder = AuthSpecBuilder { authentication };
         AuthLegBuilder::new(builder, get_transport, timeout)
     }
     pub fn build_spec(&mut self) -> AuthSpec<TState, TCredentials, TTransports> {
-        AuthSpec::<TState, TCredentials, TTransports>::new(std::mem::take(&mut self.legs))
+        AuthSpec::<TState, TCredentials, TTransports>::new(std::mem::take(&mut self.authentication))
     }
 }
 
@@ -123,7 +125,7 @@ where
             .auth_spec_builder
             .take()
             .expect("Already built AuthLegBuilder");
-        builder.legs.push(Box::new(auth_leg));
+        builder.authentication.push(Box::new(auth_leg));
         builder
     }
 }

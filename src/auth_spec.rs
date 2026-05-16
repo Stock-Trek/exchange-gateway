@@ -8,7 +8,7 @@ where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
 {
-    legs: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
+    authentication: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
 }
 
 impl<TState, TCredentials, TTransports> AuthSpec<TState, TCredentials, TTransports>
@@ -17,8 +17,10 @@ where
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
 {
-    pub fn new(legs: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>) -> Self {
-        Self { legs }
+    pub fn new(
+        authentication: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
+    ) -> Self {
+        Self { authentication }
     }
     pub async fn auth(
         &self,
@@ -26,7 +28,7 @@ where
         credentials: &TCredentials,
         transports: &TTransports,
     ) -> StockTrekResult<()> {
-        for leg in &self.legs {
+        for leg in &self.authentication {
             leg.do_leg(state, credentials, transports).await?;
         }
         Ok(())
