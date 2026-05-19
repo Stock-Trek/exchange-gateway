@@ -1,3 +1,4 @@
+use crate::adapt::increment_sizes::IncrementSizes;
 use rust_decimal::{Decimal, RoundingStrategy};
 use std::collections::HashMap;
 use stock_trek::{
@@ -20,8 +21,6 @@ use stock_trek::{
         trading_pair::TradingPair,
     },
 };
-
-use crate::adapt::increment_sizes::IncrementSizes;
 
 pub struct PreciseOrders;
 

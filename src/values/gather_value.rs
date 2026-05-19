@@ -1,10 +1,9 @@
-use std::marker::PhantomData;
-
 use crate::{
     destroy::Destroy,
     transport::transport::Transport,
     values::{get_value::GetValue, pack_value::PackValue},
 };
+use std::marker::PhantomData;
 use stock_trek::error::result::StockTrekResult;
 
 pub struct GatherValue<TValue, TState, TCredentials, TTransport, TMessage, TReply>
