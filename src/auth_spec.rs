@@ -1,4 +1,7 @@
-use crate::{destroy::Destroy, transport::transport::Transport};
+use crate::{
+    destroy::Destroy,
+    transport::transport::Transport,
+};
 use async_trait::async_trait;
 use chrono::Duration;
 use stock_trek::error::result::StockTrekResult;

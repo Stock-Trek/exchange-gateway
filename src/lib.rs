@@ -10,6 +10,7 @@ pub mod exchange_listener;
 pub mod execute;
 pub mod hash_encoder;
 pub mod semantic_checker;
+pub mod signing;
 pub mod test;
 pub mod transport;
 pub mod values;

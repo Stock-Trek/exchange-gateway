@@ -1,6 +1,12 @@
 use crate::{
     auth_spec::{AuthLeg, AuthLegTrait, AuthSpec},
+    credentials::credential::Credential,
     destroy::Destroy,
+    signing::{
+        signable_auth_spec::SignableAuthSpec,
+        signing_algorithm::SigningAlgorithm,
+        signing_method::SigningMethod,
+    },
     transport::transport::Transport,
 };
 use chrono::Duration;
@@ -41,6 +47,22 @@ where
     }
     pub fn build_spec(&mut self) -> AuthSpec<TState, TCredentials, TTransports> {
         AuthSpec::<TState, TCredentials, TTransports>::new(std::mem::take(&mut self.authentication))
+    }
+    /// Transition to building signing methods for a specific message type.
+    ///
+    /// This creates a `SigningOrContinueBuilder` that can be used to add
+    /// signing methods and/or build the final spec.
+    pub fn for_message_type<TMessage>(
+        &mut self,
+    ) -> SigningOrContinueBuilder<TState, TCredentials, TTransports, TMessage>
+    where
+        TCredentials: Credential,
+        TMessage: Send + Sync + 'static,
+    {
+        SigningOrContinueBuilder {
+            authentication: std::mem::take(&mut self.authentication),
+            signing_methods: Vec::new(),
+        }
     }
 }
 
@@ -127,5 +149,54 @@ where
             .expect("Already built AuthLegBuilder");
         builder.authentication.push(Box::new(auth_leg));
         builder
+    }
+}
+
+/// Builder that allows adding signing methods and/or building the final spec.
+///
+/// This is the next step after calling `for_message_type` on an `AuthSpecBuilder`.
+pub struct SigningOrContinueBuilder<TState, TCredentials, TTransports, TMessage>
+where
+    TState: Default + Send + Sync + 'static,
+    TCredentials: Credential + Destroy + Send + Sync + 'static,
+    TMessage: Send + Sync + 'static,
+{
+    authentication: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
+    signing_methods: Vec<SigningMethod<TState, TCredentials, TMessage>>,
+}
+
+impl<TState, TCredentials, TTransports, TMessage>
+    SigningOrContinueBuilder<TState, TCredentials, TTransports, TMessage>
+where
+    TState: Default + Send + Sync + 'static,
+    TCredentials: Credential + Destroy + Send + Sync + 'static,
+    TTransports: Send + Sync + 'static,
+    TMessage: Send + Sync + 'static,
+{
+    /// Add a signing method for the message type.
+    ///
+    /// * `algorithm` - The signing algorithm (HMAC-SHA256, Ed25519, etc.)
+    /// * `message_to_bytes` - A function that extracts the bytes to sign from the message.
+    ///   Receives state and credentials for context (e.g., to insert a timestamp/nonce first).
+    /// * `pack_signature` - A function that writes the resulting signature bytes into the message.
+    pub fn sign_message(
+        mut self,
+        algorithm: SigningAlgorithm,
+        message_to_bytes: fn(&TState, &TCredentials, &TMessage) -> StockTrekResult<Vec<u8>>,
+        pack_signature: fn(&mut TMessage, &[u8]) -> StockTrekResult<()>,
+    ) -> Self {
+        let method = SigningMethod::new(
+            algorithm,
+            Box::new(message_to_bytes),
+            Box::new(pack_signature),
+        );
+        self.signing_methods.push(method);
+        self
+    }
+
+    /// Build a `SignableAuthSpec` which includes both authentication and signing capabilities.
+    pub fn build_signable(self) -> SignableAuthSpec<TState, TCredentials, TTransports, TMessage> {
+        let auth_spec = AuthSpec::<TState, TCredentials, TTransports>::new(self.authentication);
+        SignableAuthSpec::new(auth_spec, self.signing_methods)
     }
 }
