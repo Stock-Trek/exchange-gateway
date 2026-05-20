@@ -3,17 +3,14 @@ use chrono::Duration;
 use stock_trek::error::result::StockTrekResult;
 
 #[async_trait]
-pub trait Transport {
-    type Message;
-    type Reply;
-
+pub trait Transport<TMessage, TReply> {
     fn new(url: String) -> Self
     where
         Self: Sized;
-    fn new_message(&self) -> StockTrekResult<Self::Message>;
+    fn new_message(&self) -> StockTrekResult<TMessage>;
     async fn send_and_wait_for_reply(
         &self,
-        message: Self::Message,
+        message: &TMessage,
         timeout: Duration,
-    ) -> StockTrekResult<Self::Reply>;
+    ) -> StockTrekResult<TReply>;
 }

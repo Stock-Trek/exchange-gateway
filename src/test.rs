@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod test {
     use crate::{
-        auth_spec_builder::AuthSpecBuilder,
-        authenticator::Authenticator,
+        build::auth_spec_builder::AuthSpecBuilder,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        exchange_listener::ExchangeListener,
+        exchange_listener::ExchangeListenerTrait,
+        session::Session,
         transport::{http_transport::HttpTransport, transport::Transport},
     };
     use async_trait::async_trait;
@@ -15,8 +15,8 @@ mod test {
 
     #[allow(dead_code)]
     pub async fn test() {
-        let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports>::new()
-            .begin_leg(|t| &t.http, Duration::seconds(20))
+        let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports, Req, Res>::new()
+            .begin_authentication_leg(|t| &t.http, Duration::seconds(20))
             .gather_value(
                 |state, _credentials| state.abc,
                 |message, value| {
@@ -35,15 +35,24 @@ mod test {
             api_key: ApiKeyCredentials::new("fdnskfndjks".to_string(), Vec::new()),
         };
         let transports = MyTransports::new(MyHttpTransport);
-        let listener = MyListener;
-        let authenticator = Authenticator::new(auth_spec, listener, credentials, transports);
-        if let Ok(_) = authenticator.start().await {
-            // TODO
-        }
+        let mut session = Session::new();
+        auth_spec
+            .authenticate(&credentials, &transports, &mut session)
+            .await
+            .expect("Failed to create session");
+        let mut message = Req {
+            headers: HashMap::new(),
+        };
+        let response = auth_spec
+            .sign(&credentials, &transports, &session, &mut message)
+            .await
+            .expect("Failed to sign message and get response");
     }
 
+    // TODO
+    #[allow(dead_code)]
     struct MyListener;
-    impl ExchangeListener for MyListener {
+    impl ExchangeListenerTrait for MyListener {
         fn on_order_placed(&self, _order_response: OrderResponse) {}
     }
 
@@ -94,24 +103,21 @@ mod test {
     }
 
     #[async_trait]
-    impl Transport for MyHttpTransport {
-        type Message = Req;
-        type Reply = Res;
-
+    impl Transport<Req, Res> for MyHttpTransport {
         fn new(_url: String) -> Self {
             Self {}
         }
-        fn new_message(&self) -> StockTrekResult<Self::Message> {
-            Ok(Self::Message {
+        fn new_message(&self) -> StockTrekResult<Req> {
+            Ok(Req {
                 headers: HashMap::new(),
             })
         }
         async fn send_and_wait_for_reply(
             &self,
-            _message: Self::Message,
+            _message: &Req,
             _timeout: Duration,
-        ) -> StockTrekResult<Self::Reply> {
-            Ok(Self::Reply {
+        ) -> StockTrekResult<Res> {
+            Ok(Res {
                 body: "fdsfds".to_string(),
             })
         }

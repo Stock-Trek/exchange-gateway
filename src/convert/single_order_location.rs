@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SingleOrderLocation {
     Single,
     OneCancelsOther(OneCancelsOtherLocation),
@@ -9,19 +9,19 @@ pub enum SingleOrderLocation {
     OneTriggersOco(OneTriggersOcoLocation),
 }
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OneCancelsOtherLocation {
     Primary,
     Secondary,
 }
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OneTriggersOtherLocation {
     Primary,
     Secondary,
 }
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OneTriggersOcoLocation {
     Primary,
     OcoPrimary,

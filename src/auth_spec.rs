@@ -1,122 +1,88 @@
 use crate::{
-    destroy::Destroy,
-    transport::transport::Transport,
+    authenticate_leg::AuthenticateLegTrait, authentication_state::AuthenticationState,
+    destroy::Destroy, message_leg::MessageLegTrait, session::Session,
 };
-use async_trait::async_trait;
-use chrono::Duration;
-use stock_trek::error::result::StockTrekResult;
+use stock_trek::error::{
+    general::GeneralError,
+    result::{StockTrekError, StockTrekResult},
+};
 
-pub struct AuthSpec<TState, TCredentials, TTransports>
+pub struct AuthSpec<TState, TCredentials, TTransports, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
+    TMessage: Send + Sync + 'static,
 {
-    authentication: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
+    authentication: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
+    message: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
 }
 
-impl<TState, TCredentials, TTransports> AuthSpec<TState, TCredentials, TTransports>
-where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-{
-    pub fn new(
-        authentication: Vec<Box<dyn AuthLegTrait<TState, TCredentials, TTransports>>>,
-    ) -> Self {
-        Self { authentication }
-    }
-    pub async fn auth(
-        &self,
-        state: &mut TState,
-        credentials: &TCredentials,
-        transports: &TTransports,
-    ) -> StockTrekResult<()> {
-        for leg in &self.authentication {
-            leg.do_leg(state, credentials, transports).await?;
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-pub trait AuthLegTrait<TState, TCredentials, TTransports> {
-    async fn do_leg(
-        &self,
-        state: &mut TState,
-        credentials: &TCredentials,
-        transports: &TTransports,
-    ) -> StockTrekResult<()>;
-}
-
-pub struct AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-where
-    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
-{
-    get_transport: fn(transports: &TTransports) -> &TTransport,
-    timeout: Duration,
-    gather_values: Vec<Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>>,
-    store_values:
-        Vec<Box<dyn Fn(&TReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>>,
-}
-
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+impl<TState, TCredentials, TTransports, TMessage, TReply>
+    AuthSpec<TState, TCredentials, TTransports, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
     pub fn new(
-        get_transport: fn(transports: &TTransports) -> &TTransport,
-        timeout: Duration,
-        gather_values: Vec<
-            Box<dyn Fn(&TState, &TCredentials, &mut TMessage) + Send + Sync + 'static>,
-        >,
-        store_values: Vec<
-            Box<dyn Fn(&TReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>,
-        >,
+        authentication: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
+        message: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
     ) -> Self {
         Self {
-            get_transport,
-            timeout,
-            gather_values,
-            store_values,
+            authentication,
+            message,
         }
     }
-}
-
-#[async_trait]
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    AuthLegTrait<TState, TCredentials, TTransports>
-    for AuthLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<Message = TMessage, Reply = TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
-{
-    async fn do_leg(
+    pub async fn authenticate(
         &self,
-        state: &mut TState,
         credentials: &TCredentials,
         transports: &TTransports,
+        session: &mut Session<TState>,
     ) -> StockTrekResult<()> {
-        let transport = (self.get_transport)(transports);
-        let mut message = TTransport::new_message(transport)?;
-        for gather in &self.gather_values {
-            gather(state, credentials, &mut message);
+        for leg in &self.authentication {
+            match leg
+                .do_leg(credentials, transports, &mut session.state)
+                .await
+            {
+                Err(e) => {
+                    session.set_authentication_state(AuthenticationState::AuthenticateFailed);
+                    return Err(e);
+                }
+                _ => {}
+            }
         }
-        let reply = transport
-            .send_and_wait_for_reply(message, self.timeout)
-            .await?;
-        for store in &self.store_values {
-            store(&reply, state)?;
-        }
+        session.set_authentication_state(AuthenticationState::Authenticated);
         Ok(())
+    }
+    pub async fn sign(
+        &self,
+        credentials: &TCredentials,
+        transports: &TTransports,
+        session: &Session<TState>,
+        message: &mut TMessage,
+    ) -> StockTrekResult<TReply> {
+        {
+            let current_authentication_state = session.get_authentication_state();
+            if current_authentication_state != AuthenticationState::Authenticated {
+                return Err(StockTrekError::General(GeneralError::Message(format!(
+                    "Cannot sign message in authentication state {}",
+                    current_authentication_state
+                ))));
+            }
+        }
+        let reply = match self
+            .message
+            .do_leg(credentials, transports, &session.state, message)
+            .await
+        {
+            Err(e) => {
+                session.set_authentication_state(AuthenticationState::AuthenticateFailed);
+                return Err(e);
+            }
+            Ok(reply) => reply,
+        };
+        Ok(reply)
     }
 }

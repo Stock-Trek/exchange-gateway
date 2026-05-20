@@ -1,62 +1,50 @@
-use crate::{
-    adapt::{
-        adapter::Adapter, adapter_creator::AdapterCreatorTrait,
-        increment_sizes::IncrementSizesBuilder,
-    },
-    convert::order_request_mapper::OrderRequestMapperTrait,
-};
 use rust_decimal::Decimal;
 use serde::Serialize;
-use serde_json::Value;
-use std::collections::HashMap;
-use stock_trek::{
-    asset_id::AssetId,
-    capability::{Capability, MultiLegCapability, QuoteQuantityCapability},
-    exchange_id::ExchangeId,
-    order::order_request::OrderRequest,
-};
 use strum::Display;
 
 pub struct BinanceAdapterCreator;
 
-impl AdapterCreatorTrait for BinanceAdapterCreator {
-    fn exchange_id(&self) -> ExchangeId {
-        ExchangeId("Binance".to_string())
-    }
-    fn create_adapter(&self) -> Adapter {
-        let increments = IncrementSizesBuilder::new()
-            .with(
-                AssetId::Bitcoin,
-                AssetId::Tether,
-                Decimal::from_i128_with_scale(1, 3),
-                Decimal::from_i128_with_scale(1, 3),
-            )
-            .build();
-        let capabilities = vec![
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
-            Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
-        ];
-        Adapter {
-            id: ExchangeId("Binance".to_string()),
-            capabilities,
-            increments,
-            symbol_ticker_divider: None,
-            ticker_overrides: HashMap::new(),
-            order_request_mapper: Box::new(BinanceOrderRequestMapper),
-        }
-    }
-}
+// impl AdapterCreatorTrait for BinanceAdapterCreator {
+//     fn exchange_id(&self) -> ExchangeId {
+//         ExchangeId("Binance".to_string())
+//     }
+//     fn create_adapter(&self) -> Adapter {
+//         let increments = IncrementSizesBuilder::new()
+//             .with(
+//                 AssetId::Bitcoin,
+//                 AssetId::Tether,
+//                 Decimal::from_i128_with_scale(1, 3),
+//                 Decimal::from_i128_with_scale(1, 3),
+//             )
+//             .build();
+//         let capabilities = vec![
+//             Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
+//             Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
+//             Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
+//             Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
+//             Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
+//         ];
+//         let auth_spec = AuthSpecBuilder::new().build_spec();
+//         let authenticator=AuthenticatorGeneric
+//         Adapter {
+//             id: ExchangeId("Binance".to_string()),
+//             capabilities,
+//             increments,
+//             symbol_ticker_divider: None,
+//             ticker_overrides: HashMap::new(),
+//             order_request_mapper: Box::new(BinanceOrderRequestMapper),
+//             authenticator,
+//         }
+//     }
+// }
 
-struct BinanceOrderRequestMapper;
+// struct BinanceOrderRequestMapper;
 
-impl OrderRequestMapperTrait for BinanceOrderRequestMapper {
-    fn map_order_request(&self, _order_request: &OrderRequest<AssetId, Decimal>) -> Value {
-        Value::Null
-    }
-}
+// impl OrderRequestMapperTrait for BinanceOrderRequestMapper {
+//     fn map_order_request(&self, _order_request: &OrderRequest<AssetId, Decimal>) -> Value {
+//         Value::Null
+//     }
+// }
 
 // impl OrderConverter<SingleOrder, BinanceSingleOrderParams> for BinanceAdapter {
 //     fn convert_to(&self, order: &SingleOrder) -> StockTrekResult<BinanceSingleOrderParams> {

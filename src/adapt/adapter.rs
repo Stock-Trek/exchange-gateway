@@ -1,6 +1,4 @@
-use crate::{
-    adapt::increment_sizes::IncrementSizes, convert::order_request_mapper::OrderRequestMapper,
-};
+use crate::{adapt::increment_sizes::IncrementSizes, exchange_connector::ExchangeConnector};
 use std::collections::HashMap;
 use stock_trek::{
     asset_id::AssetId, capability::Capability, exchange_id::ExchangeId,
@@ -13,14 +11,14 @@ pub struct Adapter {
     pub increments: HashMap<TradingPair, IncrementSizes>,
     pub symbol_ticker_divider: Option<String>,
     pub ticker_overrides: HashMap<AssetId, String>,
-    pub order_request_mapper: OrderRequestMapper,
+    pub exchange_connector: ExchangeConnector,
 }
 
 impl Adapter {
     pub fn new(
         id: impl AsRef<str>,
         symbol_ticker_divider: Option<impl AsRef<str>>,
-        order_request_mapper: OrderRequestMapper,
+        exchange_connector: ExchangeConnector,
     ) -> Self {
         Self {
             id: ExchangeId(id.as_ref().into()),
@@ -31,7 +29,7 @@ impl Adapter {
                 Some(div) => Some(div.as_ref().into()),
             },
             ticker_overrides: HashMap::new(),
-            order_request_mapper,
+            exchange_connector,
         }
     }
     pub fn add_capability(&mut self, capability: Capability) -> &mut Self {
