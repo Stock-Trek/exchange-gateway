@@ -92,7 +92,7 @@ where
     ) -> StockTrekResult<TReply> {
         let transport = (self.get_transport)(&transports);
         for gather in &self.gather_signatures {
-            gather(&state, &credentials, message);
+            gather(&state, &credentials, message)?;
         }
         let reply = transport
             .send_and_wait_for_reply(message, self.timeout)

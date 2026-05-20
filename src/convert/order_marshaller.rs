@@ -7,7 +7,7 @@ use crate::convert::{
     },
 };
 use rust_decimal::Decimal;
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 use stock_trek::{
     asset_id::AssetId,
     order::{
@@ -31,7 +31,7 @@ pub struct OrderRequestMapping<TMessage, TReply>
 where
     TMessage: Default,
 {
-    marshallers: HashMap<SingleOrderLocation, Vec<Rc<SingleOrderFieldMarshaller<TMessage>>>>,
+    marshallers: HashMap<SingleOrderLocation, Vec<SingleOrderFieldMarshaller<TMessage>>>,
     unmarshaller: OrderResponseUnmarshaller<TReply>,
 }
 
@@ -108,15 +108,12 @@ where
     pub fn add_marshaller(
         &mut self,
         marshaller: SingleOrderFieldMarshaller<TMessage>,
-        locations: &[SingleOrderLocation],
+        location: SingleOrderLocation,
     ) {
-        let rc_mapper = Rc::new(marshaller);
-        for location in locations {
-            self.marshallers
-                .entry(location.clone())
-                .or_insert(Vec::new())
-                .push(rc_mapper.clone());
-        }
+        self.marshallers
+            .entry(location.clone())
+            .or_insert(Vec::new())
+            .push(marshaller);
     }
     fn marshall_single_order(
         &self,

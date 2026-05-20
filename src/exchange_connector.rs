@@ -1,6 +1,6 @@
 use crate::{
     auth_spec::AuthSpec, convert::order_marshaller::OrderRequestMarshallUnmarshaller,
-    destroy::Destroy, exchange_listener::ExchangeListener, session::Session,
+    destroy::Destroy, session::Session,
 };
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -32,7 +32,6 @@ where
     auth_spec: AuthSpec<TState, TCredentials, TTransports, TMessage, TReply>,
     credentials: TCredentials,
     transports: TTransports,
-    listener: ExchangeListener,
     order_request_marshall_unmarshaller: OrderRequestMarshallUnmarshaller<TMessage, TReply>,
     session: Session<TState>,
 }
@@ -51,13 +50,11 @@ where
         credentials: TCredentials,
         transports: TTransports,
         order_request_marshall_unmarshaller: OrderRequestMarshallUnmarshaller<TMessage, TReply>,
-        listener: ExchangeListener,
     ) -> ExchangeConnector {
         Box::new(Self {
             auth_spec,
             credentials,
             transports,
-            listener,
             order_request_marshall_unmarshaller,
             session: Session::new(),
         })

@@ -9,6 +9,7 @@ bs58 = "0.5.1"
 chrono = "0.4.44"
 data-encoding = "2.11.0"
 ed25519-dalek = { version = "2", features = ["pem"] }
+futures = "0.3.32"
 hmac = "0.12"
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 p384 = { version = "0.13", features = ["ecdsa", "pem"] }

@@ -3,13 +3,13 @@ use stock_trek::{asset_id::AssetId, order::orders::single::SingleOrderGeneric};
 
 pub type SingleOrderFieldMarshaller<TMessage> = Box<dyn SingleOrderFieldMarshallerTrait<TMessage>>;
 
-pub trait SingleOrderFieldMarshallerTrait<TMessage> {
+pub trait SingleOrderFieldMarshallerTrait<TMessage>: Send + Sync {
     fn marshall(&self, single_order: &SingleOrderGeneric<AssetId, Decimal>, message: &mut TMessage);
 }
 
 pub struct SingleOrderFieldMarshalling<TMessage, TValue> {
-    pub getter: fn(&SingleOrderGeneric<AssetId, Decimal>) -> TValue,
-    pub setter: fn(TValue, &mut TMessage),
+    pub getter: Box<dyn Fn(&SingleOrderGeneric<AssetId, Decimal>) -> TValue + Send + Sync>,
+    pub setter: Box<dyn Fn(TValue, &mut TMessage) + Send + Sync>,
 }
 
 impl<TMessage, TValue> SingleOrderFieldMarshallerTrait<TMessage>

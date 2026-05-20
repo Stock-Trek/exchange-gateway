@@ -3,6 +3,7 @@ use crate::transport::transport::Transport;
 pub trait HttpTransport<TMessage, TReply>: Transport<TMessage, TReply> {}
 
 pub struct HttpMessageBuilder<THttpMessage> {
+    // TODO
     #[allow(dead_code)]
     setter: fn(&THttpMessage),
 }

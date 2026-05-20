@@ -10,11 +10,12 @@ mod test {
     };
     use async_trait::async_trait;
     use chrono::Duration;
+    use futures::executor::block_on;
     use std::{collections::HashMap, fmt::Display};
     use stock_trek::{error::result::StockTrekResult, order::order_response::OrderResponse};
 
-    #[allow(dead_code)]
-    pub async fn test() {
+    #[test]
+    pub fn test() {
         let auth_spec = AuthSpecBuilder::<
             MyState,
             MyCredentials,
@@ -43,17 +44,13 @@ mod test {
         };
         let transports = MyTransports::new(MyHttpTransport);
         let mut session = Session::new();
-        auth_spec
-            .authenticate(&credentials, &transports, &mut session)
-            .await
-            .expect("Failed to create session");
+        block_on(auth_spec.authenticate(&credentials, &transports, &mut session))
+            .expect("Failed to authenticate");
         let mut message = Req {
             headers: HashMap::new(),
         };
-        let response = auth_spec
-            .sign(&credentials, &transports, &session, &mut message)
-            .await
-            .expect("Failed to sign message and get response");
+        let response = block_on(auth_spec.sign(&credentials, &transports, &session, &mut message))
+            .expect("Failed to sign message");
         println!("{}", response);
     }
 
@@ -64,18 +61,15 @@ mod test {
         fn on_order_placed(&self, _order_response: OrderResponse) {}
     }
 
-    #[allow(dead_code)]
     struct MyCredentials {
         pub api_key: ApiKeyCredentials,
     }
 
-    #[allow(dead_code)]
     struct MyState {
         abc: i64,
     }
 
     struct MyTransports {
-        #[allow(dead_code)]
         pub http: MyHttpTransport,
     }
 
@@ -83,11 +77,9 @@ mod test {
     impl HttpTransport<Req, Res> for MyHttpTransport {}
 
     struct Req {
-        #[allow(dead_code)]
         headers: HashMap<String, String>,
     }
     struct Res {
-        #[allow(dead_code)]
         body: String,
     }
 
@@ -104,7 +96,6 @@ mod test {
     }
 
     impl MyTransports {
-        #[allow(dead_code)]
         pub fn new(http: MyHttpTransport) -> Self {
             Self { http }
         }
