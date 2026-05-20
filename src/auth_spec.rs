@@ -13,8 +13,8 @@ where
     TCredentials: Destroy + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
 {
-    authentication: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
-    message: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
+    authentication_legs: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
+    message_leg: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
 }
 
 impl<TState, TCredentials, TTransports, TMessage, TReply>
@@ -27,12 +27,12 @@ where
     TReply: Send + Sync + 'static,
 {
     pub fn new(
-        authentication: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
-        message: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
+        authentication_legs: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
+        message_leg: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
     ) -> Self {
         Self {
-            authentication,
-            message,
+            authentication_legs,
+            message_leg,
         }
     }
     pub async fn authenticate(
@@ -41,8 +41,8 @@ where
         transports: &TTransports,
         session: &mut Session<TState>,
     ) -> StockTrekResult<()> {
-        for leg in &self.authentication {
-            match leg
+        for authentication_leg in &self.authentication_legs {
+            match authentication_leg
                 .do_leg(credentials, transports, &mut session.state)
                 .await
             {
@@ -73,7 +73,7 @@ where
             }
         }
         let reply = match self
-            .message
+            .message_leg
             .do_leg(credentials, transports, &session.state, message)
             .await
         {

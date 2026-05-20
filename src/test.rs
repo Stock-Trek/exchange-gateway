@@ -10,27 +10,34 @@ mod test {
     };
     use async_trait::async_trait;
     use chrono::Duration;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, fmt::Display};
     use stock_trek::{error::result::StockTrekResult, order::order_response::OrderResponse};
 
     #[allow(dead_code)]
     pub async fn test() {
-        let auth_spec = AuthSpecBuilder::<MyState, MyCredentials, MyTransports, Req, Res>::new()
-            .begin_authentication_leg(|t| &t.http, Duration::seconds(20))
-            .gather_value(
-                |state, _credentials| state.abc,
-                |message, value| {
-                    message
-                        .headers
-                        .insert("HEADER".to_string(), value.to_string());
-                },
-            )
-            .store_value(
-                |reply| Ok(reply.body.clone()),
-                |state, value| state.abc = value.len() as i64,
-            )
-            .build_leg()
-            .build_spec();
+        let auth_spec = AuthSpecBuilder::<
+            MyState,
+            MyCredentials,
+            MyTransports,
+            MyHttpTransport,
+            Req,
+            Res,
+        >::new(|t| &t.http, Duration::seconds(30))
+        .begin_authentication_leg(|t| &t.http, Duration::seconds(20))
+        .gather_value(
+            |state, _credentials| state.abc,
+            |message, value| {
+                message
+                    .headers
+                    .insert("HEADER".to_string(), value.to_string());
+            },
+        )
+        .store_value(
+            |reply| Ok(reply.body.clone()),
+            |state, value| state.abc = value.len() as i64,
+        )
+        .build_leg()
+        .build_spec();
         let credentials = MyCredentials {
             api_key: ApiKeyCredentials::new("fdnskfndjks".to_string(), Vec::new()),
         };
@@ -47,6 +54,7 @@ mod test {
             .sign(&credentials, &transports, &session, &mut message)
             .await
             .expect("Failed to sign message and get response");
+        println!("{}", response);
     }
 
     // TODO
@@ -120,6 +128,11 @@ mod test {
             Ok(Res {
                 body: "fdsfds".to_string(),
             })
+        }
+    }
+    impl Display for Res {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Response")
         }
     }
 }

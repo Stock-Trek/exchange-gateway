@@ -1,51 +1,65 @@
 use crate::{
-    auth_spec::AuthSpec,
-    authenticate_leg::AuthenticateLegTrait,
-    build::{
-        authenticate_leg_builder::AuthenticateLegBuilder, message_leg_builder::MessageLegBuilder,
-    },
-    destroy::Destroy,
-    message_leg::MessageLegTrait,
-    transport::transport::Transport,
+    auth_spec::AuthSpec, authenticate_leg::AuthenticateLegTrait,
+    build::authenticate_leg_builder::AuthenticateLegBuilder, destroy::Destroy,
+    message_leg::MessageLegGeneric, transport::transport::Transport,
 };
 use chrono::Duration;
+use std::marker::PhantomData;
+use stock_trek::error::result::StockTrekResult;
 
-pub struct AuthSpecBuilder<TState, TCredentials, TTransports, TMessage, TReply>
+pub struct AuthSpecBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
     pub authentication: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
-    pub message: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
+    get_message_leg_transport: fn(transports: &TTransports) -> &TTransport,
+    message_leg_timeout: Duration,
+    message_leg_gather_signatures: Vec<
+        Box<
+            dyn Fn(&TState, &TCredentials, &mut TMessage) -> StockTrekResult<()>
+                + Send
+                + Sync
+                + 'static,
+        >,
+    >,
+    _phantom_repy: PhantomData<TReply>,
 }
 
-impl<TState, TCredentials, TTransports, TMessage, TReply>
-    AuthSpecBuilder<TState, TCredentials, TTransports, TMessage, TReply>
+impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+    AuthSpecBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
     pub fn new(
-        message: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
+        get_message_leg_transport: fn(transports: &TTransports) -> &TTransport,
+        message_leg_timeout: Duration,
     ) -> Self {
         Self {
             authentication: Vec::new(),
-            message,
+            get_message_leg_transport,
+            message_leg_timeout,
+            message_leg_gather_signatures: Vec::new(),
+            _phantom_repy: PhantomData,
         }
     }
     pub fn begin_authentication_leg<TAuthTransport, TAuthMessage, TAuthReply>(
-        mut self,
+        self,
         get_transport: fn(transports: &TTransports) -> &TAuthTransport,
         timeout: Duration,
     ) -> AuthenticateLegBuilder<
         TState,
         TCredentials,
         TTransports,
+        TTransport,
         TMessage,
         TReply,
         TAuthTransport,
@@ -57,34 +71,24 @@ where
         TAuthMessage: Send + Sync + 'static,
         TAuthReply: Send + Sync + 'static,
     {
-        let authentication = std::mem::take(&mut self.authentication);
-        let builder = AuthSpecBuilder {
-            authentication,
-            message: self.message,
-        };
-        AuthenticateLegBuilder::new(builder, get_transport, timeout)
-    }
-    pub fn begin_message_leg<TTransport>(
-        mut self,
-        get_transport: fn(transports: &TTransports) -> &TTransport,
-        timeout: Duration,
-    ) -> MessageLegBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    where
-        TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-        TMessage: Send + Sync + 'static,
-        TReply: Send + Sync + 'static,
-    {
-        let authentication = std::mem::take(&mut self.authentication);
-        let builder = AuthSpecBuilder {
-            authentication,
-            message: self.message,
-        };
-        MessageLegBuilder::new(builder, get_transport, timeout)
+        AuthenticateLegBuilder::new(self, get_transport, timeout)
     }
     pub fn build_spec(&mut self) -> AuthSpec<TState, TCredentials, TTransports, TMessage, TReply> {
+        let message_leg = Box::new(MessageLegGeneric::<
+            TState,
+            TCredentials,
+            TTransports,
+            TTransport,
+            TMessage,
+            TReply,
+        >::new(
+            self.get_message_leg_transport,
+            self.message_leg_timeout,
+            std::mem::take(&mut self.message_leg_gather_signatures),
+        ));
         AuthSpec::<TState, TCredentials, TTransports, TMessage, TReply>::new(
             std::mem::take(&mut self.authentication),
-            self.message,
+            message_leg,
         )
     }
 }

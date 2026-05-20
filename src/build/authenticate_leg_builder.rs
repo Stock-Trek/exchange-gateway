@@ -9,6 +9,7 @@ pub struct AuthenticateLegBuilder<
     TState,
     TCredentials,
     TTransports,
+    TTransport,
     TMessage,
     TReply,
     TAuthTransport,
@@ -17,11 +18,13 @@ pub struct AuthenticateLegBuilder<
 > where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
     TAuthTransport: Transport<TAuthMessage, TAuthReply> + Send + Sync + 'static,
 {
-    auth_spec_builder: Option<AuthSpecBuilder<TState, TCredentials, TTransports, TMessage, TReply>>,
+    auth_spec_builder:
+        Option<AuthSpecBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply>>,
     get_transport: fn(transports: &TTransports) -> &TAuthTransport,
     timeout: Duration,
     gather_values:
@@ -30,11 +33,22 @@ pub struct AuthenticateLegBuilder<
         Vec<Box<dyn Fn(&TAuthReply, &mut TState) -> StockTrekResult<()> + Send + Sync + 'static>>,
 }
 
-impl<TState, TCredentials, TTransports, TMessage, TReply, TAuthTransport, TAuthMessage, TAuthReply>
+impl<
+    TState,
+    TCredentials,
+    TTransports,
+    TTransport,
+    TMessage,
+    TReply,
+    TAuthTransport,
+    TAuthMessage,
+    TAuthReply,
+>
     AuthenticateLegBuilder<
         TState,
         TCredentials,
         TTransports,
+        TTransport,
         TMessage,
         TReply,
         TAuthTransport,
@@ -45,6 +59,7 @@ where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
     TAuthTransport: Transport<TAuthMessage, TAuthReply> + Send + Sync + 'static,
@@ -52,7 +67,14 @@ where
     TAuthReply: Send + Sync + 'static,
 {
     pub fn new(
-        auth_spec_builder: AuthSpecBuilder<TState, TCredentials, TTransports, TMessage, TReply>,
+        auth_spec_builder: AuthSpecBuilder<
+            TState,
+            TCredentials,
+            TTransports,
+            TTransport,
+            TMessage,
+            TReply,
+        >,
         get_transport: fn(transports: &TTransports) -> &TAuthTransport,
         timeout: Duration,
     ) -> Self {
@@ -98,7 +120,7 @@ where
     }
     pub fn build_leg(
         &mut self,
-    ) -> AuthSpecBuilder<TState, TCredentials, TTransports, TMessage, TReply> {
+    ) -> AuthSpecBuilder<TState, TCredentials, TTransports, TTransport, TMessage, TReply> {
         let authenticate_leg = AuthenticateLegGeneric::<
             TState,
             TCredentials,
