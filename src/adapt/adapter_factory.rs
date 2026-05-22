@@ -1,23 +1,28 @@
-use crate::adapt::{adapter::Adapter, adapter_creator::AdapterCreator};
-use std::collections::HashMap;
-use stock_trek::exchange_id::ExchangeId;
+use crate::{
+    adapt::{adapter::Adapter, adapter_creator::AdapterCreatorTrait},
+    adapters::binance::{
+        BinanceCredentials,
+        BinanceHttpAdapterCreator,
+        BinanceHttpTransports,
+        // BinanceWebsocketAdapterCreator, BinanceWebsocketTransports,
+    },
+};
 
-pub struct AdapterFactory {
-    creators: HashMap<ExchangeId, AdapterCreator>,
-}
+pub struct AdapterFactory;
 
 impl AdapterFactory {
-    pub fn new() -> Self {
-        Self {
-            creators: HashMap::new(),
-        }
+    pub fn binance_rest(
+        credentials: BinanceCredentials,
+        transports: BinanceHttpTransports,
+    ) -> Adapter {
+        BinanceHttpAdapterCreator.create_adapter(credentials, transports)
     }
-    pub fn add(&mut self, adapter_creator: AdapterCreator) -> &mut Self {
-        let exchange_id = adapter_creator.exchange_id();
-        self.creators.insert(exchange_id, adapter_creator);
-        self
-    }
-    pub fn create_adapter(&self, exchange_id: ExchangeId) -> Option<Adapter> {
-        self.creators.get(&exchange_id).map(|c| c.create_adapter())
-    }
+    // TODO
+    // pub fn binance_websocket(
+    //     credentials: BinanceCredentials,
+    //     transports: BinanceWebsocketTransports,
+    // ) -> Adapter
+    // {
+    //     BinanceWebsocketAdapterCreator.create_adapter(credentials, transports)
+    // }
 }

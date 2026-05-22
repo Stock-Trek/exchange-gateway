@@ -1,3 +1,4 @@
+use crate::adapt::increment_sizes::IncrementSizes;
 use rust_decimal::{Decimal, RoundingStrategy};
 use std::collections::HashMap;
 use stock_trek::{
@@ -20,8 +21,6 @@ use stock_trek::{
         trading_pair::TradingPair,
     },
 };
-
-use crate::adapt::increment_sizes::IncrementSizes;
 
 pub struct PreciseOrders;
 
@@ -139,15 +138,16 @@ impl PreciseOrders {
         let activation: OrderActivation<Decimal> = match activation {
             OrderActivation::Immediate => OrderActivation::Immediate,
             OrderActivation::PriceTriggered {
+                activation_price,
                 basis,
                 direction,
                 mode,
-                price,
             } => OrderActivation::PriceTriggered {
+                activation_price: trading_pair_increments
+                    .to_valid_tick(activation_price, price_rounding),
                 basis,
                 direction,
                 mode,
-                price: trading_pair_increments.to_valid_tick(price, price_rounding),
             },
             OrderActivation::Trailing {
                 activation_price,

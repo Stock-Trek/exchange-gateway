@@ -1,50 +1,259 @@
+use crate::{
+    adapt::{
+        adapter::Adapter,
+        adapter_creator::AdapterCreatorTrait,
+        increment_sizes::{IncrementSizes, IncrementSizesBuilder},
+    },
+    auth_spec::AuthSpec,
+    authenticate_leg::AuthenticateLegImpl,
+    destroy::Destroy,
+    exchange_connector::ExchangeConnectorImpl,
+    message_leg::MessageLeg,
+    transport::transport::Transport,
+    values::{
+        auth_message_extractor::auth_message_extractor,
+        order_message_extractor::order_message_extractor,
+        order_response_extractor::OrderResponseExtractor, store_auth_value::StoreAuthValueImpl,
+    },
+};
+use async_trait::async_trait;
+use chrono::Duration;
 use rust_decimal::Decimal;
 use serde::Serialize;
+use std::collections::HashMap;
+use stock_trek::{
+    asset_id::AssetId,
+    capability::{Capability, MultiLegCapability, QuoteQuantityCapability},
+    error::result::StockTrekResult,
+    exchange_id::ExchangeId,
+    order::trading_pair::TradingPair,
+};
 use strum::Display;
 
-pub struct BinanceAdapterCreator;
+pub struct BinanceHttpAdapterCreator;
+pub struct BinanceWebsocketAdapterCreator;
+pub struct BinanceState {
+    id: Option<String>,
+}
+pub struct BinanceCredentials {}
+pub struct BinanceHttpTransports {
+    http: BinanceHttpTransport,
+}
+pub struct BinanceHttpTransport;
 
-// impl AdapterCreatorTrait for BinanceAdapterCreator {
-//     fn exchange_id(&self) -> ExchangeId {
-//         ExchangeId("Binance".to_string())
-//     }
-//     fn create_adapter(&self) -> Adapter {
-//         let increments = IncrementSizesBuilder::new()
-//             .with(
-//                 AssetId::Bitcoin,
-//                 AssetId::Tether,
-//                 Decimal::from_i128_with_scale(1, 3),
-//                 Decimal::from_i128_with_scale(1, 3),
-//             )
-//             .build();
-//         let capabilities = vec![
-//             Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
-//             Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
-//             Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
-//             Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
-//             Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
-//         ];
-//         let auth_spec = AuthSpecBuilder::new().build_spec();
-//         let authenticator=AuthenticatorGeneric
-//         Adapter {
-//             id: ExchangeId("Binance".to_string()),
-//             capabilities,
-//             increments,
-//             symbol_ticker_divider: None,
-//             ticker_overrides: HashMap::new(),
-//             order_request_mapper: Box::new(BinanceOrderRequestMapper),
-//             authenticator,
-//         }
-//     }
-// }
+impl BinanceState {
+    pub fn new() -> Self {
+        Self { id: None }
+    }
+}
+impl Default for BinanceState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl Destroy for BinanceCredentials {
+    fn destroy(&mut self) {}
+}
 
-// struct BinanceOrderRequestMapper;
+auth_message_extractor! {BinanceAuthMessageExtractor, BinanceAuthMessage(id:String)}
+order_message_extractor! {BinanceOrderMessageExtractor, BinanceOrderMessage(id:String)}
 
-// impl OrderRequestMapperTrait for BinanceOrderRequestMapper {
-//     fn map_order_request(&self, _order_request: &OrderRequest<AssetId, Decimal>) -> Value {
-//         Value::Null
-//     }
-// }
+pub struct BinanceAuthReply {
+    id: Option<String>,
+}
+
+pub struct BinanceOrderReply {
+    id: Option<String>,
+}
+
+#[async_trait]
+impl Transport<BinanceAuthMessage, BinanceAuthReply> for BinanceHttpTransport {
+    fn new(url: String) -> Self
+    where
+        Self: Sized,
+    {
+        BinanceHttpTransport
+    }
+    async fn send_and_wait_for_reply(
+        &self,
+        message: &BinanceAuthMessage,
+        timeout: chrono::Duration,
+    ) -> StockTrekResult<BinanceAuthReply> {
+        Ok(BinanceAuthReply {
+            id: Some(message.id.clone()),
+        })
+    }
+}
+
+#[async_trait]
+impl Transport<BinanceOrderMessage, BinanceOrderReply> for BinanceHttpTransport {
+    fn new(url: String) -> Self
+    where
+        Self: Sized,
+    {
+        BinanceHttpTransport
+    }
+    async fn send_and_wait_for_reply(
+        &self,
+        message: &BinanceOrderMessage,
+        timeout: chrono::Duration,
+    ) -> StockTrekResult<BinanceOrderReply> {
+        Ok(BinanceOrderReply {
+            id: Some(message.id.clone()),
+        })
+    }
+}
+
+fn create_exchange_id() -> ExchangeId {
+    ExchangeId("Binance".to_string())
+}
+
+fn create_capabilities() -> Vec<Capability> {
+    vec![
+        Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
+        Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
+        Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
+        Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
+        Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
+    ]
+}
+
+fn create_increments() -> HashMap<TradingPair, IncrementSizes> {
+    IncrementSizesBuilder::new()
+        .with(
+            AssetId::bitcoin_native(),
+            AssetId::bsc_usdt(),
+            Decimal::from_i128_with_scale(1, 3),
+            Decimal::from_i128_with_scale(1, 3),
+        )
+        .with(
+            AssetId::bitcoin_native(),
+            AssetId::tron_usdt(),
+            Decimal::from_i128_with_scale(1, 3),
+            Decimal::from_i128_with_scale(1, 3),
+        )
+        .with(
+            AssetId::bitcoin_native(),
+            AssetId::solana_usdt(),
+            Decimal::from_i128_with_scale(1, 3),
+            Decimal::from_i128_with_scale(1, 3),
+        )
+        .with(
+            AssetId::bitcoin_native(),
+            AssetId::polygon_usdt(),
+            Decimal::from_i128_with_scale(1, 3),
+            Decimal::from_i128_with_scale(1, 3),
+        )
+        .with(
+            AssetId::bitcoin_native(),
+            AssetId::ethereum_usdt(),
+            Decimal::from_i128_with_scale(1, 3),
+            Decimal::from_i128_with_scale(1, 3),
+        )
+        .build()
+}
+
+fn create_tickers() -> HashMap<AssetId, String> {
+    let mut tickers = HashMap::new();
+    tickers.insert(AssetId::aptos_native(), "APT".to_string());
+    tickers.insert(AssetId::arbitrum_native(), "APT".to_string());
+    tickers.insert(AssetId::arbitrum_usdc(), "APT".to_string());
+    tickers.insert(AssetId::avalanche_native(), "APT".to_string());
+    tickers.insert(AssetId::avalanche_usdc(), "APT".to_string());
+    tickers.insert(AssetId::base_native(), "APT".to_string());
+    tickers.insert(AssetId::base_usdc(), "APT".to_string());
+    tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
+    tickers.insert(AssetId::bsc_native(), "APT".to_string());
+    tickers.insert(AssetId::bsc_usdc(), "APT".to_string());
+    tickers.insert(AssetId::bsc_usdt(), "APT".to_string());
+    tickers.insert(AssetId::cosmos_native(), "APT".to_string());
+    tickers.insert(AssetId::ethereum_native(), "APT".to_string());
+    tickers.insert(AssetId::ethereum_reth(), "APT".to_string());
+    tickers.insert(AssetId::ethereum_steth(), "APT".to_string());
+    tickers.insert(AssetId::ethereum_usdc(), "APT".to_string());
+    tickers.insert(AssetId::ethereum_usdt(), "APT".to_string());
+    tickers.insert(AssetId::ethereum_wbtc(), "APT".to_string());
+    tickers.insert(AssetId::kusama_native(), "APT".to_string());
+    tickers.insert(AssetId::near_native(), "APT".to_string());
+    tickers.insert(AssetId::optimism_native(), "APT".to_string());
+    tickers.insert(AssetId::optimism_usdc(), "APT".to_string());
+    tickers.insert(AssetId::polkadot_native(), "APT".to_string());
+    tickers.insert(AssetId::polygon_native(), "APT".to_string());
+    tickers.insert(AssetId::polygon_usdc(), "APT".to_string());
+    tickers.insert(AssetId::polygon_usdt(), "APT".to_string());
+    tickers.insert(AssetId::solana_native(), "APT".to_string());
+    tickers.insert(AssetId::solana_usdc(), "APT".to_string());
+    tickers.insert(AssetId::solana_usdt(), "APT".to_string());
+    tickers.insert(AssetId::sui_native(), "APT".to_string());
+    tickers.insert(AssetId::tron_native(), "APT".to_string());
+    tickers.insert(AssetId::tron_usdt(), "APT".to_string());
+    tickers
+}
+
+fn create_http_auth_spec() -> AuthSpec<
+    BinanceState,
+    BinanceCredentials,
+    BinanceHttpTransports,
+    BinanceHttpTransport,
+    BinanceOrderMessage,
+    BinanceOrderReply,
+> {
+    AuthSpec::<
+        BinanceState,
+        BinanceCredentials,
+        BinanceHttpTransports,
+        BinanceHttpTransport,
+        BinanceOrderMessage,
+        BinanceOrderReply,
+    >::new(
+        vec![AuthenticateLegImpl::<
+            BinanceState,
+            BinanceCredentials,
+            BinanceHttpTransports,
+            BinanceHttpTransport,
+            BinanceAuthMessage,
+            BinanceAuthReply,
+        >::new(
+            |t| &t.http,
+            Duration::seconds(20),
+            BinanceAuthMessageExtractor::new(|s, c, t| "".to_string()),
+            vec![StoreAuthValueImpl::new(
+                |reply| Ok(reply.id.clone()),
+                |state, value| state.id = value.clone(),
+            )],
+        )],
+        MessageLeg::new(
+            |t| &t.http,
+            Duration::seconds(20),
+            BinanceOrderMessageExtractor::new(|order_request| order_request.to_string()),
+            OrderResponseExtractor::new(|response| {
+                response.id.clone().unwrap_or("Missing".to_string())
+            }),
+        ),
+    )
+}
+
+impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceHttpAdapterCreator {
+    fn create_adapter(
+        &self,
+        credentials: BinanceCredentials,
+        transports: BinanceHttpTransports,
+    ) -> Adapter {
+        let id = create_exchange_id();
+        let capabilities = create_capabilities();
+        let increments = create_increments();
+        let tickers = create_tickers();
+        let auth_spec = create_http_auth_spec();
+        Adapter {
+            id,
+            capabilities,
+            increments,
+            symbol_ticker_divider: None,
+            tickers,
+            exchange_connector: ExchangeConnectorImpl::new(auth_spec, credentials, transports),
+        }
+    }
+}
 
 // impl OrderConverter<SingleOrder, BinanceSingleOrderParams> for BinanceAdapter {
 //     fn convert_to(&self, order: &SingleOrder) -> StockTrekResult<BinanceSingleOrderParams> {
@@ -591,7 +800,7 @@ pub struct BinanceAdapterCreator;
 // }
 
 #[derive(Debug, Display, Serialize)]
-pub enum BinanceRestParams {
+pub enum BinanceHttpParams {
     Single(BinanceSingleOrderParams),
     OCO(BinanceOcoParams),
     OTO(BinanceOtoParams),
@@ -739,14 +948,14 @@ pub struct BinanceSingleOrderParams {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceOrderSide {
     BUY,
     SELL,
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceOrderType {
     LIMIT,
     MARKET,
@@ -757,7 +966,7 @@ pub enum BinanceOrderType {
     LIMIT_MAKER,
 }
 
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceTimeInForce {
     GTC,
     IOC,
@@ -766,7 +975,7 @@ pub enum BinanceTimeInForce {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceSelfTradePreventionMode {
     EXPIRE_MAKER,
     EXPIRE_TAKER,
@@ -775,7 +984,7 @@ pub enum BinanceSelfTradePreventionMode {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceCancelRestrictions {
     ONLY_NEW,
     ONLY_PARTIALLY_FILLED,
@@ -783,13 +992,13 @@ pub enum BinanceCancelRestrictions {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceWorkingType {
     MARK_PRICE,
     CONTRACT_PRICE,
 }
 
-#[derive(Debug, Display, Serialize)]
+#[derive(Debug, Display, Clone, Copy, Serialize)]
 pub enum BinanceNewOrderResponseType {
     ACK,
     RESULT,

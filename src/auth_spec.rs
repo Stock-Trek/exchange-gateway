@@ -1,37 +1,46 @@
 use crate::{
-    authenticate_leg::AuthenticateLegTrait, authentication_state::AuthenticationState,
-    destroy::Destroy, message_leg::MessageLegTrait, session::Session,
+    authenticate_leg::AuthenticateLeg, authentication_state::AuthenticationState, destroy::Destroy,
+    message_leg::MessageLeg, session::Session, transport::transport::Transport,
 };
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
+use rust_decimal::Decimal;
+use stock_trek::{
+    asset_id::AssetId,
+    error::{
+        general::GeneralError,
+        result::{StockTrekError, StockTrekResult},
+    },
+    order::{order_request::OrderRequest, order_response::OrderResponse},
 };
 
-pub struct AuthSpec<TState, TCredentials, TTransports, TMessage, TReply>
-where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-{
-    authentication_legs: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
-    message_leg: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
-}
-
-impl<TState, TCredentials, TTransports, TMessage, TReply>
-    AuthSpec<TState, TCredentials, TTransports, TMessage, TReply>
+pub struct AuthSpec<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
+    TMessage: Send + Sync + 'static,
+    TReply: Send + Sync + 'static,
+{
+    authenticate_legs: Vec<AuthenticateLeg<TState, TCredentials, TTransports>>,
+    message_leg: MessageLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
+}
+
+impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+    AuthSpec<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+where
+    TState: Default + Send + Sync + 'static,
+    TCredentials: Destroy + Send + Sync + 'static,
+    TTransports: Send + Sync + 'static,
+    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
     pub fn new(
-        authentication_legs: Vec<Box<dyn AuthenticateLegTrait<TState, TCredentials, TTransports>>>,
-        message_leg: Box<dyn MessageLegTrait<TState, TCredentials, TTransports, TMessage, TReply>>,
+        authenticate_legs: Vec<AuthenticateLeg<TState, TCredentials, TTransports>>,
+        message_leg: MessageLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
     ) -> Self {
         Self {
-            authentication_legs,
+            authenticate_legs,
             message_leg,
         }
     }
@@ -41,8 +50,8 @@ where
         transports: &TTransports,
         session: &mut Session<TState>,
     ) -> StockTrekResult<()> {
-        for authentication_leg in &self.authentication_legs {
-            match authentication_leg
+        for authenticate_leg in &self.authenticate_legs {
+            match authenticate_leg
                 .do_leg(credentials, transports, &mut session.state)
                 .await
             {
@@ -56,13 +65,13 @@ where
         session.set_authentication_state(AuthenticationState::Authenticated);
         Ok(())
     }
-    pub async fn sign(
+    pub async fn send_order_request(
         &self,
         credentials: &TCredentials,
         transports: &TTransports,
         session: &Session<TState>,
-        message: &mut TMessage,
-    ) -> StockTrekResult<TReply> {
+        order_request: OrderRequest<AssetId, Decimal>,
+    ) -> StockTrekResult<OrderResponse> {
         {
             let current_authentication_state = session.get_authentication_state();
             if current_authentication_state != AuthenticationState::Authenticated {
@@ -72,17 +81,17 @@ where
                 ))));
             }
         }
-        let reply = match self
+        let response = match self
             .message_leg
-            .do_leg(credentials, transports, &session.state, message)
+            .send_order_request(credentials, transports, &session.state, order_request)
             .await
         {
             Err(e) => {
                 session.set_authentication_state(AuthenticationState::AuthenticateFailed);
                 return Err(e);
             }
-            Ok(reply) => reply,
+            Ok(response) => response,
         };
-        Ok(reply)
+        Ok(response)
     }
 }

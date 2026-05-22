@@ -3,7 +3,6 @@ pub mod adapters;
 pub mod auth_spec;
 pub mod authenticate_leg;
 pub mod authentication_state;
-pub mod build;
 pub mod convert;
 pub mod credentials;
 pub mod destroy;

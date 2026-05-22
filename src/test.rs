@@ -11,8 +11,18 @@ mod test {
     use async_trait::async_trait;
     use chrono::Duration;
     use futures::executor::block_on;
+    use rust_decimal::Decimal;
     use std::{collections::HashMap, fmt::Display};
-    use stock_trek::{error::result::StockTrekResult, order::order_response::OrderResponse};
+    use stock_trek::{
+        asset_id::AssetId,
+        error::result::StockTrekResult,
+        order::{
+            order_activation::OrderActivation, order_intent::OrderIntent,
+            order_pricing::OrderPricing, order_quantity::OrderQuantity,
+            order_request::OrderRequest, order_response::OrderResponse, order_side::OrderSide,
+            orders::single::SingleOrderGeneric,
+        },
+    };
 
     #[test]
     pub fn test() {
@@ -24,7 +34,7 @@ mod test {
             Req,
             Res,
         >::new(|t| &t.http, Duration::seconds(30))
-        .begin_authentication_leg(|t| &t.http, Duration::seconds(20))
+        .begin_authenticate_leg(|t| &t.http, Duration::seconds(20))
         .gather_value(
             |state, _credentials| state.abc,
             |message, value| {
@@ -46,12 +56,24 @@ mod test {
         let mut session = Session::new();
         block_on(auth_spec.authenticate(&credentials, &transports, &mut session))
             .expect("Failed to authenticate");
-        let mut message = Req {
-            headers: HashMap::new(),
-        };
-        let response = block_on(auth_spec.sign(&credentials, &transports, &session, &mut message))
-            .expect("Failed to sign message");
-        println!("{}", response);
+        let order_request = OrderRequest::Single(SingleOrderGeneric {
+            activation: OrderActivation::Immediate,
+            base: AssetId::bitcoin_native(),
+            constraints: vec![],
+            intent: OrderIntent::Open,
+            pricing: OrderPricing::Market,
+            quantity: OrderQuantity::OfBase(Decimal::ONE),
+            quote: AssetId::ethereum_usdt(),
+            side: OrderSide::Buy,
+        });
+        let response = block_on(auth_spec.send_order_request(
+            &credentials,
+            &transports,
+            &session,
+            order_request,
+        ))
+        .expect("Failed to sign message");
+        println!("{:?}", response);
     }
 
     // TODO
@@ -101,15 +123,18 @@ mod test {
         }
     }
 
+    impl Default for Req {
+        fn default() -> Self {
+            Self {
+                headers: HashMap::new(),
+            }
+        }
+    }
+
     #[async_trait]
     impl Transport<Req, Res> for MyHttpTransport {
         fn new(_url: String) -> Self {
             Self {}
-        }
-        fn new_message(&self) -> StockTrekResult<Req> {
-            Ok(Req {
-                headers: HashMap::new(),
-            })
         }
         async fn send_and_wait_for_reply(
             &self,

@@ -10,7 +10,7 @@ pub struct Adapter {
     pub capabilities: Vec<Capability>,
     pub increments: HashMap<TradingPair, IncrementSizes>,
     pub symbol_ticker_divider: Option<String>,
-    pub ticker_overrides: HashMap<AssetId, String>,
+    pub tickers: HashMap<AssetId, String>,
     pub exchange_connector: ExchangeConnector,
 }
 
@@ -28,7 +28,7 @@ impl Adapter {
                 None => None,
                 Some(div) => Some(div.as_ref().into()),
             },
-            ticker_overrides: HashMap::new(),
+            tickers: HashMap::new(),
             exchange_connector,
         }
     }
@@ -49,7 +49,7 @@ impl Adapter {
         asset_id: AssetId,
         ticker_override: impl AsRef<str>,
     ) -> &mut Self {
-        self.ticker_overrides
+        self.tickers
             .insert(asset_id, ticker_override.as_ref().into());
         self
     }
@@ -62,8 +62,8 @@ impl Adapter {
         }
     }
     fn asset_ticker(&self, asset_id: &AssetId) -> String {
-        self.ticker_overrides
+        self.tickers
             .get(asset_id)
-            .map_or(asset_id.default_ticker().to_string(), |opt| opt.clone())
+            .map_or("UNKNOWN".to_string(), |opt| opt.clone())
     }
 }
