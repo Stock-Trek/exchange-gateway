@@ -23,6 +23,8 @@ macro_rules! auth_message_extractor {
     ) => {
         use crate::values::auth_message_extractor::{AuthMessageExtractor, AuthMessageExtractorTrait, AuthMessageFieldExtractor};
 
+        #[allow(non_snake_case)]
+        #[derive(Debug, serde::Serialize)]
         pub struct $extracted_name
         where
             $($field_type: Sized,)*

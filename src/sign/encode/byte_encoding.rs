@@ -6,5 +6,6 @@ pub enum ByteEncoding {
     Base32,
     Base58,
     Base64,
-    Hex,
+    HexLower,
+    HexUpper,
 }

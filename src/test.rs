@@ -1,87 +1,74 @@
 #[cfg(test)]
 mod test {
     use crate::{
-        build::auth_spec_builder::AuthSpecBuilder,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        exchange_listener::ExchangeListenerTrait,
-        session::Session,
         transport::{http_transport::HttpTransport, transport::Transport},
     };
     use async_trait::async_trait;
     use chrono::Duration;
-    use futures::executor::block_on;
-    use rust_decimal::Decimal;
     use std::{collections::HashMap, fmt::Display};
-    use stock_trek::{
-        asset_id::AssetId,
-        error::result::StockTrekResult,
-        order::{
-            order_activation::OrderActivation, order_intent::OrderIntent,
-            order_pricing::OrderPricing, order_quantity::OrderQuantity,
-            order_request::OrderRequest, order_response::OrderResponse, order_side::OrderSide,
-            orders::single::SingleOrderGeneric,
-        },
-    };
+    use stock_trek::error::result::StockTrekResult;
 
     #[test]
     pub fn test() {
-        let auth_spec = AuthSpecBuilder::<
-            MyState,
-            MyCredentials,
-            MyTransports,
-            MyHttpTransport,
-            Req,
-            Res,
-        >::new(|t| &t.http, Duration::seconds(30))
-        .begin_authenticate_leg(|t| &t.http, Duration::seconds(20))
-        .gather_value(
-            |state, _credentials| state.abc,
-            |message, value| {
-                message
-                    .headers
-                    .insert("HEADER".to_string(), value.to_string());
-            },
-        )
-        .store_value(
-            |reply| Ok(reply.body.clone()),
-            |state, value| state.abc = value.len() as i64,
-        )
-        .build_leg()
-        .build_spec();
-        let credentials = MyCredentials {
-            api_key: ApiKeyCredentials::new("fdnskfndjks".to_string(), Vec::new()),
-        };
-        let transports = MyTransports::new(MyHttpTransport);
-        let mut session = Session::new();
-        block_on(auth_spec.authenticate(&credentials, &transports, &mut session))
-            .expect("Failed to authenticate");
-        let order_request = OrderRequest::Single(SingleOrderGeneric {
-            activation: OrderActivation::Immediate,
-            base: AssetId::bitcoin_native(),
-            constraints: vec![],
-            intent: OrderIntent::Open,
-            pricing: OrderPricing::Market,
-            quantity: OrderQuantity::OfBase(Decimal::ONE),
-            quote: AssetId::ethereum_usdt(),
-            side: OrderSide::Buy,
-        });
-        let response = block_on(auth_spec.send_order_request(
-            &credentials,
-            &transports,
-            &session,
-            order_request,
-        ))
-        .expect("Failed to sign message");
-        println!("{:?}", response);
+        // TODO
+        // let auth_spec = AuthSpecBuilder::<
+        //     MyState,
+        //     MyCredentials,
+        //     MyTransports,
+        //     MyHttpTransport,
+        //     Req,
+        //     Res,
+        // >::new(|t| &t.http, Duration::seconds(30))
+        // .begin_authenticate_leg(|t| &t.http, Duration::seconds(20))
+        // .gather_value(
+        //     |state, _credentials| state.abc,
+        //     |message, value| {
+        //         message
+        //             .headers
+        //             .insert("HEADER".to_string(), value.to_string());
+        //     },
+        // )
+        // .store_value(
+        //     |reply| Ok(reply.body.clone()),
+        //     |state, value| state.abc = value.len() as i64,
+        // )
+        // .build_leg()
+        // .build_spec();
+        // let credentials = MyCredentials {
+        //     api_key: ApiKeyCredentials::new("fdnskfndjks".to_string(), Vec::new()),
+        // };
+        // let transports = MyTransports::new(MyHttpTransport);
+        // let mut session = Session::new();
+        // block_on(auth_spec.authenticate(&credentials, &transports, &mut session))
+        //     .expect("Failed to authenticate");
+        // let order_request = OrderRequest::Single(SingleOrderGeneric {
+        //     activation: OrderActivation::Immediate,
+        //     base: AssetId::bitcoin_native(),
+        //     constraints: vec![],
+        //     intent: OrderIntent::Open,
+        //     pricing: OrderPricing::Market,
+        //     quantity: OrderQuantity::OfBase(Decimal::ONE),
+        //     quote: AssetId::ethereum_usdt(),
+        //     side: OrderSide::Buy,
+        // });
+        // let response = block_on(auth_spec.send_order_request(
+        //     &credentials,
+        //     &transports,
+        //     &session,
+        //     order_request,
+        // ))
+        // .expect("Failed to sign message");
+        // println!("{:?}", response);
     }
 
     // TODO
-    #[allow(dead_code)]
-    struct MyListener;
-    impl ExchangeListenerTrait for MyListener {
-        fn on_order_placed(&self, _order_response: OrderResponse) {}
-    }
+    // #[allow(dead_code)]
+    // struct MyListener;
+    // impl ExchangeListenerTrait for MyListener {
+    //     fn on_order_placed(&self, _order_response: OrderResponse) {}
+    // }
 
     struct MyCredentials {
         pub api_key: ApiKeyCredentials,

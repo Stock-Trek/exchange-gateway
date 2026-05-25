@@ -9,20 +9,38 @@ use stock_trek::error::result::StockTrekResult;
 
 pub struct OrderMessageSigner<TState, TCredentials, TMessage> {
     get_credential: fn(&TCredentials) -> &dyn Credential,
-    signable_fields: Box<dyn OrderMessageSignableFieldsTrait<TState, TMessage>>,
+    signable_fields: Vec<OrderMessageSignableFields<TState, TMessage>>,
     signing_algorithm: SigningAlgorithm,
     byte_encoding: ByteEncoding,
     write_signature: fn(&String, &mut TMessage),
 }
 
 impl<TState, TCredentials, TMessage> OrderMessageSigner<TState, TCredentials, TMessage> {
+    pub fn new(
+        get_credential: fn(&TCredentials) -> &dyn Credential,
+        signable_fields: Vec<OrderMessageSignableFields<TState, TMessage>>,
+        signing_algorithm: SigningAlgorithm,
+        byte_encoding: ByteEncoding,
+        write_signature: fn(&String, &mut TMessage),
+    ) -> Self {
+        Self {
+            get_credential,
+            signable_fields,
+            signing_algorithm,
+            byte_encoding,
+            write_signature,
+        }
+    }
     pub fn sign(
         &self,
         state: &TState,
         credentials: &TCredentials,
         message: &mut TMessage,
     ) -> StockTrekResult<()> {
-        let data = self.signable_fields.signable_bytes(state, message);
+        let mut data = Vec::new();
+        for signable_field in &self.signable_fields {
+            data.extend(signable_field(state, message));
+        }
         let credential = (self.get_credential)(credentials);
         let key = credential.credential();
         let signer: DataSigner = self.signing_algorithm.into();
@@ -34,9 +52,8 @@ impl<TState, TCredentials, TMessage> OrderMessageSigner<TState, TCredentials, TM
     }
 }
 
-pub trait OrderMessageSignableFieldsTrait<TState, TMessage>: Send + Sync {
-    fn signable_bytes(&self, state: &TState, message: &TMessage) -> Vec<u8>;
-}
+pub type OrderMessageSignableFields<TState, TMessage> =
+    fn(state: &TState, message: &TMessage) -> Vec<u8>;
 
 pub type OrderMessageSignableField<TState, TMessage> = fn(&TState, &TMessage) -> Option<Vec<u8>>;
 
@@ -46,6 +63,8 @@ macro_rules! order_message_signer {
       $struct_name:ident < $state_name:ident, $order_message_name:ident > ( $($field_name:ident),* $(,)? )
     ) => {
 
+        #[allow(non_snake_case)]
+        #[derive(Debug, serde::Serialize)]
         pub struct $struct_name {
             $($field_name: OrderMessageSignableField<$state_name, $order_message_name>,)*
         }
