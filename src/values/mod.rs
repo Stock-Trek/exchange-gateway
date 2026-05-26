@@ -1,11 +1,7 @@
 pub mod auth_message_extractor;
 pub mod extractor;
-pub mod oco_order_extractor;
-pub mod order_message_signer;
-pub mod order_request_extractor;
 pub mod order_response_extractor;
-pub mod oto_order_extractor;
-pub mod otoco_order_extractor;
+pub mod signed_order_request_extractor;
+pub mod signed_order_variant_extractor;
 pub mod signer;
-pub mod single_order_extractor;
 pub mod store_auth_value;
