@@ -3,7 +3,7 @@ mod test {
     use crate::{
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        transport::{http_transport::HttpTransport, transport::Transport},
+        transport::{http_transport::HttpTransportTrait, transport::Transport},
     };
     use async_trait::async_trait;
     use chrono::Duration;
@@ -13,7 +13,7 @@ mod test {
     #[test]
     pub fn test() {
         // TODO
-        // let auth_spec = AuthSpecBuilder::<
+        // let protocol = AuthSpecBuilder::<
         //     MyState,
         //     MyCredentials,
         //     MyTransports,
@@ -41,7 +41,7 @@ mod test {
         // };
         // let transports = MyTransports::new(MyHttpTransport);
         // let mut session = Session::new();
-        // block_on(auth_spec.authenticate(&credentials, &transports, &mut session))
+        // block_on(protocol.authenticate(&credentials, &transports, &mut session))
         //     .expect("Failed to authenticate");
         // let order_request = OrderRequest::Single(SingleOrderGeneric {
         //     activation: OrderActivation::Immediate,
@@ -53,7 +53,7 @@ mod test {
         //     quote: AssetId::ethereum_usdt(),
         //     side: OrderSide::Buy,
         // });
-        // let response = block_on(auth_spec.send_order_request(
+        // let response = block_on(protocol.send_order_request(
         //     &credentials,
         //     &transports,
         //     &session,
@@ -83,7 +83,7 @@ mod test {
     }
 
     struct MyHttpTransport;
-    impl HttpTransport<Req, Res> for MyHttpTransport {}
+    impl HttpTransportTrait<Req, Res> for MyHttpTransport {}
 
     struct Req {
         headers: HashMap<String, String>,

@@ -1,7 +1,7 @@
 use crate::{
     destroy::Destroy,
     transport::transport::Transport,
-    values::{auth_message_extractor::AuthMessageExtractor, store_auth_value::StoreAuthValue},
+    values::{auth_message::AuthMessageExtractor, store_auth_value::StoreAuthValue},
 };
 use async_trait::async_trait;
 use chrono::Duration;

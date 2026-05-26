@@ -1,3 +1,5 @@
 use crate::transport::transport::Transport;
 
-pub trait HttpTransport<TMessage, TReply>: Transport<TMessage, TReply> {}
+pub type HttpTransport<TMessage, TReply> = Box<dyn HttpTransportTrait<TMessage, TReply>>;
+
+pub trait HttpTransportTrait<TMessage, TReply>: Transport<TMessage, TReply> {}

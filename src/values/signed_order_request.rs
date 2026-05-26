@@ -1,4 +1,4 @@
-macro_rules! signed_order_request_extractor {
+macro_rules! signed_order_request {
     (
         < $state:ty, $credentials:ty >,
         $single_message:ty : $single_extractor:ty,
@@ -91,4 +91,4 @@ macro_rules! signed_order_request_extractor {
     };
 }
 
-pub(crate) use signed_order_request_extractor;
+pub(crate) use signed_order_request;

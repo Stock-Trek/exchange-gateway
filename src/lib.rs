@@ -1,13 +1,12 @@
 pub mod adapt;
 pub mod adapters;
-pub mod auth_spec;
 pub mod authenticate_leg;
 pub mod authentication_state;
 pub mod convert;
 pub mod credentials;
 pub mod destroy;
 pub mod exchange_connector;
-pub mod exchange_listener;
+pub mod exchange_protocol;
 pub mod execute;
 pub mod message_leg;
 pub mod semantic_checker;

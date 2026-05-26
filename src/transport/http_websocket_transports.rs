@@ -1,16 +1,19 @@
-use crate::transport::{http_transport::HttpTransport, websocket_transport::WebsocketTransport};
+use crate::transport::{
+    http_transport::{HttpTransport, HttpTransportTrait},
+    websocket_transport::{WebsocketTransport, WebsocketTransportTrait},
+};
 
 pub struct HttpWebsocketTransports<THttpMessage, THttpReply, TWebsocketMessage, TWebsocketReply> {
-    pub http: Box<dyn HttpTransport<THttpMessage, THttpReply>>,
-    pub websocket: Box<dyn WebsocketTransport<TWebsocketMessage, TWebsocketReply>>,
+    pub http: HttpTransport<THttpMessage, THttpReply>,
+    pub websocket: WebsocketTransport<TWebsocketMessage, TWebsocketReply>,
 }
 
 impl<THttpMessage, THttpReply, TWebsocketMessage, TWebsocketReply>
     HttpWebsocketTransports<THttpMessage, THttpReply, TWebsocketMessage, TWebsocketReply>
 {
     pub fn new(
-        http: impl HttpTransport<THttpMessage, THttpReply> + 'static,
-        websocket: impl WebsocketTransport<TWebsocketMessage, TWebsocketReply> + 'static,
+        http: impl HttpTransportTrait<THttpMessage, THttpReply> + 'static,
+        websocket: impl WebsocketTransportTrait<TWebsocketMessage, TWebsocketReply> + 'static,
     ) -> Self {
         Self {
             http: Box::new(http),

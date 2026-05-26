@@ -1,5 +1,6 @@
 use crate::{
-    auth_spec::AuthSpec, destroy::Destroy, session::Session, transport::transport::Transport,
+    destroy::Destroy, exchange_protocol::ExchangeProtocol, session::Session,
+    transport::transport::Transport,
 };
 use async_trait::async_trait;
 use rust_decimal::Decimal;
@@ -29,7 +30,7 @@ where
     TMessage: Send + Sync + 'static,
     TReply: Send + Sync + 'static,
 {
-    auth_spec: AuthSpec<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
+    protocol: ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
     credentials: TCredentials,
     transports: TTransports,
     session: Session<TState>,
@@ -46,12 +47,12 @@ where
     TReply: Send + Sync + 'static,
 {
     pub fn new(
-        auth_spec: AuthSpec<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
+        protocol: ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
         credentials: TCredentials,
         transports: TTransports,
     ) -> ExchangeConnector {
         Box::new(Self {
-            auth_spec,
+            protocol,
             credentials,
             transports,
             session: Session::new(),
@@ -71,7 +72,7 @@ where
     TReply: Send + Sync + 'static,
 {
     async fn authenticate(&mut self) -> StockTrekResult<()> {
-        self.auth_spec
+        self.protocol
             .authenticate(&self.credentials, &self.transports, &mut self.session)
             .await
     }
@@ -79,7 +80,7 @@ where
         &self,
         order_request: OrderRequest<AssetId, Decimal>,
     ) -> StockTrekResult<OrderResponse> {
-        self.auth_spec
+        self.protocol
             .send_order_request(
                 &self.credentials,
                 &self.transports,

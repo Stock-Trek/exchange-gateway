@@ -13,31 +13,31 @@ pub trait AuthMessageExtractorTrait<TState, TCredentials, TTransport, TAuthMessa
 }
 
 #[allow(unused)]
-macro_rules! auth_message_extractor {
+macro_rules! auth_message {
     (
         < $state:ty, $credentials:ty, $transport:ty >,
-        $($field_name:ident : $field_type:ty,)*
+        $($auth_field_name:ident : $auth_field_type:ty,)*
     ) => {
-        use crate::values::auth_message_extractor::{AuthMessageExtractor, AuthMessageExtractorTrait};
+        use crate::values::auth_message::{AuthMessageExtractor, AuthMessageExtractorTrait};
 
         pub type AuthMessageFieldExtractor<TValue> = fn(&$state, &$credentials, &$transport) -> TValue;
 
         #[allow(non_snake_case)]
         #[derive(Debug, serde::Serialize)]
         pub struct AuthMessage {
-            pub $($field_name: $field_type,)*
+            pub $($auth_field_name: $auth_field_type,)*
         }
 
         pub struct AuthMessageExtractorImpl {
-            $($field_name: AuthMessageFieldExtractor<$field_type>,)*
+            $($auth_field_name: AuthMessageFieldExtractor<$auth_field_type>,)*
         }
 
         impl AuthMessageExtractorImpl {
             pub fn new(
-                $($field_name: AuthMessageFieldExtractor<$field_type>,)*
+                $($auth_field_name: AuthMessageFieldExtractor<$auth_field_type>,)*
             ) -> AuthMessageExtractor<$state, $credentials, $transport, AuthMessage> {
                 Box::new(Self {
-                    $($field_name,)*
+                    $($auth_field_name,)*
                 })
             }
         }
@@ -46,14 +46,14 @@ macro_rules! auth_message_extractor {
         for AuthMessageExtractorImpl {
             fn extract(&self, state: &$state, credentials: &$credentials, transport: &$transport) -> AuthMessage {
                 $(
-                    let $field_name = (self.$field_name)(state, credentials, transport);
+                    let $auth_field_name = (self.$auth_field_name)(state, credentials, transport);
                 )*
                 AuthMessage {
-                    $($field_name),*
+                    $($auth_field_name),*
                 }
             }
         }
     };
 }
 
-pub(crate) use auth_message_extractor;
+pub(crate) use auth_message;

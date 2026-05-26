@@ -3,20 +3,18 @@ use crate::{
         adapter::Adapter, adapter_creator::AdapterCreatorTrait,
         increment_sizes::IncrementSizesBuilder,
     },
-    auth_spec::AuthSpec,
     authenticate_leg::AuthenticateLegImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     destroy::Destroy,
     exchange_connector::ExchangeConnectorImpl,
+    exchange_protocol::ExchangeProtocol,
     message_leg::MessageLeg,
     sign::{encode::byte_encoding::ByteEncoding, encrypt::signing_algorithm::SigningAlgorithm},
     transport::transport::Transport,
     values::{
-        auth_message_extractor::auth_message_extractor,
-        order_response_extractor::OrderResponseExtractor,
-        signed_order_request_extractor::signed_order_request_extractor,
-        signed_order_variant_extractor::signed_order_variant_extractor, signer::SignatureGenerator,
-        store_auth_value::StoreAuthValueImpl,
+        auth_message::auth_message, order_response::OrderResponseExtractor,
+        signed_order_request::signed_order_request, signed_order_variant::signed_order_variant,
+        signer::SignatureGenerator, store_auth_value::StoreAuthValueImpl,
     },
 };
 use async_trait::async_trait;
@@ -113,7 +111,7 @@ impl Transport<SignedOrderRequestMessage, BinanceOrderReply> for BinanceHttpTran
     }
 }
 
-fn create_http_auth_spec() -> AuthSpec<
+fn create_http_protocol() -> ExchangeProtocol<
     BinanceState,
     BinanceCredentials,
     BinanceHttpTransports,
@@ -121,7 +119,7 @@ fn create_http_auth_spec() -> AuthSpec<
     SignedOrderRequestMessage,
     BinanceOrderReply,
 > {
-    AuthSpec::<
+    ExchangeProtocol::<
         BinanceState,
         BinanceCredentials,
         BinanceHttpTransports,
@@ -232,24 +230,24 @@ impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceH
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::base_usdc(), "APT".to_string());
         tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
-        let auth_spec = create_http_auth_spec();
+        let protocol = create_http_protocol();
         Adapter {
             id,
             capabilities,
             increments,
             symbol_ticker_divider: None,
             tickers,
-            exchange_connector: ExchangeConnectorImpl::new(auth_spec, credentials, transports),
+            exchange_connector: ExchangeConnectorImpl::new(protocol, credentials, transports),
         }
     }
 }
 
-auth_message_extractor! {
+auth_message! {
     <BinanceState, BinanceCredentials, BinanceHttpTransport>,
     id: String,
 }
 
-signed_order_variant_extractor! {
+signed_order_variant! {
     single,
     ::stock_trek::order::orders::single::SingleOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
     <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
@@ -260,7 +258,7 @@ signed_order_variant_extractor! {
     signature,
 }
 
-signed_order_variant_extractor! {
+signed_order_variant! {
     oco,
     ::stock_trek::order::orders::one_cancels_other::OneCancelsOtherOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
     <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
@@ -271,7 +269,7 @@ signed_order_variant_extractor! {
     signature,
 }
 
-signed_order_variant_extractor! {
+signed_order_variant! {
     oto,
     ::stock_trek::order::orders::one_triggers_other::OneTriggersOtherOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
     <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
@@ -282,7 +280,7 @@ signed_order_variant_extractor! {
     signature,
 }
 
-signed_order_variant_extractor! {
+signed_order_variant! {
     otoco,
     ::stock_trek::order::orders::one_triggers_oco::OneTriggersOcoOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
     <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
@@ -293,7 +291,7 @@ signed_order_variant_extractor! {
     signature,
 }
 
-signed_order_request_extractor! {
+signed_order_request! {
     <BinanceState, BinanceCredentials>,
     single::SignedOrderMessage: single::SignedOrderExtractor,
     oco::SignedOrderMessage: oco::SignedOrderExtractor,

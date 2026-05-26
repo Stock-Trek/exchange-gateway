@@ -12,7 +12,7 @@ use stock_trek::{
     order::{order_request::OrderRequest, order_response::OrderResponse},
 };
 
-pub struct AuthSpec<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+pub struct ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
@@ -26,7 +26,7 @@ where
 }
 
 impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    AuthSpec<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+    ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
 where
     TState: Default + Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,

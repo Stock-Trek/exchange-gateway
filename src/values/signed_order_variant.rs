@@ -1,4 +1,4 @@
-macro_rules! signed_order_variant_extractor {
+macro_rules! signed_order_variant {
     (
         $mod_name:ident,
         $order_variant:path,
@@ -114,4 +114,4 @@ macro_rules! signed_order_variant_extractor {
     };
 }
 
-pub(crate) use signed_order_variant_extractor;
+pub(crate) use signed_order_variant;
