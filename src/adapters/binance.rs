@@ -6,7 +6,7 @@ use crate::{
     authenticate_leg::AuthenticateLegImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     destroy::Destroy,
-    exchange_connector::ExchangeConnectorImpl,
+    exchange_connector::{BoxedConnector, ExchangeConnectorImpl},
     exchange_protocol::ExchangeProtocol,
     message_leg::MessageLegImpl,
     transport::{
@@ -177,14 +177,16 @@ impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceH
         tickers.insert(AssetId::base_usdc(), "APT".to_string());
         tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
         let protocol = create_http_protocol();
-        let exchange_connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
+        let connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
+        // Wrap the typed connector into a boxable form
+        let exchange_connector = BoxedConnector::from_unauthenticated(connector);
         Adapter::new(
             id,
             capabilities,
             increments,
             symbol_ticker_divider,
             tickers,
-            exchange_connector,
+            Box::new(exchange_connector),
         )
     }
 }

@@ -1,14 +1,8 @@
-use crate::{
-    authenticate_leg::AuthenticateLeg, authentication_state::AuthenticationState, destroy::Destroy,
-    message_leg::MessageLeg, session::Session,
-};
+use crate::{authenticate_leg::AuthenticateLeg, destroy::Destroy, message_leg::MessageLeg};
 use rust_decimal::Decimal;
 use stock_trek::{
     asset_id::AssetId,
-    error::{
-        general::GeneralError,
-        result::{StockTrekError, StockTrekResult},
-    },
+    error::result::StockTrekResult,
     order::{order_request::OrderRequest, order_response::OrderResponse},
 };
 
@@ -39,50 +33,26 @@ where
         &self,
         transports: &TTransports,
         credentials: &TCredentials,
-        session: &mut Session<TState>,
+        state: &mut TState,
     ) -> StockTrekResult<()> {
         for authenticate_leg in &self.authenticate_legs {
-            match authenticate_leg
-                .do_leg(transports, credentials, &mut session.state)
-                .await
-            {
-                Err(e) => {
-                    session.set_authentication_state(AuthenticationState::AuthenticateFailed);
-                    return Err(e);
-                }
-                _ => {}
-            }
+            authenticate_leg
+                .do_leg(transports, credentials, state)
+                .await?;
         }
-        session.set_authentication_state(AuthenticationState::Authenticated);
         Ok(())
     }
     pub async fn send_order_request(
         &self,
         transports: &TTransports,
         credentials: &TCredentials,
-        session: &Session<TState>,
+        state: &TState,
         order_request: OrderRequest<AssetId, Decimal>,
     ) -> StockTrekResult<OrderResponse> {
-        {
-            let current_authentication_state = session.get_authentication_state();
-            if current_authentication_state != AuthenticationState::Authenticated {
-                return Err(StockTrekError::General(GeneralError::Message(format!(
-                    "Cannot sign message in authentication state {}",
-                    current_authentication_state
-                ))));
-            }
-        }
-        let response = match self
+        let response = self
             .message_leg
-            .send_order_request(transports, credentials, &session.state, order_request)
-            .await
-        {
-            Err(e) => {
-                session.set_authentication_state(AuthenticationState::AuthenticateFailed);
-                return Err(e);
-            }
-            Ok(response) => response,
-        };
+            .send_order_request(transports, credentials, state, order_request)
+            .await?;
         Ok(response)
     }
 }

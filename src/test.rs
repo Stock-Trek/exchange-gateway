@@ -5,7 +5,7 @@ mod test {
         authenticate_leg::AuthenticateLegImpl,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        exchange_connector::ExchangeConnectorImpl,
+        exchange_connector::{BoxedConnector, ExchangeConnectorImpl, ExchangeConnector},
         exchange_protocol::ExchangeProtocol,
         message_leg::MessageLegImpl,
         transport::{
@@ -87,7 +87,9 @@ mod test {
         let credentials = MyCredentials {
             api_key: ApiKeyCredentials::new("fdsfdsd".to_string(), Vec::new()),
         };
-        let exchange_connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
+        let connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
+        let exchange_connector: ExchangeConnector =
+            Box::new(BoxedConnector::from_unauthenticated(connector));
         let _adapter = Adapter::new(
             id,
             capabilities,
