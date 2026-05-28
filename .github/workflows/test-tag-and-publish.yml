@@ -59,8 +59,10 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
-            git push origin "${TAG}"
+            # git push origin "${TAG}"
             export CARGO_REGISTRIES_SHIPYARD_TOKEN="${{ env.SHIPYARD_REGISTRY_TOKEN }}"
-            cargo config get --registry shipyard
-            cargo publish --registry shipyard --token "${{ env.SHIPYARD_REGISTRY_TOKEN }}"
+            cargo config get registries.shipyard
+            cargo config get registry.global-credential-providers
+            cargo config get net.git-fetch-with-cli
+            # cargo publish --registry shipyard --token "${{ env.SHIPYARD_REGISTRY_TOKEN }}"
           fi
