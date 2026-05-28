@@ -109,12 +109,7 @@ impl TransportTrait for ReqwestHttpTransport {
 fn create_http_protocol()
 -> ExchangeProtocol<BinanceHttpTransports, BinanceCredentials, BinanceState> {
     ExchangeProtocol::<BinanceHttpTransports, BinanceCredentials, BinanceState>::new(
-        vec![AuthenticateLegImpl::<
-            BinanceHttpTransports,
-            BinanceCredentials,
-            BinanceState,
-            ReqwestHttpTransport,
-        >::new(
+        vec![AuthenticateLegImpl::new(
             |t| &t.http,
             Duration::seconds(20),
             |_t, _c, _s| HttpMessageDto {
