@@ -1,7 +1,4 @@
-use crate::{
-    destroy::Destroy, exchange_protocol::ExchangeProtocol, session::Session,
-    transport::transport::Transport,
-};
+use crate::{destroy::Destroy, exchange_protocol::ExchangeProtocol, session::Session};
 use async_trait::async_trait;
 use rust_decimal::Decimal;
 use stock_trek::{
@@ -15,75 +12,64 @@ pub type ExchangeConnector = Box<dyn ExchangeConnectorTrait>;
 #[async_trait]
 pub trait ExchangeConnectorTrait {
     async fn authenticate(&mut self) -> StockTrekResult<()>;
-    async fn send_order(
+    async fn send_order_request(
         &self,
         order_request: OrderRequest<AssetId, Decimal>,
     ) -> StockTrekResult<OrderResponse>;
 }
 
-pub struct ExchangeConnectorImpl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+pub struct ExchangeConnectorImpl<TTransports, TCredentials, TState>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TCredentials: Destroy,
+    TState: Default,
 {
-    protocol: ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
-    credentials: TCredentials,
+    protocol: ExchangeProtocol<TTransports, TCredentials, TState>,
     transports: TTransports,
+    credentials: TCredentials,
     session: Session<TState>,
 }
 
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    ExchangeConnectorImpl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+impl<TTransports, TCredentials, TState> ExchangeConnectorImpl<TTransports, TCredentials, TState>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
     TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TCredentials: Destroy + Send + Sync + 'static,
+    TState: Default + Send + Sync + 'static,
 {
     pub fn new(
-        protocol: ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
-        credentials: TCredentials,
+        protocol: ExchangeProtocol<TTransports, TCredentials, TState>,
         transports: TTransports,
+        credentials: TCredentials,
     ) -> ExchangeConnector {
         Box::new(Self {
             protocol,
-            credentials,
             transports,
+            credentials,
             session: Session::new(),
         })
     }
 }
 
 #[async_trait]
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply> ExchangeConnectorTrait
-    for ExchangeConnectorImpl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+impl<TTransports, TCredentials, TState> ExchangeConnectorTrait
+    for ExchangeConnectorImpl<TTransports, TCredentials, TState>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TTransports: Send + Sync,
+    TCredentials: Destroy + Send + Sync,
+    TState: Default + Send + Sync,
 {
     async fn authenticate(&mut self) -> StockTrekResult<()> {
         self.protocol
-            .authenticate(&self.credentials, &self.transports, &mut self.session)
+            .authenticate(&self.transports, &self.credentials, &mut self.session)
             .await
     }
-    async fn send_order(
+    async fn send_order_request(
         &self,
         order_request: OrderRequest<AssetId, Decimal>,
     ) -> StockTrekResult<OrderResponse> {
         self.protocol
             .send_order_request(
-                &self.credentials,
                 &self.transports,
+                &self.credentials,
                 &self.session,
                 order_request,
             )
@@ -91,15 +77,11 @@ where
     }
 }
 
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply> Destroy
-    for ExchangeConnectorImpl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+impl<TTransports, TCredentials, TState> Destroy
+    for ExchangeConnectorImpl<TTransports, TCredentials, TState>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TCredentials: Destroy,
+    TState: Default,
 {
     fn destroy(&mut self) {
         self.session.destroy();

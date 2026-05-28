@@ -1,5 +1,9 @@
-use crate::transport::transport::Transport;
+use crate::transport::transport::TransportTrait;
+use std::collections::HashMap;
 
-pub type HttpTransport<TMessage, TReply> = Box<dyn HttpTransportTrait<TMessage, TReply>>;
+pub trait HttpTransportTrait: TransportTrait<MessageDto = HttpMessageDto> {}
 
-pub trait HttpTransportTrait<TMessage, TReply>: Transport<TMessage, TReply> {}
+pub struct HttpMessageDto {
+    pub headers: HashMap<String, String>,
+    pub body_json: String,
+}

@@ -8,13 +8,10 @@ use crate::{
     destroy::Destroy,
     exchange_connector::ExchangeConnectorImpl,
     exchange_protocol::ExchangeProtocol,
-    message_leg::MessageLeg,
-    sign::{encode::byte_encoding::ByteEncoding, encrypt::signing_algorithm::SigningAlgorithm},
-    transport::transport::Transport,
-    values::{
-        auth_message::auth_message, order_response::OrderResponseExtractor,
-        signed_order_request::signed_order_request, signed_order_variant::signed_order_variant,
-        signer::SignatureGenerator, store_auth_value::StoreAuthValueImpl,
+    message_leg::MessageLegImpl,
+    transport::{
+        http_transport::{HttpMessageDto, HttpTransportTrait},
+        transport::TransportTrait,
     },
 };
 use async_trait::async_trait;
@@ -26,6 +23,7 @@ use stock_trek::{
     capability::{Capability, MultiLegCapability, QuoteQuantityCapability},
     error::result::StockTrekResult,
     exchange_id::ExchangeId,
+    order::{order_id::OrderId, order_request::OrderRequest, order_response::OrderResponse},
 };
 
 pub struct BinanceHttpAdapterCreator;
@@ -39,10 +37,10 @@ pub struct BinanceCredentials {
 }
 
 pub struct BinanceHttpTransports {
-    pub http: BinanceHttpTransport,
+    pub http: ReqwestHttpTransport,
 }
 
-pub struct BinanceHttpTransport;
+pub struct ReqwestHttpTransport;
 
 pub struct BinanceAuthReply {
     pub id: Option<String>,
@@ -51,6 +49,30 @@ pub struct BinanceAuthReply {
 pub struct BinanceOrderReply {
     pub id: Option<String>,
     pub symbol: Option<String>,
+}
+
+pub struct SingleOrderMessage {
+    pub symbol: String,
+    pub timestamp: i64,
+    pub signature: String,
+}
+
+pub struct OcoOrderMessage {
+    pub symbol: String,
+    pub timestamp: i64,
+    pub signature: String,
+}
+
+pub struct OtoOrderMessage {
+    pub symbol: String,
+    pub timestamp: i64,
+    pub signature: String,
+}
+
+pub struct OtOcoOrderMessage {
+    pub symbol: String,
+    pub timestamp: i64,
+    pub signature: String,
 }
 
 impl BinanceState {
@@ -69,138 +91,66 @@ impl Destroy for BinanceCredentials {
     fn destroy(&mut self) {}
 }
 
+impl HttpTransportTrait for ReqwestHttpTransport {}
+
 #[async_trait]
-impl Transport<AuthMessage, BinanceAuthReply> for BinanceHttpTransport {
-    // TODO
-    fn new(_url: String) -> Self
-    where
-        Self: Sized,
-    {
-        BinanceHttpTransport
-    }
-    async fn send_and_wait_for_reply(
+impl TransportTrait for ReqwestHttpTransport {
+    type MessageDto = HttpMessageDto;
+    type TransportMessage = HttpMessageDto;
+    async fn send(
         &self,
-        message: &AuthMessage,
-        // TODO
-        _timeout: chrono::Duration,
-    ) -> StockTrekResult<BinanceAuthReply> {
-        Ok(BinanceAuthReply {
-            id: Some(message.id.clone()),
-        })
+        message_dto: Self::MessageDto,
+        _timeout: Duration,
+    ) -> StockTrekResult<Self::MessageDto> {
+        Ok(message_dto)
     }
 }
 
-#[async_trait]
-impl Transport<SignedOrderRequestMessage, BinanceOrderReply> for BinanceHttpTransport {
-    fn new(_url: String) -> Self
-    where
-        Self: Sized,
-    {
-        BinanceHttpTransport
-    }
-    async fn send_and_wait_for_reply(
-        &self,
-        // TODO
-        _message: &SignedOrderRequestMessage,
-        _timeout: chrono::Duration,
-    ) -> StockTrekResult<BinanceOrderReply> {
-        Ok(BinanceOrderReply {
-            id: Some("".to_string()),
-            symbol: Some("".to_string()),
-        })
-    }
-}
-
-fn create_http_protocol() -> ExchangeProtocol<
-    BinanceState,
-    BinanceCredentials,
-    BinanceHttpTransports,
-    BinanceHttpTransport,
-    SignedOrderRequestMessage,
-    BinanceOrderReply,
-> {
-    ExchangeProtocol::<
-        BinanceState,
-        BinanceCredentials,
-        BinanceHttpTransports,
-        BinanceHttpTransport,
-        SignedOrderRequestMessage,
-        BinanceOrderReply,
-    >::new(
+fn create_http_protocol()
+-> ExchangeProtocol<BinanceHttpTransports, BinanceCredentials, BinanceState> {
+    ExchangeProtocol::<BinanceHttpTransports, BinanceCredentials, BinanceState>::new(
         vec![AuthenticateLegImpl::<
-            BinanceState,
-            BinanceCredentials,
             BinanceHttpTransports,
-            BinanceHttpTransport,
-            AuthMessage,
-            BinanceAuthReply,
+            BinanceCredentials,
+            BinanceState,
+            ReqwestHttpTransport,
         >::new(
             |t| &t.http,
             Duration::seconds(20),
-            // TODO
-            AuthMessageExtractorImpl::new(|_s, _c, _t| "".to_string()),
-            vec![StoreAuthValueImpl::new(
-                |reply| Ok(reply.id.clone()),
-                |state, value| state.id = value.clone(),
-            )],
+            |_t, _c, _s| HttpMessageDto {
+                headers: HashMap::new(),
+                body_json: "{}".to_string(),
+            },
+            |m, s| {
+                s.id = Some(
+                    m.headers
+                        .get("dhsjkfhj")
+                        .unwrap_or(&"fds".to_string())
+                        .clone(),
+                );
+                Ok(())
+            },
         )],
-        MessageLeg::new(
+        MessageLegImpl::new(
             |t| &t.http,
             Duration::seconds(20),
-            SignedOrderRequestExtractor::new(
-                single::SignedOrderExtractor::new(
-                    single::UnsignedOrderFieldExtractors::new(|o| o.base.to_string(), |_o| 123),
-                    single::SignedOrderFieldExtractors::new(SignatureGenerator::<
-                        BinanceState,
-                        BinanceCredentials,
-                        single::UnsignedOrderMessage,
-                    >::new(
-                        |c| &c.api_key,
-                        vec![|_s, u| Some(u.symbol.to_string().into_bytes())],
-                        SigningAlgorithm::HmacSha256,
-                        ByteEncoding::Base64,
-                    )),
-                ),
-                oco::SignedOrderExtractor::new(
-                    oco::UnsignedOrderFieldExtractors::new(
-                        |o| o.primary.base.to_string(),
-                        |_o| 123,
-                    ),
-                    oco::SignedOrderFieldExtractors::new(SignatureGenerator::new(
-                        |c| &c.api_key,
-                        vec![],
-                        SigningAlgorithm::HmacSha256,
-                        ByteEncoding::Base64,
-                    )),
-                ),
-                oto::SignedOrderExtractor::new(
-                    oto::UnsignedOrderFieldExtractors::new(
-                        |o| o.primary.base.to_string(),
-                        |_o| 123,
-                    ),
-                    oto::SignedOrderFieldExtractors::new(SignatureGenerator::new(
-                        |c| &c.api_key,
-                        vec![],
-                        SigningAlgorithm::HmacSha256,
-                        ByteEncoding::Base64,
-                    )),
-                ),
-                otoco::SignedOrderExtractor::new(
-                    otoco::UnsignedOrderFieldExtractors::new(
-                        |o| o.primary.base.to_string(),
-                        |_o| 123,
-                    ),
-                    otoco::SignedOrderFieldExtractors::new(SignatureGenerator::new(
-                        |c| &c.api_key,
-                        vec![],
-                        SigningAlgorithm::HmacSha256,
-                        ByteEncoding::Base64,
-                    )),
-                ),
-            ),
-            OrderResponseExtractor::new(|response| {
-                response.id.clone().unwrap_or("Missing".to_string())
-            }),
+            |_c, _s, order_request| {
+                let body = match order_request {
+                    OrderRequest::Single(_single) => "",
+                    OrderRequest::OneCancelsOther(_oco) => "",
+                    OrderRequest::OneTriggersOther(_oto) => "",
+                    OrderRequest::OneTriggersOco(_otoco) => "",
+                };
+                Ok(HttpMessageDto {
+                    headers: HashMap::new(),
+                    body_json: body.to_string(),
+                })
+            },
+            |_r| {
+                Ok(OrderResponse {
+                    id: OrderId("".to_string()),
+                })
+            },
         ),
     )
 }
@@ -237,64 +187,7 @@ impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceH
             increments,
             symbol_ticker_divider: None,
             tickers,
-            exchange_connector: ExchangeConnectorImpl::new(protocol, credentials, transports),
+            exchange_connector: ExchangeConnectorImpl::new(protocol, transports, credentials),
         }
     }
-}
-
-auth_message! {
-    <BinanceState, BinanceCredentials, BinanceHttpTransport>,
-    id: String,
-}
-
-signed_order_variant! {
-    single,
-    ::stock_trek::order::orders::single::SingleOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
-    <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
-    (
-        symbol: String,
-        timestamp: i64,
-    ),
-    signature,
-}
-
-signed_order_variant! {
-    oco,
-    ::stock_trek::order::orders::one_cancels_other::OneCancelsOtherOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
-    <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
-    (
-        symbol: String,
-        timestamp: i64,
-    ),
-    signature,
-}
-
-signed_order_variant! {
-    oto,
-    ::stock_trek::order::orders::one_triggers_other::OneTriggersOtherOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
-    <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
-    (
-        symbol: String,
-        timestamp: i64,
-    ),
-    signature,
-}
-
-signed_order_variant! {
-    otoco,
-    ::stock_trek::order::orders::one_triggers_oco::OneTriggersOcoOrderGeneric<::stock_trek::prelude::AssetId, ::rust_decimal::Decimal>,
-    <crate::adapters::binance::BinanceState, crate::adapters::binance::BinanceCredentials>,
-    (
-        symbol: String,
-        timestamp: i64,
-    ),
-    signature,
-}
-
-signed_order_request! {
-    <BinanceState, BinanceCredentials>,
-    single::SignedOrderMessage: single::SignedOrderExtractor,
-    oco::SignedOrderMessage: oco::SignedOrderExtractor,
-    oto::SignedOrderMessage: oto::SignedOrderExtractor,
-    otoco::SignedOrderMessage: otoco::SignedOrderExtractor,
 }

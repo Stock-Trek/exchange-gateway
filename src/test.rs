@@ -1,9 +1,8 @@
 #[cfg(test)]
 mod test {
     use crate::{
-        credentials::api_key_credential::ApiKeyCredentials,
-        destroy::Destroy,
-        transport::{http_transport::HttpTransportTrait, transport::Transport},
+        credentials::api_key_credential::ApiKeyCredentials, destroy::Destroy,
+        transport::http_transport::HttpTransportTrait,
     };
     use async_trait::async_trait;
     use chrono::Duration;

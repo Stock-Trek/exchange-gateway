@@ -3,7 +3,7 @@ use std::sync::RwLock;
 
 pub struct Session<TState>
 where
-    TState: Default + Send + Sync + 'static,
+    TState: Default,
 {
     pub state: TState,
     pub authenticate_state: RwLock<AuthenticationState>,
@@ -11,7 +11,7 @@ where
 
 impl<TState> Session<TState>
 where
-    TState: Default + Send + Sync + 'static,
+    TState: Default,
 {
     pub fn new() -> Self {
         Self {
@@ -31,7 +31,7 @@ where
 
 impl<TState> Destroy for Session<TState>
 where
-    TState: Default + Send + Sync + 'static,
+    TState: Default,
 {
     fn destroy(&mut self) {
         self.set_authentication_state(AuthenticationState::Destroyed);

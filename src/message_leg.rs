@@ -1,79 +1,96 @@
-use crate::{
-    destroy::Destroy,
-    transport::transport::Transport,
-    values::{order_response::OrderResponseExtractor, signer::Signer},
-};
+use crate::{destroy::Destroy, transport::transport::TransportTrait};
+use async_trait::async_trait;
 use chrono::Duration;
 use rust_decimal::Decimal;
-use std::marker::PhantomData;
 use stock_trek::{
     asset_id::AssetId,
-    error::result::StockTrekResult,
+    error::{
+        general::GeneralError,
+        result::{StockTrekError, StockTrekResult},
+    },
     order::{order_request::OrderRequest, order_response::OrderResponse},
 };
 
-pub struct MessageLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+pub type MessageLeg<TTransports, TCredentials, TState> =
+    Box<dyn MessageLegTrait<TTransports, TCredentials, TState>>;
+
+#[async_trait]
+pub trait MessageLegTrait<TTransports, TCredentials, TState>: Send + Sync {
+    async fn send_order_request(
+        &self,
+        transports: &TTransports,
+        credentials: &TCredentials,
+        state: &TState,
+        order_request: OrderRequest<AssetId, Decimal>,
+    ) -> StockTrekResult<OrderResponse>;
+}
+
+pub struct MessageLegImpl<TTransports, TCredentials, TState, TTransport>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TTransport: TransportTrait,
+    TCredentials: Destroy,
+    TState: Default,
 {
     get_transport: fn(transports: &TTransports) -> &TTransport,
     timeout: Duration,
-    order_request_extractor: Signer<TState, TCredentials, OrderRequest<AssetId, Decimal>, TMessage>,
-    order_response_extractor: OrderResponseExtractor<TReply>,
-    _phantom_state: PhantomData<TState>,
-    _phantom_credentials: PhantomData<TCredentials>,
+    get_order_request_message: fn(
+        &TCredentials,
+        &TState,
+        OrderRequest<AssetId, Decimal>,
+    ) -> StockTrekResult<TTransport::MessageDto>,
+    get_order_response: fn(TTransport::MessageDto) -> StockTrekResult<OrderResponse>,
 }
 
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    MessageLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+impl<TTransports, TCredentials, TState, TTransport>
+    MessageLegImpl<TTransports, TCredentials, TState, TTransport>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TTransports: Sync + 'static,
+    TCredentials: Destroy + Sync + 'static,
+    TState: Default + Sync + 'static,
+    TTransport: TransportTrait + 'static,
 {
     pub fn new(
         get_transport: fn(transports: &TTransports) -> &TTransport,
         timeout: Duration,
-        order_request_extractor: Signer<
-            TState,
-            TCredentials,
+        get_order_request_message: fn(
+            &TCredentials,
+            &TState,
             OrderRequest<AssetId, Decimal>,
-            TMessage,
-        >,
-        order_response_extractor: OrderResponseExtractor<TReply>,
-    ) -> Self {
-        Self {
+        ) -> StockTrekResult<TTransport::MessageDto>,
+        get_order_response: fn(TTransport::MessageDto) -> StockTrekResult<OrderResponse>,
+    ) -> MessageLeg<TTransports, TCredentials, TState> {
+        Box::new(Self {
             get_transport,
             timeout,
-            order_request_extractor,
-            order_response_extractor,
-            _phantom_state: PhantomData,
-            _phantom_credentials: PhantomData,
-        }
+            get_order_request_message,
+            get_order_response,
+        })
     }
-    pub async fn send_order_request(
+}
+
+#[async_trait]
+impl<TTransports, TState, TCredentials, TTransport>
+    MessageLegTrait<TTransports, TCredentials, TState>
+    for MessageLegImpl<TTransports, TCredentials, TState, TTransport>
+where
+    TTransports: Sync,
+    TCredentials: Destroy + Sync,
+    TState: Default + Sync,
+    TTransport: TransportTrait + 'static,
+{
+    async fn send_order_request(
         &self,
-        credentials: &TCredentials,
         transports: &TTransports,
+        credentials: &TCredentials,
         state: &TState,
         order_request: OrderRequest<AssetId, Decimal>,
     ) -> StockTrekResult<OrderResponse> {
         let transport = (self.get_transport)(&transports);
-        let message = self
-            .order_request_extractor
-            .sign(state, credentials, &order_request)?;
+        let message = (self.get_order_request_message)(credentials, state, order_request)?;
         let reply = transport
-            .send_and_wait_for_reply(&message, self.timeout)
-            .await?;
-        let response = self.order_response_extractor.extract(&reply);
-        Ok(response)
+            .send(message, self.timeout)
+            .await
+            .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;
+        (self.get_order_response)(reply)
     }
 }

@@ -14,4 +14,3 @@ pub mod session;
 pub mod sign;
 pub mod test;
 pub mod transport;
-pub mod values;

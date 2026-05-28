@@ -1,6 +1,6 @@
 use crate::{
     authenticate_leg::AuthenticateLeg, authentication_state::AuthenticationState, destroy::Destroy,
-    message_leg::MessageLeg, session::Session, transport::transport::Transport,
+    message_leg::MessageLeg, session::Session,
 };
 use rust_decimal::Decimal;
 use stock_trek::{
@@ -12,32 +12,23 @@ use stock_trek::{
     order::{order_request::OrderRequest, order_response::OrderResponse},
 };
 
-pub struct ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+pub struct ExchangeProtocol<TTransports, TCredentials, TState>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TCredentials: Destroy,
+    TState: Default,
 {
-    authenticate_legs: Vec<AuthenticateLeg<TState, TCredentials, TTransports>>,
-    message_leg: MessageLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
+    authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
+    message_leg: MessageLeg<TTransports, TCredentials, TState>,
 }
 
-impl<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
-    ExchangeProtocol<TState, TCredentials, TTransports, TTransport, TMessage, TReply>
+impl<TTransports, TCredentials, TState> ExchangeProtocol<TTransports, TCredentials, TState>
 where
-    TState: Default + Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
-    TTransports: Send + Sync + 'static,
-    TTransport: Transport<TMessage, TReply> + Send + Sync + 'static,
-    TMessage: Send + Sync + 'static,
-    TReply: Send + Sync + 'static,
+    TCredentials: Destroy,
+    TState: Default,
 {
     pub fn new(
-        authenticate_legs: Vec<AuthenticateLeg<TState, TCredentials, TTransports>>,
-        message_leg: MessageLeg<TState, TCredentials, TTransports, TTransport, TMessage, TReply>,
+        authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
+        message_leg: MessageLeg<TTransports, TCredentials, TState>,
     ) -> Self {
         Self {
             authenticate_legs,
@@ -46,13 +37,13 @@ where
     }
     pub async fn authenticate(
         &self,
-        credentials: &TCredentials,
         transports: &TTransports,
+        credentials: &TCredentials,
         session: &mut Session<TState>,
     ) -> StockTrekResult<()> {
         for authenticate_leg in &self.authenticate_legs {
             match authenticate_leg
-                .do_leg(credentials, transports, &mut session.state)
+                .do_leg(transports, credentials, &mut session.state)
                 .await
             {
                 Err(e) => {
@@ -67,8 +58,8 @@ where
     }
     pub async fn send_order_request(
         &self,
-        credentials: &TCredentials,
         transports: &TTransports,
+        credentials: &TCredentials,
         session: &Session<TState>,
         order_request: OrderRequest<AssetId, Decimal>,
     ) -> StockTrekResult<OrderResponse> {
@@ -83,7 +74,7 @@ where
         }
         let response = match self
             .message_leg
-            .send_order_request(credentials, transports, &session.state, order_request)
+            .send_order_request(transports, credentials, &session.state, order_request)
             .await
         {
             Err(e) => {
