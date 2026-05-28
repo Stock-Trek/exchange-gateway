@@ -69,5 +69,5 @@ jobs:
             eval $(ssh-agent -s)
             echo "${{ env.SHIPYARD_SSH_PRIVATE_KEY }}" | ssh-add -
             ssh-keyscan git.shipyard.rs >> ~/.ssh/known_hosts
-            cargo publish --registry shipyard --token "${{ env.SHIPYARD_REGISTRY_TOKEN }}"
+            cargo publish --registry shipyard
           fi
