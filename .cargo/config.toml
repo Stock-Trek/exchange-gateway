@@ -1,5 +1,5 @@
 [registries.shipyard]
-index = "ssh://git@git.shipyard.rs:stock-trek/crate-index.git"
+index = "ssh://git@git.shipyard.rs/stock-trek/crate-index.git"
 
 [registry]
 global-credential-providers = ["cargo:token"]
