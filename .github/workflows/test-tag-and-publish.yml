@@ -60,5 +60,7 @@ jobs:
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
             git push origin "${TAG}"
-            CARGO_REGISTRIES_SHIPYARD_TOKEN=${{ env.SHIPYARD_REGISTRY_TOKEN }} cargo publish --registry shipyard
+            git config --global credential.helper store
+            echo "https://Stock-Trek:${{ env.SHIPYARD_REGISTRY_TOKEN }}@git.shipyard.rs/stock-trek/crate-index.git" > ~/.git-credentials
+            cargo publish --registry shipyard
           fi
