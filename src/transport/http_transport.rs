@@ -1,14 +1,9 @@
-use crate::transport::transport::Transport;
+use crate::transport::transport::TransportTrait;
+use std::collections::HashMap;
 
-pub trait HttpTransport<TMessage, TReply>: Transport<Message = TMessage, Reply = TReply> {}
+pub trait HttpTransportTrait: TransportTrait<MessageDto = HttpMessageDto> {}
 
-pub struct HttpMessageBuilder<THttpMessage> {
-    #[allow(dead_code)]
-    setter: fn(&THttpMessage),
-}
-
-impl<THttpMessage> HttpMessageBuilder<THttpMessage> {
-    pub fn new(setter: fn(&THttpMessage)) -> Self {
-        Self { setter }
-    }
+pub struct HttpMessageDto {
+    pub headers: HashMap<String, String>,
+    pub body_json: String,
 }

@@ -1,9 +1,11 @@
-use crate::adapt::adapter::Adapter;
-use stock_trek::exchange_id::ExchangeId;
+use crate::{adapt::adapter::Adapter, destroy::Destroy};
 
-pub type AdapterCreator = Box<dyn AdapterCreatorTrait>;
+pub type AdapterCreator<TCredentials, TTransports> =
+    Box<dyn AdapterCreatorTrait<TCredentials, TTransports>>;
 
-pub trait AdapterCreatorTrait {
-    fn exchange_id(&self) -> ExchangeId;
-    fn create_adapter(&self) -> Adapter;
+pub trait AdapterCreatorTrait<TCredentials, TTransports>
+where
+    TCredentials: Destroy,
+{
+    fn create_adapter(&self, credentials: TCredentials, transports: TTransports) -> Adapter;
 }

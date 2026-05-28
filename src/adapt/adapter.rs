@@ -1,6 +1,4 @@
-use crate::{
-    adapt::increment_sizes::IncrementSizes, convert::order_request_mapper::OrderRequestMapper,
-};
+use crate::{adapt::increment_sizes::IncrementSizes, exchange_connector::ExchangeConnector};
 use std::collections::HashMap;
 use stock_trek::{
     asset_id::AssetId, capability::Capability, exchange_id::ExchangeId,
@@ -8,64 +6,64 @@ use stock_trek::{
 };
 
 pub struct Adapter {
-    pub id: ExchangeId,
-    pub capabilities: Vec<Capability>,
-    pub increments: HashMap<TradingPair, IncrementSizes>,
-    pub symbol_ticker_divider: Option<String>,
-    pub ticker_overrides: HashMap<AssetId, String>,
-    pub order_request_mapper: OrderRequestMapper,
+    id: ExchangeId,
+    capabilities: Vec<Capability>,
+    increments: HashMap<TradingPair, IncrementSizes>,
+    symbol_ticker_divider: Option<String>,
+    tickers: HashMap<AssetId, String>,
+    exchange_connector: ExchangeConnector,
 }
 
 impl Adapter {
     pub fn new(
-        id: impl AsRef<str>,
-        symbol_ticker_divider: Option<impl AsRef<str>>,
-        order_request_mapper: OrderRequestMapper,
+        id: ExchangeId,
+        capabilities: Vec<Capability>,
+        increments: HashMap<TradingPair, IncrementSizes>,
+        symbol_ticker_divider: Option<String>,
+        tickers: HashMap<AssetId, String>,
+        exchange_connector: ExchangeConnector,
     ) -> Self {
         Self {
-            id: ExchangeId(id.as_ref().into()),
-            capabilities: Vec::new(),
-            increments: HashMap::new(),
-            symbol_ticker_divider: match symbol_ticker_divider {
-                None => None,
-                Some(div) => Some(div.as_ref().into()),
-            },
-            ticker_overrides: HashMap::new(),
-            order_request_mapper,
+            id,
+            capabilities,
+            increments,
+            symbol_ticker_divider,
+            tickers,
+            exchange_connector,
         }
     }
-    pub fn add_capability(&mut self, capability: Capability) -> &mut Self {
-        self.capabilities.push(capability);
-        self
+    pub fn exchange_id(&self) -> &ExchangeId {
+        &self.id
     }
-    pub fn add_increment_sizes(
-        &mut self,
-        trading_pair: TradingPair,
-        increment_sizes: IncrementSizes,
-    ) -> &mut Self {
-        self.increments.insert(trading_pair, increment_sizes);
-        self
+    pub fn has_capability(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
     }
-    pub fn add_ticker_override(
-        &mut self,
-        asset_id: AssetId,
-        ticker_override: impl AsRef<str>,
-    ) -> &mut Self {
-        self.ticker_overrides
-            .insert(asset_id, ticker_override.as_ref().into());
-        self
+    pub fn increments_for_base_quote(
+        &self,
+        base: &AssetId,
+        quote: &AssetId,
+    ) -> Option<&IncrementSizes> {
+        self.increments_for_trading_pair(&TradingPair::new(base.clone(), quote.clone()))
     }
-    pub fn to_symbol(&self, base: &AssetId, quote: &AssetId) -> String {
-        let base_ticker = self.asset_ticker(base);
-        let quote_ticker = self.asset_ticker(quote);
+    pub fn increments_for_trading_pair(
+        &self,
+        trading_pair: &TradingPair,
+    ) -> Option<&IncrementSizes> {
+        self.increments.get(&trading_pair)
+    }
+    pub fn to_symbol(&self, base: &AssetId, quote: &AssetId) -> Option<String> {
+        let Some(base_ticker) = self.tickers.get(base) else {
+            return None;
+        };
+        let Some(quote_ticker) = self.tickers.get(quote) else {
+            return None;
+        };
         match &self.symbol_ticker_divider {
-            None => format!("{}{}", base_ticker, quote_ticker),
-            Some(divider) => format!("{}{}{}", base_ticker, divider, quote_ticker),
+            None => Some(format!("{}{}", base_ticker, quote_ticker)),
+            Some(divider) => Some(format!("{}{}{}", base_ticker, divider, quote_ticker)),
         }
     }
-    fn asset_ticker(&self, asset_id: &AssetId) -> String {
-        self.ticker_overrides
-            .get(asset_id)
-            .map_or(asset_id.default_ticker().to_string(), |opt| opt.clone())
+    pub fn exchange_connector(&self) -> &ExchangeConnector {
+        &self.exchange_connector
     }
 }
