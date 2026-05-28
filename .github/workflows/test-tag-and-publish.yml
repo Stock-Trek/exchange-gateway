@@ -61,5 +61,6 @@ jobs:
             git tag "${TAG}"
             git push origin "${TAG}"
             export CARGO_REGISTRIES_SHIPYARD_TOKEN="${{ env.SHIPYARD_REGISTRY_TOKEN }}"
-            cargo publish --registry shipyard
+            cargo config get --registry shipyard
+            cargo publish --registry shipyard --token "${{ env.SHIPYARD_REGISTRY_TOKEN }}"
           fi
