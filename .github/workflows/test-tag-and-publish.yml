@@ -60,5 +60,7 @@ jobs:
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
             git push origin "${TAG}"
-            cargo publish --registry shipyard --token "${{ env.SHIPYARD_REGISTRY_TOKEN }}" --config 'net.git-fetch-with-cli=false'
+            git config --global credential.helper store
+            echo "https://Stock-Trek:${{ env.SHIPYARD_REGISTRY_TOKEN }}@git.shipyard.rs" > ~/.git-credentials
+            cargo publish --registry shipyard --config 'net.git-fetch-with-cli=false'
           fi
