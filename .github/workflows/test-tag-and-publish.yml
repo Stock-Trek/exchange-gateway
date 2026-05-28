@@ -66,8 +66,6 @@ jobs:
             chmod 700 ~/.ssh
             echo "${{ env.SHIPYARD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
             chmod 600 ~/.ssh/id_ed25519
-            eval $(ssh-agent -s)
-            echo "${{ env.SHIPYARD_SSH_PRIVATE_KEY }}" | ssh-add -
             ssh-keyscan git.shipyard.rs >> ~/.ssh/known_hosts
             cargo publish --registry shipyard
           fi
