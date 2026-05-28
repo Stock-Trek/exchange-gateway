@@ -172,17 +172,19 @@ impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceH
                 Decimal::from_i128_with_scale(1, 3),
             )
             .build();
+        let symbol_ticker_divider = None;
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::base_usdc(), "APT".to_string());
         tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
         let protocol = create_http_protocol();
-        Adapter {
+        let exchange_connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
+        Adapter::new(
             id,
             capabilities,
             increments,
-            symbol_ticker_divider: None,
+            symbol_ticker_divider,
             tickers,
-            exchange_connector: ExchangeConnectorImpl::new(protocol, transports, credentials),
-        }
+            exchange_connector,
+        )
     }
 }
