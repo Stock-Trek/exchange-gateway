@@ -48,8 +48,9 @@ jobs:
 
       - name: Get version, check if tag exists, create and publish if not
         env:
-          SHIPYARD_REGISTRY_TOKEN: ${{ env.SHIPYARD_REGISTRY_TOKEN }}
           CARGO_REGISTRIES_SHIPYARD_TOKEN: ${{ env.SHIPYARD_REGISTRY_TOKEN }}
+          SHIPYARD_REGISTRY_TOKEN: ${{ env.SHIPYARD_REGISTRY_TOKEN }}
+          SHIPYARD_SSH_PRIVATE_KEY: ${{ env.SHIPYARD_SSH_PRIVATE_KEY }}
         run: |
           VERSION=$(cargo pkgid | rev | cut -d '@' -f 1 | cut -d '#' -f 1 | rev)
           TAG="v${VERSION}"
@@ -61,8 +62,8 @@ jobs:
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
             git push origin "${TAG}"
-            echo "machine git.shipyard.rs login Stock-Trek password ${{ env.SHIPYARD_REGISTRY_TOKEN }}" > ~/.netrc
-            chmod 600 ~/.netrc
-            git config --global credential.helper netrc
-            cargo publish --registry shipyard
+            eval $(ssh-agent -s)
+            echo "${{ env.SHIPYARD_SSH_PRIVATE_KEY }}" | ssh-add -
+            ssh-keyscan git.shipyard.rs >> ~/.ssh/known_hosts
+            cargo publish --registry shipyard --token "${{ env.SHIPYARD_REGISTRY_TOKEN }}"
           fi
