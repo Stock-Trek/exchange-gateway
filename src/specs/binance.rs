@@ -1,13 +1,10 @@
 use crate::{
-    adapt::{
-        adapter::Adapter, adapter_creator::AdapterCreatorTrait,
-        increment_sizes::IncrementSizesBuilder,
-    },
     authenticate_leg::AuthenticateLegImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     destroy::Destroy,
-    exchange_connector::ExchangeConnectorImpl,
-    exchange_protocol::ExchangeProtocol,
+    exchange_spec::ExchangeSpec,
+    exchange_spec_creator::ExchangeSpecCreatorTrait,
+    increment_sizes::IncrementSizesBuilder,
     message_leg::MessageLegImpl,
     transport::{
         http_transport::{HttpMessageDto, HttpTransportTrait},
@@ -25,8 +22,6 @@ use stock_trek::{
     exchange_id::ExchangeId,
     order::{order_id::OrderId, order_request::OrderRequest, order_response::OrderResponse},
 };
-
-pub struct BinanceHttpAdapterCreator;
 
 pub struct BinanceState {
     pub id: Option<String>,
@@ -88,7 +83,7 @@ impl Default for BinanceState {
 }
 
 impl Destroy for BinanceCredentials {
-    fn destroy(&mut self) {}
+    fn destroy(self) {}
 }
 
 impl HttpTransportTrait for ReqwestHttpTransport {}
@@ -106,56 +101,12 @@ impl TransportTrait for ReqwestHttpTransport {
     }
 }
 
-fn create_http_protocol()
--> ExchangeProtocol<BinanceHttpTransports, BinanceCredentials, BinanceState> {
-    ExchangeProtocol::<BinanceHttpTransports, BinanceCredentials, BinanceState>::new(
-        vec![AuthenticateLegImpl::new(
-            |t| &t.http,
-            Duration::seconds(20),
-            |_t, _c, _s| HttpMessageDto {
-                headers: HashMap::new(),
-                body_json: "{}".to_string(),
-            },
-            |m, s| {
-                s.id = Some(
-                    m.headers
-                        .get("dhsjkfhj")
-                        .unwrap_or(&"fds".to_string())
-                        .clone(),
-                );
-                Ok(())
-            },
-        )],
-        MessageLegImpl::new(
-            |t| &t.http,
-            Duration::seconds(20),
-            |_c, _s, order_request| {
-                let body = match order_request {
-                    OrderRequest::Single(_single) => "",
-                    OrderRequest::OneCancelsOther(_oco) => "",
-                    OrderRequest::OneTriggersOther(_oto) => "",
-                    OrderRequest::OneTriggersOco(_otoco) => "",
-                };
-                Ok(HttpMessageDto {
-                    headers: HashMap::new(),
-                    body_json: body.to_string(),
-                })
-            },
-            |_r| {
-                Ok(OrderResponse {
-                    id: OrderId("".to_string()),
-                })
-            },
-        ),
-    )
-}
+pub struct BinanceHttpSpecCreator;
 
-impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceHttpAdapterCreator {
-    fn create_adapter(
-        &self,
-        credentials: BinanceCredentials,
-        transports: BinanceHttpTransports,
-    ) -> Adapter {
+impl ExchangeSpecCreatorTrait<BinanceHttpTransports, BinanceCredentials, BinanceState>
+    for BinanceHttpSpecCreator
+{
+    fn create_spec(&self) -> ExchangeSpec<BinanceHttpTransports, BinanceCredentials, BinanceState> {
         let id = ExchangeId("Binance".to_string());
         let capabilities = vec![
             Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
@@ -176,15 +127,64 @@ impl AdapterCreatorTrait<BinanceCredentials, BinanceHttpTransports> for BinanceH
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::base_usdc(), "APT".to_string());
         tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
-        let protocol = create_http_protocol();
-        let exchange_connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
-        Adapter::new(
+        let authenticate_legs = vec![AuthenticateLegImpl::<
+            BinanceHttpTransports,
+            BinanceCredentials,
+            BinanceState,
+            ReqwestHttpTransport,
+        >::new(
+            |t| &t.http,
+            Duration::seconds(20),
+            |_t, _c, _s| HttpMessageDto {
+                headers: HashMap::new(),
+                body_json: "{}".to_string(),
+            },
+            |m, _s| {
+                let state: BinanceState = BinanceState {
+                    id: Some(
+                        m.headers
+                            .get("dhsjkfhj")
+                            .unwrap_or(&"fds".to_string())
+                            .clone(),
+                    ),
+                };
+                Ok(state)
+            },
+        )];
+        let message_leg = MessageLegImpl::<
+            BinanceHttpTransports,
+            BinanceCredentials,
+            BinanceState,
+            ReqwestHttpTransport,
+        >::new(
+            |t| &t.http,
+            Duration::seconds(20),
+            |_c, _s, order_request| {
+                let body = match order_request {
+                    OrderRequest::Single(_single) => "",
+                    OrderRequest::OneCancelsOther(_oco) => "",
+                    OrderRequest::OneTriggersOther(_oto) => "",
+                    OrderRequest::OneTriggersOco(_otoco) => "",
+                };
+                Ok(HttpMessageDto {
+                    headers: HashMap::new(),
+                    body_json: body.to_string(),
+                })
+            },
+            |_r| {
+                Ok(OrderResponse {
+                    id: OrderId("".to_string()),
+                })
+            },
+        );
+        ExchangeSpec::new(
             id,
             capabilities,
             increments,
             symbol_ticker_divider,
             tickers,
-            exchange_connector,
+            authenticate_legs,
+            message_leg,
         )
     }
 }

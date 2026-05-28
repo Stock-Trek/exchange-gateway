@@ -1,89 +1,138 @@
-use crate::{destroy::Destroy, exchange_protocol::ExchangeProtocol, session::Session};
-use async_trait::async_trait;
-use rust_decimal::Decimal;
+use crate::{
+    authentication_state::{AuthState, Authenticated, Scratch, Unauthenticated},
+    destroy::Destroy,
+    exchange_spec::ExchangeSpec,
+    precise_orders::PreciseOrders,
+    semantic_checker::SemanticChecker,
+};
+use std::marker::PhantomData;
 use stock_trek::{
     asset_id::AssetId,
-    error::result::StockTrekResult,
+    error::{
+        general::GeneralError,
+        result::{StockTrekError, StockTrekResult},
+    },
     order::{order_request::OrderRequest, order_response::OrderResponse},
+    preferences::Preferences,
 };
 
-pub type ExchangeConnector = Box<dyn ExchangeConnectorTrait>;
-
-#[async_trait]
-pub trait ExchangeConnectorTrait {
-    async fn authenticate(&mut self) -> StockTrekResult<()>;
-    async fn send_order_request(
-        &self,
-        order_request: OrderRequest<AssetId, Decimal>,
-    ) -> StockTrekResult<OrderResponse>;
-}
-
-pub struct ExchangeConnectorImpl<TTransports, TCredentials, TState>
+pub struct ExchangeConnector<TTransports, TCredentials, TDomainState, TAuthState>
 where
     TCredentials: Destroy,
-    TState: Default,
+    TDomainState: Default,
+    TAuthState: AuthState,
 {
-    protocol: ExchangeProtocol<TTransports, TCredentials, TState>,
+    spec: ExchangeSpec<TTransports, TCredentials, TDomainState>,
     transports: TTransports,
     credentials: TCredentials,
-    session: Session<TState>,
+    state: TDomainState,
+    _phantom_auth_state: PhantomData<TAuthState>,
 }
 
-impl<TTransports, TCredentials, TState> ExchangeConnectorImpl<TTransports, TCredentials, TState>
+impl<TTransports, TCredentials, TDomainState>
+    ExchangeConnector<TTransports, TCredentials, TDomainState, Scratch>
 where
     TTransports: Send + Sync + 'static,
     TCredentials: Destroy + Send + Sync + 'static,
-    TState: Default + Send + Sync + 'static,
+    TDomainState: Default + Send + Sync + 'static,
 {
     pub fn new(
-        protocol: ExchangeProtocol<TTransports, TCredentials, TState>,
+        spec: ExchangeSpec<TTransports, TCredentials, TDomainState>,
         transports: TTransports,
         credentials: TCredentials,
-    ) -> ExchangeConnector {
-        Box::new(Self {
-            protocol,
+    ) -> ExchangeConnector<TTransports, TCredentials, TDomainState, Unauthenticated> {
+        ExchangeConnector::<TTransports, TCredentials, TDomainState, Unauthenticated> {
+            spec,
             transports,
             credentials,
-            session: Session::new(),
-        })
+            state: TDomainState::default(),
+            _phantom_auth_state: PhantomData,
+        }
     }
 }
 
-#[async_trait]
-impl<TTransports, TCredentials, TState> ExchangeConnectorTrait
-    for ExchangeConnectorImpl<TTransports, TCredentials, TState>
+impl<TTransports, TCredentials, TDomainState>
+    ExchangeConnector<TTransports, TCredentials, TDomainState, Unauthenticated>
+where
+    TTransports: Send + Sync + 'static,
+    TCredentials: Destroy + Send + Sync + 'static,
+    TDomainState: Default + Send + Sync + 'static,
+{
+    pub async fn authenticate(
+        self,
+    ) -> StockTrekResult<ExchangeConnector<TTransports, TCredentials, TDomainState, Authenticated>>
+    {
+        let mut state = self.state;
+        for authentication_leg in &self.spec.authenticate_legs {
+            state = match authentication_leg
+                .do_leg(&self.transports, &self.credentials, state)
+                .await
+            {
+                Ok(state) => state,
+                Err(e) => {
+                    self.credentials.destroy();
+                    return Err(e);
+                }
+            }
+        }
+        Ok(
+            ExchangeConnector::<TTransports, TCredentials, TDomainState, Authenticated> {
+                spec: self.spec,
+                transports: self.transports,
+                credentials: self.credentials,
+                state,
+                _phantom_auth_state: PhantomData,
+            },
+        )
+    }
+}
+
+impl<TTransports, TCredentials, TDomainState>
+    ExchangeConnector<TTransports, TCredentials, TDomainState, Authenticated>
 where
     TTransports: Send + Sync,
     TCredentials: Destroy + Send + Sync,
-    TState: Default + Send + Sync,
+    TDomainState: Default + Send + Sync,
 {
-    async fn authenticate(&mut self) -> StockTrekResult<()> {
-        self.protocol
-            .authenticate(&self.transports, &self.credentials, &mut self.session)
-            .await
-    }
-    async fn send_order_request(
+    pub async fn send_order_request(
         &self,
-        order_request: OrderRequest<AssetId, Decimal>,
+        order_request: OrderRequest<AssetId, f64>,
+        preferences: &Preferences,
     ) -> StockTrekResult<OrderResponse> {
-        self.protocol
+        let precise_order_request = PreciseOrders.precise_order_request(
+            order_request,
+            &self.spec.increments,
+            &preferences.rounding,
+        )?;
+        if !SemanticChecker.conversion_will_be_semantically_consistent(
+            &precise_order_request,
+            &self.spec.capabilities,
+            preferences,
+        ) {
+            return Err(StockTrekError::General(GeneralError::Message(
+                "".to_string(),
+            )));
+        }
+        self.spec
+            .message_leg
             .send_order_request(
                 &self.transports,
                 &self.credentials,
-                &self.session,
-                order_request,
+                &self.state,
+                precise_order_request,
             )
             .await
     }
 }
 
-impl<TTransports, TCredentials, TState> Destroy
-    for ExchangeConnectorImpl<TTransports, TCredentials, TState>
+impl<TTransports, TCredentials, TDomainState, TAuthState> Destroy
+    for ExchangeConnector<TTransports, TCredentials, TDomainState, TAuthState>
 where
     TCredentials: Destroy,
-    TState: Default,
+    TDomainState: Default,
+    TAuthState: AuthState,
 {
-    fn destroy(&mut self) {
-        self.session.destroy();
+    fn destroy(self) {
+        self.credentials.destroy();
     }
 }

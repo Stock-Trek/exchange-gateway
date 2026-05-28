@@ -18,7 +18,7 @@ impl Credential for ApiKeyCredentials {
 }
 
 impl Destroy for ApiKeyCredentials {
-    fn destroy(&mut self) {
+    fn destroy(mut self) {
         self.secret.clear();
     }
 }
