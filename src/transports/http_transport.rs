@@ -1,4 +1,4 @@
-use crate::transport::transport::TransportTrait;
+use crate::transports::transport::TransportTrait;
 use std::collections::HashMap;
 
 pub trait HttpTransportTrait: TransportTrait<MessageDto = HttpMessageDto> {}

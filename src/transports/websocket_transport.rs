@@ -1,4 +1,4 @@
-use crate::transport::transport::TransportTrait;
+use crate::transports::transport::TransportTrait;
 
 pub trait WebsocketTransportTrait: TransportTrait<MessageDto = WebsocketMessageDto> {}
 

@@ -6,7 +6,7 @@ use crate::{
     exchange_spec_creator::ExchangeSpecCreatorTrait,
     increment_sizes::IncrementSizesBuilder,
     message_leg::MessageLegImpl,
-    transport::{
+    transports::{
         http_transport::{HttpMessageDto, HttpTransportTrait},
         transport::TransportTrait,
     },

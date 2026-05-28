@@ -47,12 +47,8 @@ where
         }
     }
     pub fn to_symbol(&self, base: &AssetId, quote: &AssetId) -> Option<String> {
-        let Some(base_ticker) = self.tickers.get(base) else {
-            return None;
-        };
-        let Some(quote_ticker) = self.tickers.get(quote) else {
-            return None;
-        };
+        let base_ticker = self.tickers.get(base)?;
+        let quote_ticker = self.tickers.get(quote)?;
         match &self.symbol_ticker_divider {
             None => Some(format!("{}{}", base_ticker, quote_ticker)),
             Some(divider) => Some(format!("{}{}{}", base_ticker, divider, quote_ticker)),

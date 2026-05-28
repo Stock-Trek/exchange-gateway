@@ -12,7 +12,7 @@ impl SemanticChecker {
     pub fn conversion_will_be_semantically_consistent(
         &self,
         order_request: &OrderRequest<AssetId, Decimal>,
-        capabilities: &Vec<Capability>,
+        capabilities: &[Capability],
         preferences: &Preferences,
     ) -> bool {
         match order_request {
@@ -46,7 +46,7 @@ impl SemanticChecker {
         &self,
         primary: &SingleOrderGeneric<AssetId, Decimal>,
         secondary: &SingleOrderGeneric<AssetId, Decimal>,
-        capabilities: &Vec<Capability>,
+        capabilities: &[Capability],
         preferences: &Preferences,
     ) -> bool {
         Self::check_value(

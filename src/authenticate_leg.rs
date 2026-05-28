@@ -1,4 +1,4 @@
-use crate::{destroy::Destroy, transport::transport::TransportTrait};
+use crate::{destroy::Destroy, transports::transport::TransportTrait};
 use async_trait::async_trait;
 use chrono::Duration;
 use stock_trek::error::{
@@ -72,7 +72,7 @@ where
         credentials: &TCredentials,
         state: TState,
     ) -> StockTrekResult<TState> {
-        let transport = (self.get_transport)(&transports);
+        let transport = (self.get_transport)(transports);
         let auth_message = (self.get_auth_message)(transport, credentials, &state);
         let reply = transport
             .send(auth_message, self.timeout)

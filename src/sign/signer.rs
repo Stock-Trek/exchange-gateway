@@ -62,7 +62,7 @@ impl<TState, TCredentials, TUnsigned> SignerTrait<TState, TCredentials, TUnsigne
         let credential = (self.get_credential)(credentials);
         let key = credential.credential();
         let signer: DataSigner = self.signing_algorithm.into();
-        let signature_bytes = signer.sign(&data, &key)?;
+        let signature_bytes = signer.sign(&data, key)?;
         let byte_encoder: ByteEncoder = self.byte_encoding.into();
         let signature = byte_encoder.encode(&signature_bytes);
         Ok(signature)

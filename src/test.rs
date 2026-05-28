@@ -8,7 +8,7 @@ mod test {
         exchange_spec::ExchangeSpec,
         increment_sizes::IncrementSizesBuilder,
         message_leg::MessageLegImpl,
-        transport::{
+        transports::{
             http_transport::{HttpMessageDto, HttpTransportTrait},
             transport::TransportTrait,
         },
