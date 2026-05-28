@@ -1,2 +1,2 @@
 [registries]
-shipyard = { index = "ssh://git@ssh.shipyard.rs/stock-trek/crate-index.git" }
+shipyard = { index = "https://git.shipyard.rs/stock-trek/crate-index.git" }
