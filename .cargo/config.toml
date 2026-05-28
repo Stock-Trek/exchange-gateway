@@ -1,5 +1,2 @@
 [registries.shipyard]
 index = "https://git.shipyard.rs/stock-trek/crate-index.git"
-
-[net]
-git-fetch-with-cli = true

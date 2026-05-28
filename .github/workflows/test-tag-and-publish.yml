@@ -61,6 +61,8 @@ jobs:
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
             git push origin "${TAG}"
-            echo "${{ env.SHIPYARD_REGISTRY_TOKEN }}" | cargo login --registry shipyard
+            echo "machine git.shipyard.rs login Stock-Trek password ${{ env.SHIPYARD_REGISTRY_TOKEN }}" > ~/.netrc
+            chmod 600 ~/.netrc
+            git config --global credential.helper netrc
             cargo publish --registry shipyard
           fi
