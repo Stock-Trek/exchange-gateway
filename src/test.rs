@@ -1,12 +1,12 @@
 #[cfg(test)]
 mod test {
     use crate::{
-        adapt::{adapter::Adapter, increment_sizes::IncrementSizesBuilder},
         authenticate_leg::AuthenticateLegImpl,
         credentials::api_key_credential::ApiKeyCredentials,
         destroy::Destroy,
-        exchange_connector::{BoxedConnector, ExchangeConnectorImpl, ExchangeConnector},
-        exchange_protocol::ExchangeProtocol,
+        exchange_connector::ExchangeConnector,
+        exchange_spec::ExchangeSpec,
+        increment_sizes::IncrementSizesBuilder,
         message_leg::MessageLegImpl,
         transport::{
             http_transport::{HttpMessageDto, HttpTransportTrait},
@@ -27,18 +27,45 @@ mod test {
 
     #[test]
     pub fn test() {
-        let protocol = ExchangeProtocol::<MyTransports, MyCredentials, MyState>::new(
-            vec![AuthenticateLegImpl::new(
+        let id = ExchangeId("Binance".to_string());
+        let capabilities = vec![
+            Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
+            Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
+            Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
+            Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
+            Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
+        ];
+        let increments = IncrementSizesBuilder::new()
+            .with(
+                AssetId::bitcoin_native(),
+                AssetId::base_usdc(),
+                Decimal::from_i128_with_scale(1, 3),
+                Decimal::from_i128_with_scale(1, 3),
+            )
+            .build();
+        let symbol_ticker_divider = None;
+        let mut tickers = HashMap::new();
+        tickers.insert(AssetId::base_usdc(), "APT".to_string());
+        tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
+        let spec = ExchangeSpec::<MyTransports, MyCredentials, MyState>::new(
+            id,
+            capabilities,
+            increments,
+            symbol_ticker_divider,
+            tickers,
+            vec![AuthenticateLegImpl::<
+                MyTransports,
+                MyCredentials,
+                MyState,
+                MyHttpTransport,
+            >::new(
                 |t| &t.http,
                 Duration::seconds(20),
                 |_t, _c, _s| HttpMessageDto {
                     headers: HashMap::new(),
                     body_json: "{}".to_string(),
                 },
-                |_m, s| {
-                    s.abc = 123;
-                    Ok(())
-                },
+                |_m, _s| Ok(MyState { _abc: 123 }),
             )],
             MessageLegImpl::new(
                 |t| &t.http,
@@ -62,42 +89,16 @@ mod test {
                 },
             ),
         );
-        let id = ExchangeId("Binance".to_string());
-        let capabilities = vec![
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
-            Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
-        ];
-        let increments = IncrementSizesBuilder::new()
-            .with(
-                AssetId::bitcoin_native(),
-                AssetId::base_usdc(),
-                Decimal::from_i128_with_scale(1, 3),
-                Decimal::from_i128_with_scale(1, 3),
-            )
-            .build();
-        let mut tickers = HashMap::new();
-        tickers.insert(AssetId::base_usdc(), "APT".to_string());
-        tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
+
         let transports = MyTransports {
             http: MyHttpTransport {},
         };
         let credentials = MyCredentials {
             api_key: ApiKeyCredentials::new("fdsfdsd".to_string(), Vec::new()),
         };
-        let connector = ExchangeConnectorImpl::new(protocol, transports, credentials);
-        let exchange_connector: ExchangeConnector =
-            Box::new(BoxedConnector::from_unauthenticated(connector));
-        let _adapter = Adapter::new(
-            id,
-            capabilities,
-            increments,
-            None,
-            tickers,
-            exchange_connector,
-        );
+        let unauthenticated_exchange_connector =
+            ExchangeConnector::new(spec, transports, credentials);
+        let _authenticated_exchange_connector = unauthenticated_exchange_connector.authenticate();
     }
 
     struct MyCredentials {
@@ -105,7 +106,7 @@ mod test {
     }
 
     struct MyState {
-        abc: i64,
+        _abc: i64,
     }
 
     struct MyTransports {
@@ -131,14 +132,14 @@ mod test {
     }
 
     impl Destroy for MyCredentials {
-        fn destroy(&mut self) {
+        fn destroy(self) {
             self.api_key.destroy();
         }
     }
 
     impl Default for MyState {
         fn default() -> Self {
-            Self { abc: 123 }
+            Self { _abc: 123 }
         }
     }
 }

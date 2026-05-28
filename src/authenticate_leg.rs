@@ -19,8 +19,8 @@ where
         &self,
         transports: &TTransports,
         credentials: &TCredentials,
-        state: &mut TState,
-    ) -> StockTrekResult<()>;
+        state: TState,
+    ) -> StockTrekResult<TState>;
 }
 
 pub struct AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
@@ -30,7 +30,7 @@ where
     get_transport: fn(transports: &TTransports) -> &TAuthTransport,
     timeout: Duration,
     get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
-    store_state: fn(TAuthTransport::MessageDto, state: &mut TState) -> StockTrekResult<()>,
+    update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
 }
 
 impl<TTransports, TCredentials, TState, TAuthTransport>
@@ -45,13 +45,13 @@ where
         get_transport: fn(transports: &TTransports) -> &TAuthTransport,
         timeout: Duration,
         get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
-        store_state: fn(TAuthTransport::MessageDto, state: &mut TState) -> StockTrekResult<()>,
+        update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
     ) -> AuthenticateLeg<TTransports, TCredentials, TState> {
         Box::new(Self {
             get_transport,
             timeout,
             get_auth_message,
-            store_state,
+            update_state,
         })
     }
 }
@@ -70,14 +70,14 @@ where
         &self,
         transports: &TTransports,
         credentials: &TCredentials,
-        state: &mut TState,
-    ) -> StockTrekResult<()> {
+        state: TState,
+    ) -> StockTrekResult<TState> {
         let transport = (self.get_transport)(&transports);
-        let auth_message = (self.get_auth_message)(transport, credentials, state);
+        let auth_message = (self.get_auth_message)(transport, credentials, &state);
         let reply = transport
             .send(auth_message, self.timeout)
             .await
             .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;
-        (self.store_state)(reply, state)
+        (self.update_state)(reply, state)
     }
 }

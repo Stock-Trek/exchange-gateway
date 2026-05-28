@@ -18,7 +18,7 @@ impl Credential for UsernamePasswordCredentials {
 }
 
 impl Destroy for UsernamePasswordCredentials {
-    fn destroy(&mut self) {
+    fn destroy(mut self) {
         self.password.clear();
     }
 }

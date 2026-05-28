@@ -1,3 +1,3 @@
 pub trait Destroy {
-    fn destroy(&mut self);
+    fn destroy(self);
 }
