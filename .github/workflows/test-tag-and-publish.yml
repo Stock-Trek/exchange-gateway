@@ -49,6 +49,7 @@ jobs:
       - name: Get version, check if tag exists, create and publish if not
         env:
           SHIPYARD_REGISTRY_TOKEN: ${{ env.SHIPYARD_REGISTRY_TOKEN }}
+          CARGO_REGISTRIES_SHIPYARD_TOKEN: ${{ env.SHIPYARD_REGISTRY_TOKEN }}
         run: |
           VERSION=$(cargo pkgid | rev | cut -d '@' -f 1 | cut -d '#' -f 1 | rev)
           TAG="v${VERSION}"
@@ -60,6 +61,6 @@ jobs:
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
             git push origin "${TAG}"
-            cargo login --registry shipyard "${{ env.SHIPYARD_REGISTRY_TOKEN }}"
+            echo "${{ env.SHIPYARD_REGISTRY_TOKEN }}" | cargo login --registry shipyard
             cargo publish --registry shipyard
           fi
