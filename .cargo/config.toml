@@ -1,5 +1,5 @@
 [registries]
-shipyard = { index = "https://git.shipyard.rs/stock-trek/crate-index.git" }
+shipyard = { index = "https://Stock-Trek:${SHIPYARD_REGISTRY_TOKEN}@git.shipyard.rs/stock-trek/crate-index.git" }
 
 [registry]
 global-credential-providers = ["cargo:token"]
