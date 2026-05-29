@@ -55,15 +55,10 @@ jobs:
           if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "refs/tags/${TAG}"; then
             echo "Tag ${TAG} already exists"
           else
+            cargo publish --registry shipyard
             echo "Creating tag ${TAG}"
             git config user.name "github-actions[bot]"
             git config user.email 'CreateTags[bot]@users.noreply.github.com'
             git tag "${TAG}"
             git push origin "${TAG}"
-            # mkdir -p ~/.ssh
-            # chmod 700 ~/.ssh
-            # echo ${{ env.SHIPYARD_SSH_PRIVATE_KEY }} > ~/.ssh/id_ed25519
-            # chmod 600 ~/.ssh/id_ed25519
-            # ssh-keyscan git.shipyard.rs >> ~/.ssh/known_hosts
-            cargo publish --registry shipyard
           fi
