@@ -48,7 +48,7 @@ jobs:
 
       - name: Get version, check if tag exists, create and publish if not
         env:
-          SHIPYARD_SSH_PRIVATE_KEY: ${{ env.SHIPYARD_SSH_PRIVATE_KEY }}
+          CARGO_REGISTRIES_SHIPYARD_TOKEN: ${{ env.CARGO_REGISTRIES_SHIPYARD_TOKEN }}
         run: |
           VERSION=$(cargo pkgid | rev | cut -d '@' -f 1 | cut -d '#' -f 1 | rev)
           TAG="v${VERSION}"
