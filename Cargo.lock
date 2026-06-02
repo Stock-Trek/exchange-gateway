@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "exchange-gateway"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "bs58",
@@ -1226,9 +1226,9 @@ dependencies = [
 
 [[package]]
 name = "stock-trek"
-version = "0.7.6"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5a485866ef47c02ccb68937f0c65c7d1b83bba28d359be18b7b69a9e34b7540"
+checksum = "b306e1465dc16f94f7d10f5a786ba75c9490c6dca6b6f457ebf3e3cb304a5b70"
 dependencies = [
  "async-trait",
  "chrono",
