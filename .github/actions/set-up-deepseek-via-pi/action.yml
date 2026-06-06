@@ -10,9 +10,11 @@ runs:
     - name: Setup Bun
       uses: oven-sh/setup-bun@v1
 
-    - name: Install pi-coding-agent
+    - name: Install pi-coding-agent and json-schema extension
       shell: bash
-      run: bun install -g @mariozechner/pi-coding-agent
+      run: |
+        bun install -g @mariozechner/pi-coding-agent
+        pi install npm:@nqbao/pi-json-schema
 
     - name: Configure DeepSeek as custom provider
       shell: bash

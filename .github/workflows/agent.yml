@@ -223,7 +223,7 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const body = "I'm sorry I wasn't able to understand the issue type. If it's either a question or code change please mention it specifically.";
+            const body = "I'm sorry I wasn't able to understand the issue type. If it's a bug fix, change request, feature request, investigation or question please mention it specifically.";
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
@@ -233,7 +233,7 @@ jobs:
 
   respond:
     needs: [triage]
-    if: (needs.triage.outputs.request-type == 'BUG_FIX') || (needs.triage.outputs.request-type == 'FEATURE_REQUEST') || (needs.triage.outputs.request-type == 'INVESTIGATION') || (needs.triage.outputs.request-type == 'QUESTION')
+    if: (needs.triage.outputs.request-type == 'BUG_FIX') || (needs.triage.outputs.request-type == 'CHANGE_REQUEST') || (needs.triage.outputs.request-type == 'FEATURE_REQUEST') || (needs.triage.outputs.request-type == 'INVESTIGATION') || (needs.triage.outputs.request-type == 'QUESTION')
     runs-on: ubuntu-latest
     permissions:
       contents: write

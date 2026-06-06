@@ -29,7 +29,8 @@ runs:
         PI_PROMPT="Context: ${CONTEXT} \n\n End of context. \n\n ${PROMPT}"
         PI_RESPONSE=$(pi \
           --provider deepseek \
-          --model deepseek-chat \
+          --model deepseek-reasoner \
+          --tools read,bash,grep,find,ls \
           --json-schema "${SCHEMA}" \
           --json-fallback force \
           --print "${PI_PROMPT}" \
