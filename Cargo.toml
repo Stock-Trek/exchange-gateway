@@ -1,6 +1,6 @@
 [package]
 name = "exchange-gateway"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 
 [dependencies]
@@ -26,7 +26,6 @@ uuid = { version = "1.23.1", features = ["v4"] }
 
 [lints.clippy]
 new_ret_no_self = "allow"
-
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"

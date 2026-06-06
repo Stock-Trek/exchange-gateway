@@ -14,3 +14,5 @@ pub mod sign;
 pub mod specs;
 pub mod test;
 pub mod transports;
+
+pub use crate::specs::binance::*;
