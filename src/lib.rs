@@ -15,4 +15,6 @@ pub mod specs;
 pub mod test;
 pub mod transports;
 
-pub use crate::specs::binance::*;
+pub mod prelude {
+    pub use crate::exchange_connector_factory::ConnectorFactory;
+}
