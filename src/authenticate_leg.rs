@@ -1,4 +1,4 @@
-use crate::{destroy::Destroy, transports::transport::TransportTrait};
+use crate::transports::transport::TransportTrait;
 use async_trait::async_trait;
 use chrono::Duration;
 use stock_trek::error::{
@@ -12,7 +12,6 @@ pub type AuthenticateLeg<TTransports, TCredentials, TState> =
 #[async_trait]
 pub trait AuthenticateLegTrait<TTransports, TCredentials, TState>: Send + Sync
 where
-    TCredentials: Destroy,
     TState: Default,
 {
     async fn do_leg(
@@ -37,7 +36,7 @@ impl<TTransports, TCredentials, TState, TAuthTransport>
     AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
 where
     TTransports: Sync + 'static,
-    TCredentials: Destroy + Sync + 'static,
+    TCredentials: Sync + 'static,
     TState: Default + Send + 'static,
     TAuthTransport: TransportTrait + 'static,
 {
@@ -62,7 +61,7 @@ impl<TTransports, TCredentials, TState, TAuthTransport>
     for AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
 where
     TTransports: Sync,
-    TCredentials: Destroy + Sync,
+    TCredentials: Sync,
     TState: Default + Send,
     TAuthTransport: TransportTrait + 'static,
 {

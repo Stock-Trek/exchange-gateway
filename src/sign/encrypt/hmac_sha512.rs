@@ -1,5 +1,6 @@
 use crate::sign::encrypt::data_signer::DataSignerTrait;
 use hmac::{Hmac, Mac};
+use secrecy::{ExposeSecret, SecretSlice};
 use sha2::Sha512;
 use stock_trek::error::{
     general::GeneralError,
@@ -8,11 +9,19 @@ use stock_trek::error::{
 
 type HmacSha512 = Hmac<Sha512>;
 
-pub struct HmacSha512Signer;
+pub struct HmacSha512Signer {
+    hmac_slice: SecretSlice<u8>,
+}
+
+impl HmacSha512Signer {
+    pub fn new(hmac_slice: SecretSlice<u8>) -> Self {
+        Self { hmac_slice }
+    }
+}
 
 impl DataSignerTrait for HmacSha512Signer {
-    fn sign(&self, data: &[u8], key: &[u8]) -> StockTrekResult<Vec<u8>> {
-        let mut mac = HmacSha512::new_from_slice(key).map_err(|e| {
+    fn sign(&self, data: &[u8]) -> StockTrekResult<Vec<u8>> {
+        let mut mac = HmacSha512::new_from_slice(self.hmac_slice.expose_secret()).map_err(|e| {
             StockTrekError::General(GeneralError::Message(format!("HMAC-SHA512 key error: {e}")))
         })?;
         mac.update(data);
@@ -27,15 +36,16 @@ mod tests {
         hmac_sha512::{HmacSha512, HmacSha512Signer},
     };
     use hmac::Mac;
+    use secrecy::SecretSlice;
 
     #[test]
     fn hmac_sha512() {
-        let signer = HmacSha512Signer;
-        let key = b"my-secret-key";
+        let key = vec![1, 2, 3, 4, 5];
+        let signer = HmacSha512Signer::new(SecretSlice::<u8>::from(key.clone()));
         let msg = b"hello world";
-        let sig = signer.sign(msg, key).unwrap();
+        let sig = signer.sign(msg).unwrap();
         assert!(!sig.is_empty());
-        let mut mac = HmacSha512::new_from_slice(key).unwrap();
+        let mut mac = HmacSha512::new_from_slice(&key).unwrap();
         mac.update(msg);
         mac.verify_slice(&sig).unwrap();
     }

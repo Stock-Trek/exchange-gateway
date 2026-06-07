@@ -1,6 +1,5 @@
 use crate::{
     authentication_state::{AuthState, Authenticated, Scratch, Unauthenticated},
-    destroy::Destroy,
     exchange_spec::ExchangeSpec,
     precise_orders::PreciseOrders,
     semantic_checker::SemanticChecker,
@@ -18,7 +17,6 @@ use stock_trek::{
 
 pub struct ExchangeConnector<TTransports, TCredentials, TDomainState, TAuthState>
 where
-    TCredentials: Destroy,
     TDomainState: Default,
     TAuthState: AuthState,
 {
@@ -33,7 +31,7 @@ impl<TTransports, TCredentials, TDomainState>
     ExchangeConnector<TTransports, TCredentials, TDomainState, Scratch>
 where
     TTransports: Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
+    TCredentials: Send + Sync + 'static,
     TDomainState: Default + Send + Sync + 'static,
 {
     pub fn new(
@@ -55,7 +53,7 @@ impl<TTransports, TCredentials, TDomainState>
     ExchangeConnector<TTransports, TCredentials, TDomainState, Unauthenticated>
 where
     TTransports: Send + Sync + 'static,
-    TCredentials: Destroy + Send + Sync + 'static,
+    TCredentials: Send + Sync + 'static,
     TDomainState: Default + Send + Sync + 'static,
 {
     pub async fn authenticate(
@@ -69,10 +67,7 @@ where
                 .await
             {
                 Ok(state) => state,
-                Err(e) => {
-                    self.credentials.destroy();
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
         Ok(
@@ -91,7 +86,7 @@ impl<TTransports, TCredentials, TDomainState>
     ExchangeConnector<TTransports, TCredentials, TDomainState, Authenticated>
 where
     TTransports: Send + Sync,
-    TCredentials: Destroy + Send + Sync,
+    TCredentials: Send + Sync,
     TDomainState: Default + Send + Sync,
 {
     pub async fn send_order_request(
@@ -122,17 +117,5 @@ where
                 precise_order_request,
             )
             .await
-    }
-}
-
-impl<TTransports, TCredentials, TDomainState, TAuthState> Destroy
-    for ExchangeConnector<TTransports, TCredentials, TDomainState, TAuthState>
-where
-    TCredentials: Destroy,
-    TDomainState: Default,
-    TAuthState: AuthState,
-{
-    fn destroy(self) {
-        self.credentials.destroy();
     }
 }

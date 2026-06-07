@@ -1,6 +1,5 @@
 use crate::{
-    authenticate_leg::AuthenticateLeg, destroy::Destroy, increment_sizes::IncrementSizes,
-    message_leg::MessageLeg,
+    authenticate_leg::AuthenticateLeg, increment_sizes::IncrementSizes, message_leg::MessageLeg,
 };
 use std::collections::HashMap;
 use stock_trek::{
@@ -10,7 +9,6 @@ use stock_trek::{
 
 pub struct ExchangeSpec<TTransports, TCredentials, TState>
 where
-    TCredentials: Destroy,
     TState: Default,
 {
     pub id: ExchangeId,
@@ -24,7 +22,6 @@ where
 
 impl<TTransports, TCredentials, TState> ExchangeSpec<TTransports, TCredentials, TState>
 where
-    TCredentials: Destroy,
     TState: Default,
 {
     pub fn new(

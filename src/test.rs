@@ -3,7 +3,6 @@ mod test {
     use crate::{
         authenticate_leg::AuthenticateLegImpl,
         credentials::api_key_credential::ApiKeyCredentials,
-        destroy::Destroy,
         exchange_connector::ExchangeConnector,
         exchange_spec::ExchangeSpec,
         increment_sizes::IncrementSizesBuilder,
@@ -16,6 +15,7 @@ mod test {
     use async_trait::async_trait;
     use chrono::Duration;
     use rust_decimal::Decimal;
+    use secrecy::SecretString;
     use std::collections::HashMap;
     use stock_trek::{
         asset_id::AssetId,
@@ -47,7 +47,7 @@ mod test {
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::base_usdc(), "APT".to_string());
         tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
-        let spec = ExchangeSpec::<MyTransports, MyCredentials, MyState>::new(
+        let spec = ExchangeSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
             id,
             capabilities,
             increments,
@@ -55,7 +55,7 @@ mod test {
             tickers,
             vec![AuthenticateLegImpl::<
                 MyTransports,
-                MyCredentials,
+                ApiKeyCredentials,
                 MyState,
                 MyHttpTransport,
             >::new(
@@ -93,16 +93,13 @@ mod test {
         let transports = MyTransports {
             http: MyHttpTransport {},
         };
-        let credentials = MyCredentials {
-            api_key: ApiKeyCredentials::new("fdsfdsd".to_string(), Vec::new()),
-        };
+        let credentials = ApiKeyCredentials::new(
+            SecretString::from("my-api-key"),
+            SecretString::from("my-secret"),
+        );
         let unauthenticated_exchange_connector =
             ExchangeConnector::new(spec, transports, credentials);
         let _authenticated_exchange_connector = unauthenticated_exchange_connector.authenticate();
-    }
-
-    struct MyCredentials {
-        pub api_key: ApiKeyCredentials,
     }
 
     struct MyState {
@@ -128,12 +125,6 @@ mod test {
                 headers: HashMap::new(),
                 body_json: "fdsfds".to_string(),
             })
-        }
-    }
-
-    impl Destroy for MyCredentials {
-        fn destroy(self) {
-            self.api_key.destroy();
         }
     }
 

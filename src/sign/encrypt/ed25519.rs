@@ -1,21 +1,20 @@
 use crate::sign::encrypt::data_signer::DataSignerTrait;
-use ed25519_dalek::Signer;
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
-};
+use ed25519_dalek::{Signer, SigningKey};
+use stock_trek::error::result::StockTrekResult;
 
-pub struct Ed25519Signer;
+pub struct Ed25519Signer {
+    signing_key: SigningKey,
+}
+
+impl Ed25519Signer {
+    pub fn new(signing_key: SigningKey) -> Self {
+        Self { signing_key }
+    }
+}
 
 impl DataSignerTrait for Ed25519Signer {
-    fn sign(&self, data: &[u8], key: &[u8]) -> StockTrekResult<Vec<u8>> {
-        let key_bytes: [u8; 32] = key.try_into().map_err(|_| {
-            StockTrekError::General(GeneralError::Message(
-                "Ed25519 key must be exactly 32 bytes".to_string(),
-            ))
-        })?;
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
-        let signature = signing_key.sign(data);
+    fn sign(&self, data: &[u8]) -> StockTrekResult<Vec<u8>> {
+        let signature = self.signing_key.sign(data);
         Ok(signature.to_bytes().to_vec())
     }
 }
@@ -33,11 +32,11 @@ mod tests {
             0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
             0x1d, 0x1e, 0x1f, 0x20,
         ];
-        let signer = Ed25519Signer;
-        let msg = b"hello world";
-        let sig = signer.sign(msg, &key_bytes).unwrap();
-        assert_eq!(sig.len(), 64);
         let signing_key = SigningKey::from_bytes(&key_bytes);
+        let signer = Ed25519Signer::new(signing_key.clone());
+        let msg = b"hello world";
+        let sig = signer.sign(msg).unwrap();
+        assert_eq!(sig.len(), 64);
         let verifying_key = VerifyingKey::from(&signing_key);
         let sig_array: [u8; 64] = sig.as_slice().try_into().unwrap();
         let ed_sig = Signature::from_bytes(&sig_array);

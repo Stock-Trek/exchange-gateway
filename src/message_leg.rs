@@ -1,4 +1,4 @@
-use crate::{destroy::Destroy, transports::transport::TransportTrait};
+use crate::transports::transport::TransportTrait;
 use async_trait::async_trait;
 use chrono::Duration;
 use rust_decimal::Decimal;
@@ -31,7 +31,6 @@ pub type GetOrderRequestMessage<TCredentials, TState, TMessage> =
 pub struct MessageLegImpl<TTransports, TCredentials, TState, TTransport>
 where
     TTransport: TransportTrait,
-    TCredentials: Destroy,
     TState: Default,
 {
     get_transport: fn(transports: &TTransports) -> &TTransport,
@@ -44,7 +43,7 @@ impl<TTransports, TCredentials, TState, TTransport>
     MessageLegImpl<TTransports, TCredentials, TState, TTransport>
 where
     TTransports: Sync + 'static,
-    TCredentials: Destroy + Sync + 'static,
+    TCredentials: Sync + 'static,
     TState: Default + Sync + 'static,
     TTransport: TransportTrait + 'static,
 {
@@ -73,7 +72,7 @@ impl<TTransports, TState, TCredentials, TTransport>
     for MessageLegImpl<TTransports, TCredentials, TState, TTransport>
 where
     TTransports: Sync,
-    TCredentials: Destroy + Sync,
+    TCredentials: Sync,
     TState: Default + Sync,
     TTransport: TransportTrait + 'static,
 {

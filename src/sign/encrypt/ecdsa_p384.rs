@@ -1,18 +1,20 @@
 use crate::sign::encrypt::data_signer::DataSignerTrait;
 use p384::ecdsa::{Signature, SigningKey, signature::Signer};
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
-};
+use stock_trek::error::result::StockTrekResult;
 
-pub struct EcdsaP384Signer;
+pub struct EcdsaP384Signer {
+    signing_key: SigningKey,
+}
+
+impl EcdsaP384Signer {
+    pub fn new(signing_key: SigningKey) -> Self {
+        Self { signing_key }
+    }
+}
 
 impl DataSignerTrait for EcdsaP384Signer {
-    fn sign(&self, data: &[u8], key: &[u8]) -> StockTrekResult<Vec<u8>> {
-        let signing_key = SigningKey::from_slice(key).map_err(|e| {
-            StockTrekError::General(GeneralError::Message(format!("ECDSA P-384 key error: {e}")))
-        })?;
-        let signature: Signature = signing_key.sign(data);
+    fn sign(&self, data: &[u8]) -> StockTrekResult<Vec<u8>> {
+        let signature: Signature = self.signing_key.sign(data);
         Ok(signature.to_der().to_bytes().to_vec())
     }
 }

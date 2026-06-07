@@ -1,6 +1,5 @@
 use crate::{
     authentication_state::Authenticated,
-    destroy::Destroy,
     exchange_connector::ExchangeConnector,
     exchange_spec::ExchangeSpec,
     exchange_spec_creator::ExchangeSpecCreatorTrait,
@@ -35,7 +34,7 @@ impl ConnectorFactory {
     ) -> StockTrekResult<ExchangeConnector<TTransports, TCredentials, TState, Authenticated>>
     where
         TTransports: Send + Sync + 'static,
-        TCredentials: Destroy + Send + Sync + 'static,
+        TCredentials: Send + Sync + 'static,
         TState: Default + Send + Sync + 'static,
     {
         let connector = ExchangeConnector::new(spec, transports, credentials);

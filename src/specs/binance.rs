@@ -1,7 +1,6 @@
 use crate::{
     authenticate_leg::AuthenticateLegImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    destroy::Destroy,
     exchange_spec::ExchangeSpec,
     exchange_spec_creator::ExchangeSpecCreatorTrait,
     increment_sizes::IncrementSizesBuilder,
@@ -80,10 +79,6 @@ impl Default for BinanceState {
     fn default() -> Self {
         Self::new()
     }
-}
-
-impl Destroy for BinanceCredentials {
-    fn destroy(self) {}
 }
 
 impl HttpTransportTrait for ReqwestHttpTransport {}
