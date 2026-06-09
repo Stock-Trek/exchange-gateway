@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod exchange_connector;
 pub mod exchange_spec;
 pub mod message_leg;
+pub mod rate_limit;
 pub mod sign;
 pub mod spec_creator;
 pub mod specs;

@@ -1,9 +1,14 @@
 use crate::{
     authenticate_leg::AuthenticateLegImpl,
-    cex::{cex_spec::CexSpec, increment_sizes::IncrementSizesBuilder},
+    cex::{
+        cex_spec::CexSpec,
+        increment_sizes::IncrementSizesBuilder,
+        rate_limits_weights::{RateLimits, RequestWeights},
+    },
     credentials::api_key_credential::ApiKeyCredentials,
     exchange_spec::ExchangeSpec,
     message_leg::MessageLegImpl,
+    rate_limit::{multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig},
     spec_creator::SpecCreatorTrait,
     transports::{
         http_transport::{HttpMessageDto, HttpTransportTrait},
@@ -18,7 +23,6 @@ use stock_trek::{
     cex::{
         asset_id::AssetId,
         capability::{CexCapability, MultiLegCexCapability, QuoteQuantityCexCapability},
-        cex_id::CexId,
         order_id::OrderId,
         order_request::OrderRequest,
         order_response::OrderResponse,
@@ -120,7 +124,6 @@ impl
         OrderRequest<AssetId, f64>,
         OrderResponse,
     > {
-        let id = CexId("Binance".to_string());
         let capabilities = vec![
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
@@ -136,6 +139,12 @@ impl
                 Decimal::from_i128_with_scale(1, 3),
             )
             .build();
+        let rate_limits = RateLimits {
+            send_order_request: MultiRateLimiter::new(vec![RateLimitConfig::default()]),
+        };
+        let request_weights = RequestWeights {
+            send_order_request: 1,
+        };
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
@@ -191,6 +200,13 @@ impl
                 })
             },
         );
-        CexSpec::new(id, capabilities, increments, authenticate_legs, message_leg)
+        CexSpec::new(
+            capabilities,
+            increments,
+            rate_limits,
+            request_weights,
+            authenticate_legs,
+            message_leg,
+        )
     }
 }

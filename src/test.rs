@@ -2,10 +2,15 @@
 mod test {
     use crate::{
         authenticate_leg::AuthenticateLegImpl,
-        cex::{cex_spec::CexSpec, increment_sizes::IncrementSizesBuilder},
+        cex::{
+            cex_spec::CexSpec,
+            increment_sizes::IncrementSizesBuilder,
+            rate_limits_weights::{RateLimits, RequestWeights},
+        },
         credentials::api_key_credential::ApiKeyCredentials,
         exchange_connector::ExchangeConnector,
         message_leg::MessageLegImpl,
+        rate_limit::multi_rate_limiter::MultiRateLimiter,
         transports::{
             http_transport::{HttpMessageDto, HttpTransportTrait},
             transport::TransportTrait,
@@ -20,7 +25,6 @@ mod test {
         cex::{
             asset_id::AssetId,
             capability::{CexCapability, MultiLegCexCapability, QuoteQuantityCexCapability},
-            cex_id::CexId,
             order_id::OrderId,
             order_request::OrderRequest,
             order_response::OrderResponse,
@@ -30,7 +34,6 @@ mod test {
 
     #[test]
     pub fn test() {
-        let id = CexId("Binance".to_string());
         let capabilities = vec![
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
@@ -46,13 +49,20 @@ mod test {
                 Decimal::from_i128_with_scale(1, 3),
             )
             .build();
+        let rate_limits = RateLimits {
+            send_order_request: MultiRateLimiter::new(vec![]),
+        };
+        let request_weights = RequestWeights {
+            send_order_request: 1,
+        };
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
         let spec = CexSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
-            id,
             capabilities,
             increments,
+            rate_limits,
+            request_weights,
             vec![AuthenticateLegImpl::<
                 MyTransports,
                 ApiKeyCredentials,
