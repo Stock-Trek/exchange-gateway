@@ -1,9 +1,8 @@
 use crate::{
     authenticate_leg::AuthenticateLegImpl,
-    cex::cex_spec::CexSpec,
+    cex::{cex_spec::CexSpec, increment_sizes::IncrementSizesBuilder},
     credentials::api_key_credential::ApiKeyCredentials,
     exchange_spec::ExchangeSpec,
-    increment_sizes::IncrementSizesBuilder,
     message_leg::MessageLegImpl,
     spec_creator::SpecCreatorTrait,
     transports::{

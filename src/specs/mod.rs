@@ -1,1 +1,1 @@
-pub mod cex;
+pub mod binance;

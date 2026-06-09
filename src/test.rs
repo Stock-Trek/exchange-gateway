@@ -2,10 +2,9 @@
 mod test {
     use crate::{
         authenticate_leg::AuthenticateLegImpl,
-        cex::cex_spec::CexSpec,
+        cex::{cex_spec::CexSpec, increment_sizes::IncrementSizesBuilder},
         credentials::api_key_credential::ApiKeyCredentials,
         exchange_connector::ExchangeConnector,
-        increment_sizes::IncrementSizesBuilder,
         message_leg::MessageLegImpl,
         transports::{
             http_transport::{HttpMessageDto, HttpTransportTrait},

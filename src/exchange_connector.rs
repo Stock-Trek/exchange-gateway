@@ -1,22 +1,9 @@
 use crate::{
-    authentication_state::{AuthState, Authenticated, Scratch, Unauthenticated},
+    authentication_state::{Authenticated, AuthenticationState, Scratch, Unauthenticated},
     exchange_spec::ExchangeSpec,
 };
 use std::marker::PhantomData;
-use stock_trek::{
-    cex::{asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse},
-    error::result::StockTrekResult,
-    preferences::Preferences,
-};
-
-pub type CexConnector<TTransports, TCredentials, TState, TAuthState> = ExchangeConnector<
-    TTransports,
-    TCredentials,
-    TState,
-    OrderRequest<AssetId, f64>,
-    OrderResponse,
-    TAuthState,
->;
+use stock_trek::{error::result::StockTrekResult, preferences::Preferences};
 
 pub struct ExchangeConnector<
     TTransports,
@@ -27,7 +14,7 @@ pub struct ExchangeConnector<
     TAuthState,
 > where
     TState: Default,
-    TAuthState: AuthState,
+    TAuthState: AuthenticationState,
 {
     spec: ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>,
     transports: TTransports,

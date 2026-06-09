@@ -1,8 +1,10 @@
 use crate::{
     authenticate_leg::AuthenticateLeg,
-    cex::{precise_orders::PreciseOrders, semantic_checker::SemanticChecker},
+    cex::{
+        increment_sizes::IncrementSizes, precise_orders::PreciseOrders,
+        semantic_checker::SemanticChecker,
+    },
     exchange_spec::{ExchangeSpec, ExchangeSpecTrait},
-    increment_sizes::IncrementSizes,
     message_leg::MessageLeg,
 };
 use async_trait::async_trait;

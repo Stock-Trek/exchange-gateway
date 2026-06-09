@@ -3,7 +3,7 @@ use crate::{
     exchange_connector::ExchangeConnector,
     exchange_spec::ExchangeSpec,
     spec_creator::SpecCreatorTrait,
-    specs::cex::binance::{
+    specs::binance::{
         BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports, BinanceState,
     },
 };

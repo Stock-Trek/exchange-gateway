@@ -5,7 +5,6 @@ pub mod connector_factory;
 pub mod credentials;
 pub mod exchange_connector;
 pub mod exchange_spec;
-pub mod increment_sizes;
 pub mod message_leg;
 pub mod sign;
 pub mod spec_creator;

@@ -1,4 +1,4 @@
-pub trait AuthState: private::Sealed {}
+pub trait AuthenticationState: private::Sealed {}
 
 pub struct Scratch;
 pub struct Unauthenticated;
@@ -13,7 +13,7 @@ mod private {
     impl Sealed for super::Destroyed {}
 }
 
-impl AuthState for Scratch {}
-impl AuthState for Unauthenticated {}
-impl AuthState for Authenticated {}
-impl AuthState for Destroyed {}
+impl AuthenticationState for Scratch {}
+impl AuthenticationState for Unauthenticated {}
+impl AuthenticationState for Authenticated {}
+impl AuthenticationState for Destroyed {}
