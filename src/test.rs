@@ -2,9 +2,9 @@
 mod test {
     use crate::{
         authenticate_leg::AuthenticateLegImpl,
+        cex::cex_spec::CexSpec,
         credentials::api_key_credential::ApiKeyCredentials,
         exchange_connector::ExchangeConnector,
-        exchange_spec::ExchangeSpec,
         increment_sizes::IncrementSizesBuilder,
         message_leg::MessageLegImpl,
         transports::{
@@ -18,41 +18,42 @@ mod test {
     use secrecy::SecretString;
     use std::collections::HashMap;
     use stock_trek::{
-        asset_id::AssetId,
-        capability::{Capability, MultiLegCapability, QuoteQuantityCapability},
+        cex::{
+            asset_id::AssetId,
+            capability::{CexCapability, MultiLegCexCapability, QuoteQuantityCexCapability},
+            cex_id::CexId,
+            order_id::OrderId,
+            order_request::OrderRequest,
+            order_response::OrderResponse,
+        },
         error::result::StockTrekResult,
-        exchange_id::ExchangeId,
-        order::{order_id::OrderId, order_request::OrderRequest, order_response::OrderResponse},
     };
 
     #[test]
     pub fn test() {
-        let id = ExchangeId("Binance".to_string());
+        let id = CexId("Binance".to_string());
         let capabilities = vec![
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
-            Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
+            CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
+            CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
+            CexCapability::MultiLeg(MultiLegCexCapability::OneCancelsOther),
+            CexCapability::MultiLeg(MultiLegCexCapability::OneTriggersOther),
+            CexCapability::MultiLeg(MultiLegCexCapability::OneTriggersOco),
         ];
         let increments = IncrementSizesBuilder::new()
             .with(
-                AssetId::bitcoin_native(),
-                AssetId::base_usdc(),
+                AssetId::bitcoin(),
+                AssetId::usdc(),
                 Decimal::from_i128_with_scale(1, 3),
                 Decimal::from_i128_with_scale(1, 3),
             )
             .build();
-        let symbol_ticker_divider = None;
         let mut tickers = HashMap::new();
-        tickers.insert(AssetId::base_usdc(), "APT".to_string());
-        tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
-        let spec = ExchangeSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
+        tickers.insert(AssetId::usdc(), "USDC".to_string());
+        tickers.insert(AssetId::bitcoin(), "BTC".to_string());
+        let spec = CexSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
             id,
             capabilities,
             increments,
-            symbol_ticker_divider,
-            tickers,
             vec![AuthenticateLegImpl::<
                 MyTransports,
                 ApiKeyCredentials,

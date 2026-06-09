@@ -2,12 +2,9 @@ use crate::increment_sizes::IncrementSizes;
 use rust_decimal::{Decimal, RoundingStrategy};
 use std::collections::HashMap;
 use stock_trek::{
-    asset_id::AssetId,
-    error::{
-        result::{StockTrekError, StockTrekResult},
-        value::ValueError,
-    },
-    order::{
+    cex::{
+        asset_id::AssetId,
+        cex_preferences::Rounding,
         order_activation::OrderActivation,
         order_pricing::OrderPricing,
         order_quantity::OrderQuantity,
@@ -21,7 +18,10 @@ use stock_trek::{
         },
         trading_pair::TradingPair,
     },
-    preferences::Rounding,
+    error::{
+        result::{StockTrekError, StockTrekResult},
+        value::ValueError,
+    },
 };
 
 pub struct PreciseOrders;

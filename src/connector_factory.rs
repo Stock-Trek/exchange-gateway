@@ -2,12 +2,15 @@ use crate::{
     authentication_state::Authenticated,
     exchange_connector::ExchangeConnector,
     exchange_spec::ExchangeSpec,
-    exchange_spec_creator::ExchangeSpecCreatorTrait,
-    specs::binance::{
+    spec_creator::SpecCreatorTrait,
+    specs::cex::binance::{
         BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports, BinanceState,
     },
 };
-use stock_trek::error::result::StockTrekResult;
+use stock_trek::{
+    cex::{asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse},
+    error::result::StockTrekResult,
+};
 
 pub struct ConnectorFactory;
 
@@ -17,7 +20,14 @@ impl ConnectorFactory {
         transports: BinanceHttpTransports,
         credentials: BinanceCredentials,
     ) -> StockTrekResult<
-        ExchangeConnector<BinanceHttpTransports, BinanceCredentials, BinanceState, Authenticated>,
+        ExchangeConnector<
+            BinanceHttpTransports,
+            BinanceCredentials,
+            BinanceState,
+            OrderRequest<AssetId, f64>,
+            OrderResponse,
+            Authenticated,
+        >,
     > {
         self.to_authenticated_connector(
             BinanceHttpSpecCreator.create_spec(),
@@ -28,10 +38,25 @@ impl ConnectorFactory {
     }
     async fn to_authenticated_connector<TTransports, TCredentials, TState>(
         &self,
-        spec: ExchangeSpec<TTransports, TCredentials, TState>,
+        spec: ExchangeSpec<
+            TTransports,
+            TCredentials,
+            TState,
+            OrderRequest<AssetId, f64>,
+            OrderResponse,
+        >,
         transports: TTransports,
         credentials: TCredentials,
-    ) -> StockTrekResult<ExchangeConnector<TTransports, TCredentials, TState, Authenticated>>
+    ) -> StockTrekResult<
+        ExchangeConnector<
+            TTransports,
+            TCredentials,
+            TState,
+            OrderRequest<AssetId, f64>,
+            OrderResponse,
+            Authenticated,
+        >,
+    >
     where
         TTransports: Send + Sync + 'static,
         TCredentials: Send + Sync + 'static,

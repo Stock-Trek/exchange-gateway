@@ -1,120 +1,150 @@
 use crate::{
     authentication_state::{AuthState, Authenticated, Scratch, Unauthenticated},
     exchange_spec::ExchangeSpec,
-    precise_orders::PreciseOrders,
-    semantic_checker::SemanticChecker,
 };
 use std::marker::PhantomData;
 use stock_trek::{
-    asset_id::AssetId,
-    error::{
-        general::GeneralError,
-        result::{StockTrekError, StockTrekResult},
-    },
-    order::{order_request::OrderRequest, order_response::OrderResponse},
+    cex::{asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse},
+    error::result::StockTrekResult,
     preferences::Preferences,
 };
 
-pub struct ExchangeConnector<TTransports, TCredentials, TDomainState, TAuthState>
-where
-    TDomainState: Default,
+pub type CexConnector<TTransports, TCredentials, TState, TAuthState> = ExchangeConnector<
+    TTransports,
+    TCredentials,
+    TState,
+    OrderRequest<AssetId, f64>,
+    OrderResponse,
+    TAuthState,
+>;
+
+pub struct ExchangeConnector<
+    TTransports,
+    TCredentials,
+    TState,
+    TTradeRequest,
+    TTradeResponse,
+    TAuthState,
+> where
+    TState: Default,
     TAuthState: AuthState,
 {
-    spec: ExchangeSpec<TTransports, TCredentials, TDomainState>,
+    spec: ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>,
     transports: TTransports,
     credentials: TCredentials,
-    state: TDomainState,
+    state: TState,
     _phantom_auth_state: PhantomData<TAuthState>,
 }
 
-impl<TTransports, TCredentials, TDomainState>
-    ExchangeConnector<TTransports, TCredentials, TDomainState, Scratch>
+impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
+    ExchangeConnector<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, Scratch>
 where
     TTransports: Send + Sync + 'static,
     TCredentials: Send + Sync + 'static,
-    TDomainState: Default + Send + Sync + 'static,
+    TState: Default + Send + Sync + 'static,
 {
     pub fn new(
-        spec: ExchangeSpec<TTransports, TCredentials, TDomainState>,
+        spec: ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>,
         transports: TTransports,
         credentials: TCredentials,
-    ) -> ExchangeConnector<TTransports, TCredentials, TDomainState, Unauthenticated> {
-        ExchangeConnector::<TTransports, TCredentials, TDomainState, Unauthenticated> {
+    ) -> ExchangeConnector<
+        TTransports,
+        TCredentials,
+        TState,
+        TTradeRequest,
+        TTradeResponse,
+        Unauthenticated,
+    > {
+        ExchangeConnector::<
+            TTransports,
+            TCredentials,
+            TState,
+            TTradeRequest,
+            TTradeResponse,
+            Unauthenticated,
+        > {
             spec,
             transports,
             credentials,
-            state: TDomainState::default(),
+            state: TState::default(),
             _phantom_auth_state: PhantomData,
         }
     }
 }
 
-impl<TTransports, TCredentials, TDomainState>
-    ExchangeConnector<TTransports, TCredentials, TDomainState, Unauthenticated>
+impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
+    ExchangeConnector<
+        TTransports,
+        TCredentials,
+        TState,
+        TTradeRequest,
+        TTradeResponse,
+        Unauthenticated,
+    >
 where
     TTransports: Send + Sync + 'static,
     TCredentials: Send + Sync + 'static,
-    TDomainState: Default + Send + Sync + 'static,
+    TState: Default + Send + Sync + 'static,
 {
     pub async fn authenticate(
         self,
-    ) -> StockTrekResult<ExchangeConnector<TTransports, TCredentials, TDomainState, Authenticated>>
-    {
-        let mut state = self.state;
-        for authentication_leg in &self.spec.authenticate_legs {
-            state = match authentication_leg
-                .do_leg(&self.transports, &self.credentials, state)
-                .await
-            {
-                Ok(state) => state,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(
-            ExchangeConnector::<TTransports, TCredentials, TDomainState, Authenticated> {
-                spec: self.spec,
-                transports: self.transports,
-                credentials: self.credentials,
-                state,
-                _phantom_auth_state: PhantomData,
-            },
-        )
+    ) -> StockTrekResult<
+        ExchangeConnector<
+            TTransports,
+            TCredentials,
+            TState,
+            TTradeRequest,
+            TTradeResponse,
+            Authenticated,
+        >,
+    > {
+        let state = self
+            .spec
+            .authenticate(&self.transports, &self.credentials)
+            .await?;
+        Ok(ExchangeConnector::<
+            TTransports,
+            TCredentials,
+            TState,
+            TTradeRequest,
+            TTradeResponse,
+            Authenticated,
+        > {
+            spec: self.spec,
+            transports: self.transports,
+            credentials: self.credentials,
+            state,
+            _phantom_auth_state: PhantomData,
+        })
     }
 }
 
-impl<TTransports, TCredentials, TDomainState>
-    ExchangeConnector<TTransports, TCredentials, TDomainState, Authenticated>
+impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
+    ExchangeConnector<
+        TTransports,
+        TCredentials,
+        TState,
+        TTradeRequest,
+        TTradeResponse,
+        Authenticated,
+    >
 where
     TTransports: Send + Sync,
     TCredentials: Send + Sync,
-    TDomainState: Default + Send + Sync,
+    TState: Default + Send + Sync,
 {
-    pub async fn send_order_request(
+    pub async fn send_trade_request(
         &self,
-        order_request: OrderRequest<AssetId, f64>,
         preferences: &Preferences,
-    ) -> StockTrekResult<OrderResponse> {
-        let precise_order_request = PreciseOrders.precise_order_request(
-            order_request,
-            &self.spec.increments,
-            &preferences.rounding,
-        )?;
-        if !SemanticChecker.conversion_will_be_semantically_consistent(
-            &precise_order_request,
-            &self.spec.capabilities,
-            preferences,
-        ) {
-            return Err(StockTrekError::General(GeneralError::Message(
-                "".to_string(),
-            )));
-        }
+        trade_request: TTradeRequest,
+    ) -> StockTrekResult<TTradeResponse> {
         self.spec
-            .message_leg
-            .send_order_request(
+            .send_trade_request(
                 &self.transports,
                 &self.credentials,
                 &self.state,
-                precise_order_request,
+                preferences,
+                trade_request,
             )
             .await
     }

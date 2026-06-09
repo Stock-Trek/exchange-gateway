@@ -1,6 +1,6 @@
 use rust_decimal::{Decimal, RoundingStrategy, prelude::FromPrimitive};
 use std::collections::HashMap;
-use stock_trek::{asset_id::AssetId, order::trading_pair::TradingPair};
+use stock_trek::cex::{asset_id::AssetId, trading_pair::TradingPair};
 
 #[derive(Clone)]
 pub struct IncrementSizes {

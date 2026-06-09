@@ -1,10 +1,11 @@
 use crate::{
     authenticate_leg::AuthenticateLegImpl,
+    cex::cex_spec::CexSpec,
     credentials::api_key_credential::ApiKeyCredentials,
     exchange_spec::ExchangeSpec,
-    exchange_spec_creator::ExchangeSpecCreatorTrait,
     increment_sizes::IncrementSizesBuilder,
     message_leg::MessageLegImpl,
+    spec_creator::SpecCreatorTrait,
     transports::{
         http_transport::{HttpMessageDto, HttpTransportTrait},
         transport::TransportTrait,
@@ -15,11 +16,15 @@ use chrono::Duration;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use stock_trek::{
-    asset_id::AssetId,
-    capability::{Capability, MultiLegCapability, QuoteQuantityCapability},
+    cex::{
+        asset_id::AssetId,
+        capability::{CexCapability, MultiLegCexCapability, QuoteQuantityCexCapability},
+        cex_id::CexId,
+        order_id::OrderId,
+        order_request::OrderRequest,
+        order_response::OrderResponse,
+    },
     error::result::StockTrekResult,
-    exchange_id::ExchangeId,
-    order::{order_id::OrderId, order_request::OrderRequest, order_response::OrderResponse},
 };
 
 pub struct BinanceState {
@@ -98,30 +103,43 @@ impl TransportTrait for ReqwestHttpTransport {
 
 pub struct BinanceHttpSpecCreator;
 
-impl ExchangeSpecCreatorTrait<BinanceHttpTransports, BinanceCredentials, BinanceState>
-    for BinanceHttpSpecCreator
+impl
+    SpecCreatorTrait<
+        BinanceHttpTransports,
+        BinanceCredentials,
+        BinanceState,
+        OrderRequest<AssetId, f64>,
+        OrderResponse,
+    > for BinanceHttpSpecCreator
 {
-    fn create_spec(&self) -> ExchangeSpec<BinanceHttpTransports, BinanceCredentials, BinanceState> {
-        let id = ExchangeId("Binance".to_string());
+    fn create_spec(
+        &self,
+    ) -> ExchangeSpec<
+        BinanceHttpTransports,
+        BinanceCredentials,
+        BinanceState,
+        OrderRequest<AssetId, f64>,
+        OrderResponse,
+    > {
+        let id = CexId("Binance".to_string());
         let capabilities = vec![
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowLimitPricing),
-            Capability::QuoteQuantity(QuoteQuantityCapability::AllowTriggeredTiming),
-            Capability::MultiLeg(MultiLegCapability::OneCancelsOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOther),
-            Capability::MultiLeg(MultiLegCapability::OneTriggersOco),
+            CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
+            CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
+            CexCapability::MultiLeg(MultiLegCexCapability::OneCancelsOther),
+            CexCapability::MultiLeg(MultiLegCexCapability::OneTriggersOther),
+            CexCapability::MultiLeg(MultiLegCexCapability::OneTriggersOco),
         ];
         let increments = IncrementSizesBuilder::new()
             .with(
-                AssetId::bitcoin_native(),
-                AssetId::base_usdc(),
+                AssetId::bitcoin(),
+                AssetId::usdc(),
                 Decimal::from_i128_with_scale(1, 3),
                 Decimal::from_i128_with_scale(1, 3),
             )
             .build();
-        let symbol_ticker_divider = None;
         let mut tickers = HashMap::new();
-        tickers.insert(AssetId::base_usdc(), "APT".to_string());
-        tickers.insert(AssetId::bitcoin_native(), "APT".to_string());
+        tickers.insert(AssetId::usdc(), "USDC".to_string());
+        tickers.insert(AssetId::bitcoin(), "BTC".to_string());
         let authenticate_legs = vec![AuthenticateLegImpl::<
             BinanceHttpTransports,
             BinanceCredentials,
@@ -150,6 +168,8 @@ impl ExchangeSpecCreatorTrait<BinanceHttpTransports, BinanceCredentials, Binance
             BinanceHttpTransports,
             BinanceCredentials,
             BinanceState,
+            OrderRequest<AssetId, Decimal>,
+            OrderResponse,
             ReqwestHttpTransport,
         >::new(
             |t| &t.http,
@@ -172,14 +192,6 @@ impl ExchangeSpecCreatorTrait<BinanceHttpTransports, BinanceCredentials, Binance
                 })
             },
         );
-        ExchangeSpec::new(
-            id,
-            capabilities,
-            increments,
-            symbol_ticker_divider,
-            tickers,
-            authenticate_legs,
-            message_leg,
-        )
+        CexSpec::new(id, capabilities, increments, authenticate_legs, message_leg)
     }
 }
