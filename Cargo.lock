@@ -1415,9 +1415,9 @@ dependencies = [
 
 [[package]]
 name = "stock-trek"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f94ea3cc81e6a2759bb3d88cfd24246b28231092c59d215d9c2f37a95df26da5"
+checksum = "20f801b6859401ba233ea999783c92c10b61c9b7656f4aa30b041445fc1efc76"
 dependencies = [
  "async-trait",
  "chrono",
