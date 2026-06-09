@@ -1,15 +1,13 @@
 use crate::{
-    authentication_state::Authenticated,
+    authentication_state::Unauthenticated,
     exchange_connector::ExchangeConnector,
-    exchange_spec::ExchangeSpec,
     spec_creator::SpecCreatorTrait,
     specs::binance::{
         BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports, BinanceState,
     },
 };
-use stock_trek::{
-    cex::{asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse},
-    error::result::StockTrekResult,
+use stock_trek::cex::{
+    asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse,
 };
 
 pub struct ConnectorFactory;
@@ -19,50 +17,19 @@ impl ConnectorFactory {
         &self,
         transports: BinanceHttpTransports,
         credentials: BinanceCredentials,
-    ) -> StockTrekResult<
-        ExchangeConnector<
-            BinanceHttpTransports,
-            BinanceCredentials,
-            BinanceState,
-            OrderRequest<AssetId, f64>,
-            OrderResponse,
-            Authenticated,
-        >,
+    ) -> ExchangeConnector<
+        BinanceHttpTransports,
+        BinanceCredentials,
+        BinanceState,
+        OrderRequest<AssetId, f64>,
+        OrderResponse,
+        Unauthenticated,
     > {
-        self.to_authenticated_connector(
+        BinanceHttpSpecCreator.create_spec();
+        ExchangeConnector::new(
             BinanceHttpSpecCreator.create_spec(),
             transports,
             credentials,
         )
-        .await
-    }
-    async fn to_authenticated_connector<TTransports, TCredentials, TState>(
-        &self,
-        spec: ExchangeSpec<
-            TTransports,
-            TCredentials,
-            TState,
-            OrderRequest<AssetId, f64>,
-            OrderResponse,
-        >,
-        transports: TTransports,
-        credentials: TCredentials,
-    ) -> StockTrekResult<
-        ExchangeConnector<
-            TTransports,
-            TCredentials,
-            TState,
-            OrderRequest<AssetId, f64>,
-            OrderResponse,
-            Authenticated,
-        >,
-    >
-    where
-        TTransports: Send + Sync + 'static,
-        TCredentials: Send + Sync + 'static,
-        TState: Default + Send + Sync + 'static,
-    {
-        let connector = ExchangeConnector::new(spec, transports, credentials);
-        connector.authenticate().await
     }
 }
