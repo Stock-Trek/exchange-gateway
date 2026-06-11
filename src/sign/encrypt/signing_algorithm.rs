@@ -41,12 +41,12 @@ impl SigningAlgorithm {
             }
             Self::Ed25519 => {
                 let key_bytes = key.expose_secret().as_bytes();
-                let key_bytes_sized: [u8; 32] = key_bytes.try_into().map_err(|_| {
-                    StockTrekError::General(GeneralError::Message(
-                        "Ed25519 key must be exactly 32 bytes".to_string(),
-                    ))
-                })?;
-                let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_bytes_sized);
+                let signing_key =
+                    ed25519_compact::SecretKey::from_slice(&key_bytes).map_err(|_| {
+                        StockTrekError::General(GeneralError::Message(
+                            "Ed25519 key must be exactly 32 bytes".to_string(),
+                        ))
+                    })?;
                 Ok(Box::new(Ed25519Signer::new(signing_key)))
             }
             Self::HmacSha256 => {
