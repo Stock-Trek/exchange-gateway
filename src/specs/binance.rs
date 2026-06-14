@@ -38,10 +38,6 @@ pub struct BinanceCredentials {
     pub api_key: ApiKeyCredentials,
 }
 
-pub struct BinanceHttpTransports {
-    pub http: ReqwestHttpTransport,
-}
-
 pub struct ReqwestHttpTransport;
 
 pub struct BinanceAuthReply {
@@ -106,24 +102,13 @@ impl TransportTrait for ReqwestHttpTransport {
 
 pub struct BinanceHttpSpecCreator;
 
-impl
-    SpecCreatorTrait<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
-    > for BinanceHttpSpecCreator
+impl SpecCreatorTrait<BinanceCredentials, BinanceState, OrderRequest<AssetId, f64>, OrderResponse>
+    for BinanceHttpSpecCreator
 {
     fn create_spec(
         &self,
-    ) -> ExchangeSpec<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
-    > {
+    ) -> ExchangeSpec<BinanceCredentials, BinanceState, OrderRequest<AssetId, f64>, OrderResponse>
+    {
         let capabilities = vec![
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
@@ -148,13 +133,13 @@ impl
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
+        let transport = ReqwestHttpTransport;
         let authenticate_legs = vec![AuthenticateLegImpl::<
-            BinanceHttpTransports,
             BinanceCredentials,
             BinanceState,
             ReqwestHttpTransport,
         >::new(
-            |t| &t.http,
+            transport,
             Duration::seconds(20),
             |_t, _c, _s| HttpMessageDto {
                 headers: HashMap::new(),
@@ -173,14 +158,13 @@ impl
             },
         )];
         let message_leg = MessageLegImpl::<
-            BinanceHttpTransports,
             BinanceCredentials,
             BinanceState,
             OrderRequest<AssetId, Decimal>,
             OrderResponse,
             ReqwestHttpTransport,
         >::new(
-            |t| &t.http,
+            ReqwestHttpTransport,
             Duration::seconds(20),
             |_c, _s, order_request| {
                 let body = match order_request {

@@ -6,48 +6,41 @@ use stock_trek::error::{
     result::{StockTrekError, StockTrekResult},
 };
 
-pub type AuthenticateLeg<TTransports, TCredentials, TState> =
-    Box<dyn AuthenticateLegTrait<TTransports, TCredentials, TState>>;
+pub type AuthenticateLeg<TCredentials, TState> =
+    Box<dyn AuthenticateLegTrait<TCredentials, TState>>;
 
 #[async_trait]
-pub trait AuthenticateLegTrait<TTransports, TCredentials, TState>: Send + Sync
+pub trait AuthenticateLegTrait<TCredentials, TState>: Send + Sync
 where
     TState: Default,
 {
-    async fn do_leg(
-        &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: TState,
-    ) -> StockTrekResult<TState>;
+    async fn do_leg(&self, credentials: &TCredentials, state: TState) -> StockTrekResult<TState>;
 }
 
-pub struct AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+pub struct AuthenticateLegImpl<TCredentials, TState, TAuthTransport>
 where
     TAuthTransport: TransportTrait,
 {
-    get_transport: fn(transports: &TTransports) -> &TAuthTransport,
+    transport: TAuthTransport,
     timeout: Duration,
     get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
     update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
 }
 
-impl<TTransports, TCredentials, TState, TAuthTransport>
-    AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+impl<TCredentials, TState, TAuthTransport> AuthenticateLegImpl<TCredentials, TState, TAuthTransport>
 where
-    TTransports: Sync + 'static,
     TCredentials: Sync + 'static,
     TState: Default + Send + 'static,
-    TAuthTransport: TransportTrait + 'static,
+    TAuthTransport: TransportTrait + Send + Sync + 'static,
 {
     pub fn new(
-        get_transport: fn(transports: &TTransports) -> &TAuthTransport,
+        transport: TAuthTransport,
         timeout: Duration,
         get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
         update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
-    ) -> AuthenticateLeg<TTransports, TCredentials, TState> {
+    ) -> AuthenticateLeg<TCredentials, TState> {
         Box::new(Self {
-            get_transport,
+            transport,
             timeout,
             get_auth_message,
             update_state,
@@ -56,24 +49,17 @@ where
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState, TAuthTransport>
-    AuthenticateLegTrait<TTransports, TCredentials, TState>
-    for AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+impl<TCredentials, TState, TAuthTransport> AuthenticateLegTrait<TCredentials, TState>
+    for AuthenticateLegImpl<TCredentials, TState, TAuthTransport>
 where
-    TTransports: Sync,
     TCredentials: Sync,
     TState: Default + Send,
-    TAuthTransport: TransportTrait + 'static,
+    TAuthTransport: TransportTrait + Send + Sync + 'static,
 {
-    async fn do_leg(
-        &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: TState,
-    ) -> StockTrekResult<TState> {
-        let transport = (self.get_transport)(transports);
-        let auth_message = (self.get_auth_message)(transport, credentials, &state);
-        let reply = transport
+    async fn do_leg(&self, credentials: &TCredentials, state: TState) -> StockTrekResult<TState> {
+        let auth_message = (self.get_auth_message)(&self.transport, credentials, &state);
+        let reply = self
+            .transport
             .send(auth_message, self.timeout)
             .await
             .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;

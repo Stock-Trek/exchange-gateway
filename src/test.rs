@@ -58,18 +58,18 @@ mod test {
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
-        let spec = CexSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
+        let transport = MyHttpTransport {};
+        let spec = CexSpec::<ApiKeyCredentials, MyState>::new(
             capabilities,
             increments,
             rate_limits,
             request_weights,
             vec![AuthenticateLegImpl::<
-                MyTransports,
                 ApiKeyCredentials,
                 MyState,
                 MyHttpTransport,
             >::new(
-                |t| &t.http,
+                transport,
                 Duration::seconds(20),
                 |_t, _c, _s| HttpMessageDto {
                     headers: HashMap::new(),
@@ -78,7 +78,7 @@ mod test {
                 |_m, _s| Ok(MyState { _abc: 123 }),
             )],
             MessageLegImpl::new(
-                |t| &t.http,
+                MyHttpTransport {},
                 Duration::seconds(20),
                 |_c, _s, order_request| {
                     let body = match order_request {
@@ -100,24 +100,16 @@ mod test {
             ),
         );
 
-        let transports = MyTransports {
-            http: MyHttpTransport {},
-        };
         let credentials = ApiKeyCredentials::new(
             SecretString::from("my-api-key"),
             SecretString::from("my-secret"),
         );
-        let unauthenticated_exchange_connector =
-            ExchangeConnector::new(spec, transports, credentials);
+        let unauthenticated_exchange_connector = ExchangeConnector::new(spec, credentials);
         let _authenticated_exchange_connector = unauthenticated_exchange_connector.authenticate();
     }
 
     struct MyState {
         _abc: i64,
-    }
-
-    struct MyTransports {
-        pub http: MyHttpTransport,
     }
 
     struct MyHttpTransport;
