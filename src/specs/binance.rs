@@ -167,12 +167,7 @@ impl SpecCreatorTrait for BinanceHttpSpecCreator {
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
-        let authenticate_legs = vec![AuthenticateLegImpl::<
-            <Self as ExchangeSpecTrait>::Transports,
-            <Self as ExchangeSpecTrait>::Credentials,
-            <Self as ExchangeSpecTrait>::State,
-            ReqwestHttpTransport,
-        >::new(
+        let authenticate_legs = vec![AuthenticateLegImpl::<Self, ReqwestHttpTransport>::new(
             |t| &t.http,
             Duration::seconds(20),
             |_t, _c, _s| HttpMessageDto {
@@ -191,14 +186,7 @@ impl SpecCreatorTrait for BinanceHttpSpecCreator {
                 Ok(state)
             },
         )];
-        let message_leg = MessageLegImpl::<
-            <Self as ExchangeSpecTrait>::Transports,
-            <Self as ExchangeSpecTrait>::Credentials,
-            <Self as ExchangeSpecTrait>::State,
-            OrderRequest<AssetId, Decimal>,
-            OrderResponse,
-            ReqwestHttpTransport,
-        >::new(
+        let message_leg = MessageLegImpl::<Self, ReqwestHttpTransport>::new(
             |t| &t.http,
             Duration::seconds(20),
             |_c, _s, order_request| {

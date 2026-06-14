@@ -1,4 +1,4 @@
-use crate::transports::transport::TransportTrait;
+use crate::{exchange_spec::ExchangeSpecTrait, transports::transport::TransportTrait};
 use async_trait::async_trait;
 use chrono::Duration;
 use stock_trek::error::{
@@ -6,46 +6,64 @@ use stock_trek::error::{
     result::{StockTrekError, StockTrekResult},
 };
 
-pub type AuthenticateLeg<TTransports, TCredentials, TState> =
-    Box<dyn AuthenticateLegTrait<TTransports, TCredentials, TState>>;
-
 #[async_trait]
-pub trait AuthenticateLegTrait<TTransports, TCredentials, TState>: Send + Sync
-where
-    TState: Default,
-{
+pub trait AuthenticateLegTrait: Send + Sync {
+    type Transports: Send + Sync;
+    type Credentials: Send + Sync;
+    type State: Default + Send + Sync;
+
     async fn do_leg(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: TState,
-    ) -> StockTrekResult<TState>;
+        transports: &Self::Transports,
+        credentials: &Self::Credentials,
+        state: Self::State,
+    ) -> StockTrekResult<Self::State>;
 }
 
-pub struct AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+pub type AuthenticateLeg<TSpec> = Box<
+    dyn AuthenticateLegTrait<
+            Transports = <TSpec as ExchangeSpecTrait>::Transports,
+            Credentials = <TSpec as ExchangeSpecTrait>::Credentials,
+            State = <TSpec as ExchangeSpecTrait>::State,
+        >,
+>;
+
+pub struct AuthenticateLegImpl<TSpec, TAuthTransport>
 where
+    TSpec: ExchangeSpecTrait + ?Sized,
     TAuthTransport: TransportTrait,
 {
-    get_transport: fn(transports: &TTransports) -> &TAuthTransport,
+    get_transport: fn(transports: &<TSpec as ExchangeSpecTrait>::Transports) -> &TAuthTransport,
     timeout: Duration,
-    get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
-    update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
+    get_auth_message: fn(
+        &TAuthTransport,
+        &<TSpec as ExchangeSpecTrait>::Credentials,
+        &<TSpec as ExchangeSpecTrait>::State,
+    ) -> TAuthTransport::MessageDto,
+    update_state: fn(
+        TAuthTransport::MessageDto,
+        state: <TSpec as ExchangeSpecTrait>::State,
+    ) -> StockTrekResult<<TSpec as ExchangeSpecTrait>::State>,
 }
 
-impl<TTransports, TCredentials, TState, TAuthTransport>
-    AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+impl<TSpec, TAuthTransport> AuthenticateLegImpl<TSpec, TAuthTransport>
 where
-    TTransports: Sync + 'static,
-    TCredentials: Sync + 'static,
-    TState: Default + Send + 'static,
+    TSpec: ExchangeSpecTrait + 'static,
     TAuthTransport: TransportTrait + 'static,
 {
     pub fn new(
-        get_transport: fn(transports: &TTransports) -> &TAuthTransport,
+        get_transport: fn(transports: &<TSpec as ExchangeSpecTrait>::Transports) -> &TAuthTransport,
         timeout: Duration,
-        get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
-        update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
-    ) -> AuthenticateLeg<TTransports, TCredentials, TState> {
+        get_auth_message: fn(
+            &TAuthTransport,
+            &<TSpec as ExchangeSpecTrait>::Credentials,
+            &<TSpec as ExchangeSpecTrait>::State,
+        ) -> TAuthTransport::MessageDto,
+        update_state: fn(
+            TAuthTransport::MessageDto,
+            state: <TSpec as ExchangeSpecTrait>::State,
+        ) -> StockTrekResult<<TSpec as ExchangeSpecTrait>::State>,
+    ) -> AuthenticateLeg<TSpec> {
         Box::new(Self {
             get_transport,
             timeout,
@@ -56,21 +74,21 @@ where
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState, TAuthTransport>
-    AuthenticateLegTrait<TTransports, TCredentials, TState>
-    for AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+impl<TSpec, TAuthTransport> AuthenticateLegTrait for AuthenticateLegImpl<TSpec, TAuthTransport>
 where
-    TTransports: Sync,
-    TCredentials: Sync,
-    TState: Default + Send,
+    TSpec: ExchangeSpecTrait + 'static,
     TAuthTransport: TransportTrait + 'static,
 {
+    type Transports = TSpec::Transports;
+    type Credentials = TSpec::Credentials;
+    type State = TSpec::State;
+
     async fn do_leg(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: TState,
-    ) -> StockTrekResult<TState> {
+        transports: &Self::Transports,
+        credentials: &Self::Credentials,
+        state: Self::State,
+    ) -> StockTrekResult<Self::State> {
         let transport = (self.get_transport)(transports);
         let auth_message = (self.get_auth_message)(transport, credentials, &state);
         let reply = transport

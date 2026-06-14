@@ -1,11 +1,10 @@
 use crate::{
     authentication_state::Unauthenticated,
+    cex::cex_spec::CexSpec,
     exchange_connector::ExchangeConnector,
     spec_creator::SpecCreatorTrait,
     specs::binance::{BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports},
 };
-
-use crate::cex::cex_spec::CexSpec;
 
 pub struct ConnectorFactory;
 

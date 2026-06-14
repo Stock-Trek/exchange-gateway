@@ -35,39 +35,22 @@ pub struct CexSpec<TSpec: CexSpecTrait + ?Sized> {
     increments: HashMap<TradingPair, IncrementSizes>,
     rate_limits: RateLimits,
     request_weights: RequestWeights,
-    authenticate_legs: Vec<AuthenticateLeg<TSpec::Transports, TSpec::Credentials, TSpec::State>>,
-    message_leg: MessageLeg<
-        TSpec::Transports,
-        TSpec::Credentials,
-        TSpec::State,
-        OrderRequest<AssetId, Decimal>,
-        OrderResponse,
-    >,
+    authenticate_legs: Vec<AuthenticateLeg<TSpec>>,
+    message_leg: MessageLeg<TSpec>,
 }
 
 #[allow(clippy::type_complexity)]
 impl<TSpec> CexSpec<TSpec>
 where
     TSpec: CexSpecTrait + 'static,
-    TSpec::Transports: Send + Sync + 'static,
-    TSpec::Credentials: Send + Sync + 'static,
-    TSpec::State: Default + Send + Sync + 'static,
 {
     pub fn new(
         capabilities: Vec<CexCapability>,
         increments: HashMap<TradingPair, IncrementSizes>,
         rate_limits: RateLimits,
         request_weights: RequestWeights,
-        authenticate_legs: Vec<
-            AuthenticateLeg<TSpec::Transports, TSpec::Credentials, TSpec::State>,
-        >,
-        message_leg: MessageLeg<
-            TSpec::Transports,
-            TSpec::Credentials,
-            TSpec::State,
-            OrderRequest<AssetId, Decimal>,
-            OrderResponse,
-        >,
+        authenticate_legs: Vec<AuthenticateLeg<TSpec>>,
+        message_leg: MessageLeg<TSpec>,
     ) -> Self {
         Self {
             capabilities,
@@ -84,9 +67,6 @@ where
 impl<TSpec> ExchangeSpecTrait for CexSpec<TSpec>
 where
     TSpec: CexSpecTrait + 'static,
-    TSpec::Transports: Send + Sync + 'static,
-    TSpec::Credentials: Send + Sync + 'static,
-    TSpec::State: Default + Send + Sync + 'static,
 {
     type Transports = TSpec::Transports;
     type Credentials = TSpec::Credentials;

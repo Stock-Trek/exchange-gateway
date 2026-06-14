@@ -96,12 +96,7 @@ mod test {
             increments,
             rate_limits,
             request_weights,
-            vec![AuthenticateLegImpl::<
-                <MyTestSpec as ExchangeSpecTrait>::Transports,
-                <MyTestSpec as ExchangeSpecTrait>::Credentials,
-                <MyTestSpec as ExchangeSpecTrait>::State,
-                MyHttpTransport,
-            >::new(
+            vec![AuthenticateLegImpl::<MyTestSpec, MyHttpTransport>::new(
                 |t| &t.http,
                 Duration::seconds(20),
                 |_t, _c, _s| HttpMessageDto {
@@ -110,7 +105,7 @@ mod test {
                 },
                 |_m, _s| Ok(MyState { _abc: 123 }),
             )],
-            MessageLegImpl::new(
+            MessageLegImpl::<MyTestSpec, MyHttpTransport>::new(
                 |t| &t.http,
                 Duration::seconds(20),
                 |_c, _s, order_request| {
