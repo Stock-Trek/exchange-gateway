@@ -1,11 +1,12 @@
 use crate::{
     authenticate_leg::AuthenticateLegImpl,
     cex::{
-        cex_spec::CexSpec,
+        cex_spec::{CexSpec, CexSpecTrait},
         increment_sizes::IncrementSizesBuilder,
         rate_limits_weights::{RateLimits, RequestWeights},
     },
     credentials::api_key_credential::ApiKeyCredentials,
+    exchange_spec::ExchangeSpecTrait,
     message_leg::MessageLegImpl,
     rate_limit::{multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig},
     spec_creator::SpecCreatorTrait,
@@ -103,10 +104,43 @@ impl TransportTrait for ReqwestHttpTransport {
     }
 }
 
+impl CexSpecTrait for BinanceHttpSpecCreator {}
+
+#[async_trait]
+impl ExchangeSpecTrait for BinanceHttpSpecCreator {
+    type Transports = BinanceHttpTransports;
+    type Credentials = BinanceCredentials;
+    type State = BinanceState;
+    type TradeRequest = stock_trek::cex::order_request::OrderRequest<
+        stock_trek::cex::asset_id::AssetId,
+        rust_decimal::Decimal,
+    >;
+    type TradeResponse = stock_trek::cex::order_response::OrderResponse;
+
+    async fn authenticate(
+        &self,
+        _transports: &Self::Transports,
+        _credentials: &Self::Credentials,
+    ) -> stock_trek::error::result::StockTrekResult<Self::State> {
+        unimplemented!()
+    }
+
+    async fn send_trade_request(
+        &self,
+        _transports: &Self::Transports,
+        _credentials: &Self::Credentials,
+        _state: &Self::State,
+        _preferences: &stock_trek::preferences::Preferences,
+        _trade_request: Self::TradeRequest,
+    ) -> stock_trek::error::result::StockTrekResult<Self::TradeResponse> {
+        unimplemented!()
+    }
+}
+
 pub struct BinanceHttpSpecCreator;
 
 impl SpecCreatorTrait for BinanceHttpSpecCreator {
-    type Spec = CexSpec<BinanceHttpTransports, BinanceCredentials, BinanceState>;
+    type Spec = CexSpec<BinanceHttpSpecCreator>;
 
     fn create_spec(&self) -> Self::Spec {
         let capabilities = vec![
@@ -134,9 +168,9 @@ impl SpecCreatorTrait for BinanceHttpSpecCreator {
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
         let authenticate_legs = vec![AuthenticateLegImpl::<
-            BinanceHttpTransports,
-            BinanceCredentials,
-            BinanceState,
+            <Self as ExchangeSpecTrait>::Transports,
+            <Self as ExchangeSpecTrait>::Credentials,
+            <Self as ExchangeSpecTrait>::State,
             ReqwestHttpTransport,
         >::new(
             |t| &t.http,
@@ -146,7 +180,7 @@ impl SpecCreatorTrait for BinanceHttpSpecCreator {
                 body_json: "{}".to_string(),
             },
             |m, _s| {
-                let state: BinanceState = BinanceState {
+                let state: <Self as ExchangeSpecTrait>::State = BinanceState {
                     id: Some(
                         m.headers
                             .get("dhsjkfhj")
@@ -158,9 +192,9 @@ impl SpecCreatorTrait for BinanceHttpSpecCreator {
             },
         )];
         let message_leg = MessageLegImpl::<
-            BinanceHttpTransports,
-            BinanceCredentials,
-            BinanceState,
+            <Self as ExchangeSpecTrait>::Transports,
+            <Self as ExchangeSpecTrait>::Credentials,
+            <Self as ExchangeSpecTrait>::State,
             OrderRequest<AssetId, Decimal>,
             OrderResponse,
             ReqwestHttpTransport,

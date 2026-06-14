@@ -3,12 +3,13 @@ mod test {
     use crate::{
         authenticate_leg::AuthenticateLegImpl,
         cex::{
-            cex_spec::CexSpec,
+            cex_spec::{CexSpec, CexSpecTrait},
             increment_sizes::IncrementSizesBuilder,
             rate_limits_weights::{RateLimits, RequestWeights},
         },
         credentials::api_key_credential::ApiKeyCredentials,
         exchange_connector::ExchangeConnector,
+        exchange_spec::ExchangeSpecTrait,
         message_leg::MessageLegImpl,
         rate_limit::multi_rate_limiter::MultiRateLimiter,
         transports::{
@@ -31,6 +32,38 @@ mod test {
         },
         error::result::StockTrekResult,
     };
+
+    struct MyTestSpec;
+
+    impl CexSpecTrait for MyTestSpec {}
+
+    #[async_trait]
+    impl ExchangeSpecTrait for MyTestSpec {
+        type Transports = MyTransports;
+        type Credentials = ApiKeyCredentials;
+        type State = MyState;
+        type TradeRequest = OrderRequest<AssetId, rust_decimal::Decimal>;
+        type TradeResponse = OrderResponse;
+
+        async fn authenticate(
+            &self,
+            _transports: &Self::Transports,
+            _credentials: &Self::Credentials,
+        ) -> StockTrekResult<Self::State> {
+            unimplemented!()
+        }
+
+        async fn send_trade_request(
+            &self,
+            _transports: &Self::Transports,
+            _credentials: &Self::Credentials,
+            _state: &Self::State,
+            _preferences: &stock_trek::preferences::Preferences,
+            _trade_request: Self::TradeRequest,
+        ) -> StockTrekResult<Self::TradeResponse> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     pub fn test() {
@@ -58,15 +91,15 @@ mod test {
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
-        let spec = CexSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
+        let spec = CexSpec::<MyTestSpec>::new(
             capabilities,
             increments,
             rate_limits,
             request_weights,
             vec![AuthenticateLegImpl::<
-                MyTransports,
-                ApiKeyCredentials,
-                MyState,
+                <MyTestSpec as ExchangeSpecTrait>::Transports,
+                <MyTestSpec as ExchangeSpecTrait>::Credentials,
+                <MyTestSpec as ExchangeSpecTrait>::State,
                 MyHttpTransport,
             >::new(
                 |t| &t.http,
@@ -107,10 +140,8 @@ mod test {
             SecretString::from("my-api-key"),
             SecretString::from("my-secret"),
         );
-        let unauthenticated_exchange_connector: ExchangeConnector<
-            CexSpec<MyTransports, ApiKeyCredentials, MyState>,
-            _,
-        > = ExchangeConnector::new(Box::new(spec), transports, credentials);
+        let unauthenticated_exchange_connector: ExchangeConnector<CexSpec<MyTestSpec>, _> =
+            ExchangeConnector::new(Box::new(spec), transports, credentials);
         let _authenticated_exchange_connector = unauthenticated_exchange_connector.authenticate();
     }
 

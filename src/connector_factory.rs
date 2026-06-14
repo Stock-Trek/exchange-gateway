@@ -2,9 +2,7 @@ use crate::{
     authentication_state::Unauthenticated,
     exchange_connector::ExchangeConnector,
     spec_creator::SpecCreatorTrait,
-    specs::binance::{
-        BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports, BinanceState,
-    },
+    specs::binance::{BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports},
 };
 
 use crate::cex::cex_spec::CexSpec;
@@ -16,10 +14,7 @@ impl ConnectorFactory {
         &self,
         transports: BinanceHttpTransports,
         credentials: BinanceCredentials,
-    ) -> ExchangeConnector<
-        CexSpec<BinanceHttpTransports, BinanceCredentials, BinanceState>,
-        Unauthenticated,
-    > {
+    ) -> ExchangeConnector<CexSpec<BinanceHttpSpecCreator>, Unauthenticated> {
         ExchangeConnector::new(
             Box::new(BinanceHttpSpecCreator.create_spec()),
             transports,

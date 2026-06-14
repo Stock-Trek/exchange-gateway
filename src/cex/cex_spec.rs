@@ -24,40 +24,47 @@ use stock_trek::{
     preferences::Preferences,
 };
 
-pub struct CexSpec<TTransports, TCredentials, TState>
-where
-    TState: Default,
+pub trait CexSpecTrait:
+    ExchangeSpecTrait<TradeRequest = OrderRequest<AssetId, Decimal>, TradeResponse = OrderResponse>
 {
+}
+
+#[allow(clippy::type_complexity)]
+pub struct CexSpec<TSpec: CexSpecTrait + ?Sized> {
     capabilities: Vec<CexCapability>,
     increments: HashMap<TradingPair, IncrementSizes>,
     rate_limits: RateLimits,
     request_weights: RequestWeights,
-    authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
+    authenticate_legs: Vec<AuthenticateLeg<TSpec::Transports, TSpec::Credentials, TSpec::State>>,
     message_leg: MessageLeg<
-        TTransports,
-        TCredentials,
-        TState,
+        TSpec::Transports,
+        TSpec::Credentials,
+        TSpec::State,
         OrderRequest<AssetId, Decimal>,
         OrderResponse,
     >,
 }
 
-impl<TTransports, TCredentials, TState> CexSpec<TTransports, TCredentials, TState>
+#[allow(clippy::type_complexity)]
+impl<TSpec> CexSpec<TSpec>
 where
-    TTransports: Send + Sync + 'static,
-    TCredentials: Send + Sync + 'static,
-    TState: Default + Send + Sync + 'static,
+    TSpec: CexSpecTrait + 'static,
+    TSpec::Transports: Send + Sync + 'static,
+    TSpec::Credentials: Send + Sync + 'static,
+    TSpec::State: Default + Send + Sync + 'static,
 {
     pub fn new(
         capabilities: Vec<CexCapability>,
         increments: HashMap<TradingPair, IncrementSizes>,
         rate_limits: RateLimits,
         request_weights: RequestWeights,
-        authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
+        authenticate_legs: Vec<
+            AuthenticateLeg<TSpec::Transports, TSpec::Credentials, TSpec::State>,
+        >,
         message_leg: MessageLeg<
-            TTransports,
-            TCredentials,
-            TState,
+            TSpec::Transports,
+            TSpec::Credentials,
+            TSpec::State,
             OrderRequest<AssetId, Decimal>,
             OrderResponse,
         >,
@@ -74,16 +81,16 @@ where
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState> ExchangeSpecTrait
-    for CexSpec<TTransports, TCredentials, TState>
+impl<TSpec> ExchangeSpecTrait for CexSpec<TSpec>
 where
-    TTransports: Send + Sync + 'static,
-    TCredentials: Send + Sync + 'static,
-    TState: Default + Send + Sync + 'static,
+    TSpec: CexSpecTrait + 'static,
+    TSpec::Transports: Send + Sync + 'static,
+    TSpec::Credentials: Send + Sync + 'static,
+    TSpec::State: Default + Send + Sync + 'static,
 {
-    type Transports = TTransports;
-    type Credentials = TCredentials;
-    type State = TState;
+    type Transports = TSpec::Transports;
+    type Credentials = TSpec::Credentials;
+    type State = TSpec::State;
     type TradeRequest = OrderRequest<AssetId, f64>;
     type TradeResponse = OrderResponse;
 
@@ -92,7 +99,7 @@ where
         transports: &Self::Transports,
         credentials: &Self::Credentials,
     ) -> StockTrekResult<Self::State> {
-        let mut state = TState::default();
+        let mut state = TSpec::State::default();
         for authentication_leg in &self.authenticate_legs {
             state = match authentication_leg
                 .do_leg(transports, credentials, state)
