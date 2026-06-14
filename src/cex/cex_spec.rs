@@ -6,7 +6,7 @@ use crate::{
         rate_limits_weights::{RateLimits, RequestWeights},
         semantic_checker::SemanticChecker,
     },
-    exchange_spec::{ExchangeSpec, ExchangeSpecTrait},
+    exchange_spec::ExchangeSpecTrait,
     message_leg::MessageLeg,
 };
 use async_trait::async_trait;
@@ -61,33 +61,37 @@ where
             OrderRequest<AssetId, Decimal>,
             OrderResponse,
         >,
-    ) -> ExchangeSpec<TTransports, TCredentials, TState, OrderRequest<AssetId, f64>, OrderResponse>
-    {
-        Box::new(Self {
+    ) -> Self {
+        Self {
             capabilities,
             increments,
             rate_limits,
             request_weights,
             authenticate_legs,
             message_leg,
-        })
+        }
     }
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState>
-    ExchangeSpecTrait<TTransports, TCredentials, TState, OrderRequest<AssetId, f64>, OrderResponse>
+impl<TTransports, TCredentials, TState> ExchangeSpecTrait
     for CexSpec<TTransports, TCredentials, TState>
 where
-    TTransports: Send + Sync,
-    TCredentials: Send + Sync,
-    TState: Default + Send + Sync,
+    TTransports: Send + Sync + 'static,
+    TCredentials: Send + Sync + 'static,
+    TState: Default + Send + Sync + 'static,
 {
+    type Transports = TTransports;
+    type Credentials = TCredentials;
+    type State = TState;
+    type TradeRequest = OrderRequest<AssetId, f64>;
+    type TradeResponse = OrderResponse;
+
     async fn authenticate(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-    ) -> StockTrekResult<TState> {
+        transports: &Self::Transports,
+        credentials: &Self::Credentials,
+    ) -> StockTrekResult<Self::State> {
         let mut state = TState::default();
         for authentication_leg in &self.authenticate_legs {
             state = match authentication_leg
@@ -102,12 +106,12 @@ where
     }
     async fn send_trade_request(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: &TState,
+        transports: &Self::Transports,
+        credentials: &Self::Credentials,
+        state: &Self::State,
         preferences: &Preferences,
-        trade_request: OrderRequest<AssetId, f64>,
-    ) -> StockTrekResult<OrderResponse> {
+        trade_request: Self::TradeRequest,
+    ) -> StockTrekResult<Self::TradeResponse> {
         if !self
             .rate_limits
             .send_order_request

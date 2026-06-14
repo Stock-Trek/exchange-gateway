@@ -1,25 +1,25 @@
 use async_trait::async_trait;
 use stock_trek::{error::result::StockTrekResult, preferences::Preferences};
 
-pub type ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> =
-    Box<dyn ExchangeSpecTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>>;
-
 #[async_trait]
-pub trait ExchangeSpecTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-where
-    TState: Default,
-{
+pub trait ExchangeSpecTrait: Send + Sync {
+    type Transports: Send + Sync;
+    type Credentials: Send + Sync;
+    type State: Default + Send + Sync;
+    type TradeRequest: Send + Sync;
+    type TradeResponse: Send;
+
     async fn authenticate(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-    ) -> StockTrekResult<TState>;
+        transports: &Self::Transports,
+        credentials: &Self::Credentials,
+    ) -> StockTrekResult<Self::State>;
     async fn send_trade_request(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: &TState,
+        transports: &Self::Transports,
+        credentials: &Self::Credentials,
+        state: &Self::State,
         preferences: &Preferences,
-        trade_request: TTradeRequest,
-    ) -> StockTrekResult<TTradeResponse>;
+        trade_request: Self::TradeRequest,
+    ) -> StockTrekResult<Self::TradeResponse>;
 }

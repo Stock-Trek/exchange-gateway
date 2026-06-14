@@ -6,7 +6,6 @@ use crate::{
         rate_limits_weights::{RateLimits, RequestWeights},
     },
     credentials::api_key_credential::ApiKeyCredentials,
-    exchange_spec::ExchangeSpec,
     message_leg::MessageLegImpl,
     rate_limit::{multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig},
     spec_creator::SpecCreatorTrait,
@@ -106,24 +105,10 @@ impl TransportTrait for ReqwestHttpTransport {
 
 pub struct BinanceHttpSpecCreator;
 
-impl
-    SpecCreatorTrait<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
-    > for BinanceHttpSpecCreator
-{
-    fn create_spec(
-        &self,
-    ) -> ExchangeSpec<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
-    > {
+impl SpecCreatorTrait for BinanceHttpSpecCreator {
+    type Spec = CexSpec<BinanceHttpTransports, BinanceCredentials, BinanceState>;
+
+    fn create_spec(&self) -> Self::Spec {
         let capabilities = vec![
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),

@@ -1,13 +1,7 @@
-use crate::exchange_spec::ExchangeSpec;
+use crate::exchange_spec::ExchangeSpecTrait;
 
-pub type SpecCreator<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> =
-    Box<dyn SpecCreatorTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>>;
+pub trait SpecCreatorTrait: Send + Sync {
+    type Spec: ExchangeSpecTrait;
 
-pub trait SpecCreatorTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-where
-    TState: Default,
-{
-    fn create_spec(
-        &self,
-    ) -> ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>;
+    fn create_spec(&self) -> Self::Spec;
 }

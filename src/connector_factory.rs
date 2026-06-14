@@ -6,28 +6,22 @@ use crate::{
         BinanceCredentials, BinanceHttpSpecCreator, BinanceHttpTransports, BinanceState,
     },
 };
-use stock_trek::cex::{
-    asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse,
-};
+
+use crate::cex::cex_spec::CexSpec;
 
 pub struct ConnectorFactory;
 
 impl ConnectorFactory {
-    pub async fn binance_http(
+    pub fn binance_http(
         &self,
         transports: BinanceHttpTransports,
         credentials: BinanceCredentials,
     ) -> ExchangeConnector<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
+        CexSpec<BinanceHttpTransports, BinanceCredentials, BinanceState>,
         Unauthenticated,
     > {
-        BinanceHttpSpecCreator.create_spec();
         ExchangeConnector::new(
-            BinanceHttpSpecCreator.create_spec(),
+            Box::new(BinanceHttpSpecCreator.create_spec()),
             transports,
             credentials,
         )

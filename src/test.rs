@@ -107,8 +107,10 @@ mod test {
             SecretString::from("my-api-key"),
             SecretString::from("my-secret"),
         );
-        let unauthenticated_exchange_connector =
-            ExchangeConnector::new(spec, transports, credentials);
+        let unauthenticated_exchange_connector: ExchangeConnector<
+            CexSpec<MyTransports, ApiKeyCredentials, MyState>,
+            _,
+        > = ExchangeConnector::new(Box::new(spec), transports, credentials);
         let _authenticated_exchange_connector = unauthenticated_exchange_connector.authenticate();
     }
 
