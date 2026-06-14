@@ -6,6 +6,7 @@ use crate::{
         rate_limits_weights::{RateLimits, RequestWeights},
         semantic_checker::SemanticChecker,
     },
+    credentials::Credential,
     exchange_spec::{ExchangeSpec, ExchangeSpecTrait},
     message_leg::MessageLeg,
 };
@@ -24,7 +25,7 @@ use stock_trek::{
     preferences::Preferences,
 };
 
-pub struct CexSpec<TTransports, TCredentials, TState>
+pub struct CexSpec<TTransports, TState>
 where
     TState: Default,
 {
@@ -32,20 +33,13 @@ where
     increments: HashMap<TradingPair, IncrementSizes>,
     rate_limits: RateLimits,
     request_weights: RequestWeights,
-    authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
-    message_leg: MessageLeg<
-        TTransports,
-        TCredentials,
-        TState,
-        OrderRequest<AssetId, Decimal>,
-        OrderResponse,
-    >,
+    authenticate_legs: Vec<AuthenticateLeg<TTransports, TState>>,
+    message_leg: MessageLeg<TTransports, TState, OrderRequest<AssetId, Decimal>, OrderResponse>,
 }
 
-impl<TTransports, TCredentials, TState> CexSpec<TTransports, TCredentials, TState>
+impl<TTransports, TState> CexSpec<TTransports, TState>
 where
     TTransports: Send + Sync + 'static,
-    TCredentials: Send + Sync + 'static,
     TState: Default + Send + Sync + 'static,
 {
     pub fn new(
@@ -53,16 +47,9 @@ where
         increments: HashMap<TradingPair, IncrementSizes>,
         rate_limits: RateLimits,
         request_weights: RequestWeights,
-        authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
-        message_leg: MessageLeg<
-            TTransports,
-            TCredentials,
-            TState,
-            OrderRequest<AssetId, Decimal>,
-            OrderResponse,
-        >,
-    ) -> ExchangeSpec<TTransports, TCredentials, TState, OrderRequest<AssetId, f64>, OrderResponse>
-    {
+        authenticate_legs: Vec<AuthenticateLeg<TTransports, TState>>,
+        message_leg: MessageLeg<TTransports, TState, OrderRequest<AssetId, Decimal>, OrderResponse>,
+    ) -> ExchangeSpec<TTransports, TState, OrderRequest<AssetId, f64>, OrderResponse> {
         Box::new(Self {
             capabilities,
             increments,
@@ -75,18 +62,17 @@ where
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState>
-    ExchangeSpecTrait<TTransports, TCredentials, TState, OrderRequest<AssetId, f64>, OrderResponse>
-    for CexSpec<TTransports, TCredentials, TState>
+impl<TTransports, TState>
+    ExchangeSpecTrait<TTransports, TState, OrderRequest<AssetId, f64>, OrderResponse>
+    for CexSpec<TTransports, TState>
 where
     TTransports: Send + Sync,
-    TCredentials: Send + Sync,
     TState: Default + Send + Sync,
 {
     async fn authenticate(
         &self,
         transports: &TTransports,
-        credentials: &TCredentials,
+        credentials: &dyn Credential,
     ) -> StockTrekResult<TState> {
         let mut state = TState::default();
         for authentication_leg in &self.authenticate_legs {
@@ -103,7 +89,7 @@ where
     async fn send_trade_request(
         &self,
         transports: &TTransports,
-        credentials: &TCredentials,
+        credentials: &dyn Credential,
         state: &TState,
         preferences: &Preferences,
         trade_request: OrderRequest<AssetId, f64>,

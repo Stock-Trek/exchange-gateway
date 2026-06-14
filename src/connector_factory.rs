@@ -19,17 +19,15 @@ impl ConnectorFactory {
         credentials: BinanceCredentials,
     ) -> ExchangeConnector<
         BinanceHttpTransports,
-        BinanceCredentials,
         BinanceState,
         OrderRequest<AssetId, f64>,
         OrderResponse,
         Unauthenticated,
     > {
-        BinanceHttpSpecCreator.create_spec();
         ExchangeConnector::new(
             BinanceHttpSpecCreator.create_spec(),
             transports,
-            credentials,
+            Box::new(credentials),
         )
     }
 }

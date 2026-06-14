@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod test {
     use crate::{
         authenticate_leg::AuthenticateLegImpl,
@@ -58,25 +59,22 @@ mod test {
         let mut tickers = HashMap::new();
         tickers.insert(AssetId::usdc(), "USDC".to_string());
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
-        let spec = CexSpec::<MyTransports, ApiKeyCredentials, MyState>::new(
+        let spec = CexSpec::<MyTransports, MyState>::new(
             capabilities,
             increments,
             rate_limits,
             request_weights,
-            vec![AuthenticateLegImpl::<
-                MyTransports,
-                ApiKeyCredentials,
-                MyState,
-                MyHttpTransport,
-            >::new(
-                |t| &t.http,
-                Duration::seconds(20),
-                |_t, _c, _s| HttpMessageDto {
-                    headers: HashMap::new(),
-                    body_json: "{}".to_string(),
-                },
-                |_m, _s| Ok(MyState { _abc: 123 }),
-            )],
+            vec![
+                AuthenticateLegImpl::<MyTransports, MyState, MyHttpTransport>::new(
+                    |t| &t.http,
+                    Duration::seconds(20),
+                    |_t, _c, _s| HttpMessageDto {
+                        headers: HashMap::new(),
+                        body_json: "{}".to_string(),
+                    },
+                    |_m, _s| Ok(MyState { _abc: 123 }),
+                ),
+            ],
             MessageLegImpl::new(
                 |t| &t.http,
                 Duration::seconds(20),
@@ -108,7 +106,7 @@ mod test {
             SecretString::from("my-secret"),
         );
         let unauthenticated_exchange_connector =
-            ExchangeConnector::new(spec, transports, credentials);
+            ExchangeConnector::new(spec, transports, Box::new(credentials));
         let _authenticated_exchange_connector = unauthenticated_exchange_connector.authenticate();
     }
 

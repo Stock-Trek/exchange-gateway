@@ -1,3 +1,4 @@
+use crate::credentials::Credential;
 use crate::transports::transport::TransportTrait;
 use async_trait::async_trait;
 use chrono::Duration;
@@ -6,47 +7,38 @@ use stock_trek::error::{
     result::{StockTrekError, StockTrekResult},
 };
 
-pub type MessageLeg<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> =
-    Box<dyn MessageLegTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>>;
+pub type MessageLeg<TTransports, TState, TTradeRequest, TTradeResponse> =
+    Box<dyn MessageLegTrait<TTransports, TState, TTradeRequest, TTradeResponse>>;
 
 #[async_trait]
-pub trait MessageLegTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>:
-    Send + Sync
-{
+pub trait MessageLegTrait<TTransports, TState, TTradeRequest, TTradeResponse>: Send + Sync {
     async fn send_trade_request(
         &self,
         transports: &TTransports,
-        credentials: &TCredentials,
+        credentials: &dyn Credential,
         state: &TState,
         trade_request: &TTradeRequest,
     ) -> StockTrekResult<TTradeResponse>;
 }
 
-pub type GetTradeMessage<TCredentials, TState, TTradeRequest, TMessage> =
-    fn(&TCredentials, &TState, &TTradeRequest) -> StockTrekResult<TMessage>;
+pub type GetTradeMessage<TState, TTradeRequest, TMessage> =
+    fn(&dyn Credential, &TState, &TTradeRequest) -> StockTrekResult<TMessage>;
 
-pub struct MessageLegImpl<
-    TTransports,
-    TCredentials,
-    TState,
-    TTradeRequest,
-    TTradeResponse,
-    TTransport,
-> where
+pub struct MessageLegImpl<TTransports, TState, TTradeRequest, TTradeResponse, TTransport>
+where
     TTransport: TransportTrait,
     TState: Default,
 {
     get_transport: fn(transports: &TTransports) -> &TTransport,
     timeout: Duration,
-    get_trade_message: GetTradeMessage<TCredentials, TState, TTradeRequest, TTransport::MessageDto>,
+    get_trade_message: GetTradeMessage<TState, TTradeRequest, TTransport::MessageDto>,
     get_trade_response: fn(TTransport::MessageDto) -> StockTrekResult<TTradeResponse>,
 }
 
-impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, TTransport>
-    MessageLegImpl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, TTransport>
+impl<TTransports, TState, TTradeRequest, TTradeResponse, TTransport>
+    MessageLegImpl<TTransports, TState, TTradeRequest, TTradeResponse, TTransport>
 where
     TTransports: Sync + 'static,
-    TCredentials: Sync + 'static,
     TState: Default + Sync + 'static,
     TTradeRequest: Sync + 'static,
     TTradeResponse: 'static,
@@ -55,14 +47,9 @@ where
     pub fn new(
         get_transport: fn(transports: &TTransports) -> &TTransport,
         timeout: Duration,
-        get_trade_message: GetTradeMessage<
-            TCredentials,
-            TState,
-            TTradeRequest,
-            TTransport::MessageDto,
-        >,
+        get_trade_message: GetTradeMessage<TState, TTradeRequest, TTransport::MessageDto>,
         get_trade_response: fn(TTransport::MessageDto) -> StockTrekResult<TTradeResponse>,
-    ) -> MessageLeg<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> {
+    ) -> MessageLeg<TTransports, TState, TTradeRequest, TTradeResponse> {
         Box::new(Self {
             get_transport,
             timeout,
@@ -73,12 +60,11 @@ where
 }
 
 #[async_trait]
-impl<TTransports, TState, TCredentials, TTradeRequest, TTradeResponse, TTransport>
-    MessageLegTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-    for MessageLegImpl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, TTransport>
+impl<TTransports, TState, TTradeRequest, TTradeResponse, TTransport>
+    MessageLegTrait<TTransports, TState, TTradeRequest, TTradeResponse>
+    for MessageLegImpl<TTransports, TState, TTradeRequest, TTradeResponse, TTransport>
 where
     TTransports: Sync,
-    TCredentials: Sync,
     TState: Default + Sync,
     TTradeRequest: Sync,
     TTransport: TransportTrait + 'static,
@@ -86,7 +72,7 @@ where
     async fn send_trade_request(
         &self,
         transports: &TTransports,
-        credentials: &TCredentials,
+        credentials: &dyn Credential,
         state: &TState,
         trade_request: &TTradeRequest,
     ) -> StockTrekResult<TTradeResponse> {

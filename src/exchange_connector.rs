@@ -1,55 +1,36 @@
 use crate::{
     authentication_state::{Authenticated, AuthenticationState, Scratch, Unauthenticated},
+    credentials::Credential,
     exchange_spec::ExchangeSpec,
 };
 use std::marker::PhantomData;
 use stock_trek::{error::result::StockTrekResult, preferences::Preferences};
 
-pub struct ExchangeConnector<
-    TTransports,
-    TCredentials,
-    TState,
-    TTradeRequest,
-    TTradeResponse,
-    TAuthState,
-> where
+pub struct ExchangeConnector<TTransports, TState, TTradeRequest, TTradeResponse, TAuthState>
+where
     TState: Default,
     TAuthState: AuthenticationState,
 {
-    spec: ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>,
+    spec: ExchangeSpec<TTransports, TState, TTradeRequest, TTradeResponse>,
     transports: TTransports,
-    credentials: TCredentials,
+    credentials: Box<dyn Credential>,
     state: TState,
     _phantom_auth_state: PhantomData<TAuthState>,
 }
 
-impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-    ExchangeConnector<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, Scratch>
+impl<TTransports, TState, TTradeRequest, TTradeResponse>
+    ExchangeConnector<TTransports, TState, TTradeRequest, TTradeResponse, Scratch>
 where
     TTransports: Send + Sync + 'static,
-    TCredentials: Send + Sync + 'static,
     TState: Default + Send + Sync + 'static,
 {
     pub fn new(
-        spec: ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>,
+        spec: ExchangeSpec<TTransports, TState, TTradeRequest, TTradeResponse>,
         transports: TTransports,
-        credentials: TCredentials,
-    ) -> ExchangeConnector<
-        TTransports,
-        TCredentials,
-        TState,
-        TTradeRequest,
-        TTradeResponse,
-        Unauthenticated,
-    > {
-        ExchangeConnector::<
-            TTransports,
-            TCredentials,
-            TState,
-            TTradeRequest,
-            TTradeResponse,
-            Unauthenticated,
-        > {
+        credentials: Box<dyn Credential>,
+    ) -> ExchangeConnector<TTransports, TState, TTradeRequest, TTradeResponse, Unauthenticated>
+    {
+        ExchangeConnector::<TTransports, TState, TTradeRequest, TTradeResponse, Unauthenticated> {
             spec,
             transports,
             credentials,
@@ -59,65 +40,37 @@ where
     }
 }
 
-impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-    ExchangeConnector<
-        TTransports,
-        TCredentials,
-        TState,
-        TTradeRequest,
-        TTradeResponse,
-        Unauthenticated,
-    >
+impl<TTransports, TState, TTradeRequest, TTradeResponse>
+    ExchangeConnector<TTransports, TState, TTradeRequest, TTradeResponse, Unauthenticated>
 where
     TTransports: Send + Sync + 'static,
-    TCredentials: Send + Sync + 'static,
     TState: Default + Send + Sync + 'static,
 {
     pub async fn authenticate(
         self,
     ) -> StockTrekResult<
-        ExchangeConnector<
-            TTransports,
-            TCredentials,
-            TState,
-            TTradeRequest,
-            TTradeResponse,
-            Authenticated,
-        >,
+        ExchangeConnector<TTransports, TState, TTradeRequest, TTradeResponse, Authenticated>,
     > {
         let state = self
             .spec
-            .authenticate(&self.transports, &self.credentials)
+            .authenticate(&self.transports, &*self.credentials)
             .await?;
-        Ok(ExchangeConnector::<
-            TTransports,
-            TCredentials,
-            TState,
-            TTradeRequest,
-            TTradeResponse,
-            Authenticated,
-        > {
-            spec: self.spec,
-            transports: self.transports,
-            credentials: self.credentials,
-            state,
-            _phantom_auth_state: PhantomData,
-        })
+        Ok(
+            ExchangeConnector::<TTransports, TState, TTradeRequest, TTradeResponse, Authenticated> {
+                spec: self.spec,
+                transports: self.transports,
+                credentials: self.credentials,
+                state,
+                _phantom_auth_state: PhantomData,
+            },
+        )
     }
 }
 
-impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-    ExchangeConnector<
-        TTransports,
-        TCredentials,
-        TState,
-        TTradeRequest,
-        TTradeResponse,
-        Authenticated,
-    >
+impl<TTransports, TState, TTradeRequest, TTradeResponse>
+    ExchangeConnector<TTransports, TState, TTradeRequest, TTradeResponse, Authenticated>
 where
     TTransports: Send + Sync,
-    TCredentials: Send + Sync,
     TState: Default + Send + Sync,
 {
     pub async fn send_trade_request(
@@ -128,7 +81,7 @@ where
         self.spec
             .send_trade_request(
                 &self.transports,
-                &self.credentials,
+                &*self.credentials,
                 &self.state,
                 preferences,
                 trade_request,

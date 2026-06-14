@@ -5,7 +5,7 @@ use crate::{
         increment_sizes::IncrementSizesBuilder,
         rate_limits_weights::{RateLimits, RequestWeights},
     },
-    credentials::api_key_credential::ApiKeyCredentials,
+    credentials::{Credential, api_key_credential::ApiKeyCredentials},
     exchange_spec::ExchangeSpec,
     message_leg::MessageLegImpl,
     rate_limit::{multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig},
@@ -37,6 +37,8 @@ pub struct BinanceState {
 pub struct BinanceCredentials {
     pub api_key: ApiKeyCredentials,
 }
+
+impl Credential for BinanceCredentials {}
 
 pub struct BinanceHttpTransports {
     pub http: ReqwestHttpTransport,
@@ -107,23 +109,13 @@ impl TransportTrait for ReqwestHttpTransport {
 pub struct BinanceHttpSpecCreator;
 
 impl
-    SpecCreatorTrait<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
-    > for BinanceHttpSpecCreator
+    SpecCreatorTrait<BinanceHttpTransports, BinanceState, OrderRequest<AssetId, f64>, OrderResponse>
+    for BinanceHttpSpecCreator
 {
     fn create_spec(
         &self,
-    ) -> ExchangeSpec<
-        BinanceHttpTransports,
-        BinanceCredentials,
-        BinanceState,
-        OrderRequest<AssetId, f64>,
-        OrderResponse,
-    > {
+    ) -> ExchangeSpec<BinanceHttpTransports, BinanceState, OrderRequest<AssetId, f64>, OrderResponse>
+    {
         let capabilities = vec![
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
             CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
@@ -150,7 +142,6 @@ impl
         tickers.insert(AssetId::bitcoin(), "BTC".to_string());
         let authenticate_legs = vec![AuthenticateLegImpl::<
             BinanceHttpTransports,
-            BinanceCredentials,
             BinanceState,
             ReqwestHttpTransport,
         >::new(
@@ -174,7 +165,6 @@ impl
         )];
         let message_leg = MessageLegImpl::<
             BinanceHttpTransports,
-            BinanceCredentials,
             BinanceState,
             OrderRequest<AssetId, Decimal>,
             OrderResponse,
