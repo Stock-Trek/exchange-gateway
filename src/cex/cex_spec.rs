@@ -1,15 +1,17 @@
 use crate::{
     authenticate_leg::AuthenticateLeg,
     cex::{
-        increment_sizes::IncrementSizes,
-        precise_orders::PreciseOrders,
-        rate_limits_weights::{RateLimits, RequestWeights},
-        semantic_checker::SemanticChecker,
+        increment_sizes::IncrementSizes, precise_orders::PreciseOrders,
+        rate_limits_weights::RequestWeights, semantic_checker::SemanticChecker,
     },
     exchange_spec::{ExchangeSpec, ExchangeSpecTrait},
+    increments_leg::IncrementsLeg,
     message_leg::MessageLeg,
+    sign::signer::Signer,
+    transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
+use bimap::BiMap;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use stock_trek::{
@@ -17,57 +19,56 @@ use stock_trek::{
         asset_id::AssetId, capability::CexCapability, order_request::OrderRequest,
         order_response::OrderResponse, trading_pair::TradingPair,
     },
-    error::{
-        general::GeneralError,
-        result::{StockTrekError, StockTrekResult},
-    },
+    error::result::StockTrekResult,
     preferences::Preferences,
 };
 
-pub struct CexSpec<TTransports, TCredentials, TState>
+pub struct CexSpec<TTransport, TUnsignedMessage, TSignedMessage>
 where
-    TState: Default,
+    TTransport: TransportTrait + ?Sized,
 {
     capabilities: Vec<CexCapability>,
-    increments: HashMap<TradingPair, IncrementSizes>,
-    rate_limits: RateLimits,
+    #[allow(unused)]
     request_weights: RequestWeights,
-    authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
+    tickers: BiMap<AssetId, String>,
+    increments_leg: IncrementsLeg<TTransport>,
+    authenticate_legs: Vec<AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage>>,
     message_leg: MessageLeg<
-        TTransports,
-        TCredentials,
-        TState,
+        TTransport,
         OrderRequest<AssetId, Decimal>,
+        TUnsignedMessage,
+        TSignedMessage,
         OrderResponse,
     >,
 }
 
-impl<TTransports, TCredentials, TState> CexSpec<TTransports, TCredentials, TState>
+impl<TTransport, TUnsignedMessage, TSignedMessage>
+    CexSpec<TTransport, TUnsignedMessage, TSignedMessage>
 where
-    TTransports: Send + Sync + 'static,
-    TCredentials: Send + Sync + 'static,
-    TState: Default + Send + Sync + 'static,
+    TTransport: TransportTrait + Send + Sync + ?Sized + 'static,
+    TUnsignedMessage: 'static,
+    TSignedMessage: 'static,
 {
     pub fn new(
         capabilities: Vec<CexCapability>,
-        increments: HashMap<TradingPair, IncrementSizes>,
-        rate_limits: RateLimits,
         request_weights: RequestWeights,
-        authenticate_legs: Vec<AuthenticateLeg<TTransports, TCredentials, TState>>,
+        tickers: BiMap<AssetId, String>,
+        increments_leg: IncrementsLeg<TTransport>,
+        authenticate_legs: Vec<AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage>>,
         message_leg: MessageLeg<
-            TTransports,
-            TCredentials,
-            TState,
+            TTransport,
             OrderRequest<AssetId, Decimal>,
+            TUnsignedMessage,
+            TSignedMessage,
             OrderResponse,
         >,
-    ) -> ExchangeSpec<TTransports, TCredentials, TState, OrderRequest<AssetId, f64>, OrderResponse>
+    ) -> ExchangeSpec<OrderRequest<AssetId, f64>, TUnsignedMessage, TSignedMessage, OrderResponse>
     {
         Box::new(Self {
             capabilities,
-            increments,
-            rate_limits,
             request_weights,
+            tickers,
+            increments_leg,
             authenticate_legs,
             message_leg,
         })
@@ -75,51 +76,45 @@ where
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState>
-    ExchangeSpecTrait<TTransports, TCredentials, TState, OrderRequest<AssetId, f64>, OrderResponse>
-    for CexSpec<TTransports, TCredentials, TState>
+impl<TTransport, TUnsignedMessage, TSignedMessage>
+    ExchangeSpecTrait<OrderRequest<AssetId, f64>, TUnsignedMessage, TSignedMessage, OrderResponse>
+    for CexSpec<TTransport, TUnsignedMessage, TSignedMessage>
 where
-    TTransports: Send + Sync,
-    TCredentials: Send + Sync,
-    TState: Default + Send + Sync,
+    TTransport: TransportTrait + Send + Sync + ?Sized,
 {
+    async fn increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>> {
+        self.increments_leg.get_increments().await
+    }
     async fn authenticate(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-    ) -> StockTrekResult<TState> {
-        let mut state = TState::default();
+        initial_auth_leg_signer: Signer<TUnsignedMessage, TSignedMessage>,
+    ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>> {
+        let mut signer = initial_auth_leg_signer;
         for authentication_leg in &self.authenticate_legs {
-            state = match authentication_leg
-                .do_leg(transports, credentials, state)
-                .await
-            {
-                Ok(state) => state,
-                Err(e) => return Err(e),
-            }
+            signer = authentication_leg.do_leg(signer).await?;
         }
-        Ok(state)
+        Ok(signer)
     }
     async fn send_trade_request(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: &TState,
         preferences: &Preferences,
         trade_request: OrderRequest<AssetId, f64>,
+        increments: &HashMap<TradingPair, IncrementSizes>,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<OrderResponse> {
-        if !self
-            .rate_limits
-            .send_order_request
-            .did_acquire(self.request_weights.send_order_request)
-        {
-            return Err(StockTrekError::General(GeneralError::Message(
-                "Rate limited".to_string(),
-            )));
-        }
+        // TODO add rate limits back in
+        // if !self
+        //     .rate_limits
+        //     .send_order_request
+        //     .did_acquire(self.request_weights.send_order_request)
+        // {
+        //     return Err(StockTrekError::General(GeneralError::Message(
+        //         "Rate limited".to_string(),
+        //     )));
+        // }
         let precise_trade_request = PreciseOrders.precise_order_request(
             trade_request,
-            &self.increments,
+            increments,
             &preferences.cex.rounding,
         )?;
         SemanticChecker.conversion_will_be_semantically_consistent(
@@ -128,7 +123,7 @@ where
             &preferences.cex,
         )?;
         self.message_leg
-            .send_trade_request(transports, credentials, state, &precise_trade_request)
+            .send_trade_request(preferences, &self.tickers, precise_trade_request, &signer)
             .await
     }
 }

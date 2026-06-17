@@ -1,101 +1,131 @@
-use crate::transports::transport::TransportTrait;
+use crate::{
+    functions::{DeserializeReply, FilterReply, MessageToDto, TradeRequestToMessage},
+    sign::signer::Signer,
+    transports::transport::TransportTrait,
+};
 use async_trait::async_trait;
+use bimap::BiMap;
 use chrono::Duration;
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
+use std::sync::Arc;
+use stock_trek::{
+    cex::asset_id::AssetId, error::result::StockTrekResult, preferences::Preferences,
 };
 
-pub type MessageLeg<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> =
-    Box<dyn MessageLegTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>>;
+pub type MessageLeg<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
+    Box<
+        dyn MessageLegTrait<
+                TTransport,
+                TTradeRequest,
+                TUnsignedMessage,
+                TSignedMessage,
+                TTradeResponse,
+            >,
+    >;
 
 #[async_trait]
-pub trait MessageLegTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>:
-    Send + Sync
+pub trait MessageLegTrait<
+    TTransport,
+    TTradeRequest,
+    TUnsignedMessage,
+    TSignedMessage,
+    TTradeResponse,
+>: Send + Sync where
+    TTransport: TransportTrait + ?Sized,
 {
     async fn send_trade_request(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: &TState,
-        trade_request: &TTradeRequest,
+        preferences: &Preferences,
+        tickers: &BiMap<AssetId, String>,
+        trade_request: TTradeRequest,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<TTradeResponse>;
 }
 
-pub type GetTradeMessage<TCredentials, TState, TTradeRequest, TMessage> =
-    fn(&TCredentials, &TState, &TTradeRequest) -> StockTrekResult<TMessage>;
-
 pub struct MessageLegImpl<
-    TTransports,
-    TCredentials,
-    TState,
-    TTradeRequest,
-    TTradeResponse,
     TTransport,
+    TTradeRequest,
+    TUnsignedMessage,
+    TSignedMessage,
+    TRawResponse,
+    TTradeResponse,
 > where
-    TTransport: TransportTrait,
-    TState: Default,
+    TTransport: TransportTrait + ?Sized,
 {
-    get_transport: fn(transports: &TTransports) -> &TTransport,
+    transport: Arc<TTransport>,
     timeout: Duration,
-    get_trade_message: GetTradeMessage<TCredentials, TState, TTradeRequest, TTransport::MessageDto>,
-    get_trade_response: fn(TTransport::MessageDto) -> StockTrekResult<TTradeResponse>,
+    trade_request_to_message: TradeRequestToMessage<TTradeRequest, TUnsignedMessage>,
+    to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
+    deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawResponse>,
+    filter_reply: FilterReply<TRawResponse, TTradeResponse>,
 }
 
-impl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, TTransport>
-    MessageLegImpl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, TTransport>
+impl<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TRawResponse, TTradeResponse>
+    MessageLegImpl<
+        TTransport,
+        TTradeRequest,
+        TUnsignedMessage,
+        TSignedMessage,
+        TRawResponse,
+        TTradeResponse,
+    >
 where
-    TTransports: Sync + 'static,
-    TCredentials: Sync + 'static,
-    TState: Default + Sync + 'static,
-    TTradeRequest: Sync + 'static,
-    TTradeResponse: 'static,
-    TTransport: TransportTrait + 'static,
+    TTransport: TransportTrait + ?Sized + 'static,
+    TTradeRequest: Send + Sync + 'static,
+    TUnsignedMessage: Send + Sync + 'static,
+    TSignedMessage: Send + Sync + 'static,
+    TRawResponse: Send + Sync + 'static,
+    TTradeResponse: Send + Sync + 'static,
 {
     pub fn new(
-        get_transport: fn(transports: &TTransports) -> &TTransport,
+        transport: Arc<TTransport>,
         timeout: Duration,
-        get_trade_message: GetTradeMessage<
-            TCredentials,
-            TState,
-            TTradeRequest,
-            TTransport::MessageDto,
-        >,
-        get_trade_response: fn(TTransport::MessageDto) -> StockTrekResult<TTradeResponse>,
-    ) -> MessageLeg<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> {
+        trade_request_to_message: TradeRequestToMessage<TTradeRequest, TUnsignedMessage>,
+        to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
+        deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawResponse>,
+        filter_reply: FilterReply<TRawResponse, TTradeResponse>,
+    ) -> MessageLeg<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+    {
         Box::new(Self {
-            get_transport,
+            transport,
             timeout,
-            get_trade_message,
-            get_trade_response,
+            trade_request_to_message,
+            to_dto,
+            deserialize_reply,
+            filter_reply,
         })
     }
 }
 
 #[async_trait]
-impl<TTransports, TState, TCredentials, TTradeRequest, TTradeResponse, TTransport>
-    MessageLegTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-    for MessageLegImpl<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse, TTransport>
+impl<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TRawResponse, TTradeResponse>
+    MessageLegTrait<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+    for MessageLegImpl<
+        TTransport,
+        TTradeRequest,
+        TUnsignedMessage,
+        TSignedMessage,
+        TRawResponse,
+        TTradeResponse,
+    >
 where
-    TTransports: Sync,
-    TCredentials: Sync,
-    TState: Default + Sync,
-    TTradeRequest: Sync,
-    TTransport: TransportTrait + 'static,
+    TTransport: TransportTrait + Sync + ?Sized,
+    TTradeRequest: Send + Sync,
+    TUnsignedMessage: Send + Sync,
+    TSignedMessage: Send + Sync,
+    TRawResponse: Send + Sync,
 {
     async fn send_trade_request(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: &TState,
-        trade_request: &TTradeRequest,
+        preferences: &Preferences,
+        tickers: &BiMap<AssetId, String>,
+        trade_request: TTradeRequest,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<TTradeResponse> {
-        let transport = (self.get_transport)(transports);
-        let message = (self.get_trade_message)(credentials, state, trade_request)?;
-        let reply = transport
-            .send(message, self.timeout)
-            .await
-            .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;
-        (self.get_trade_response)(reply)
+        let unsigned = (self.trade_request_to_message)(preferences, tickers, trade_request)?;
+        let signed = signer.sign(unsigned)?;
+        let message = (self.to_dto)(&signed)?;
+        let reply = self.transport.send(message, self.timeout).await?;
+        let deserialized_reply = (self.deserialize_reply)(reply)?;
+        (self.filter_reply)(deserialized_reply)
     }
 }

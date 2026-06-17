@@ -1,82 +1,99 @@
-use crate::transports::transport::TransportTrait;
+use crate::{
+    functions::{CreateAuthMessage, CreateSigner, DeserializeReply, FilterReply, MessageToDto},
+    sign::signer::Signer,
+    transports::transport::TransportTrait,
+};
 use async_trait::async_trait;
 use chrono::Duration;
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
-};
+use std::sync::Arc;
+use stock_trek::error::result::StockTrekResult;
 
-pub type AuthenticateLeg<TTransports, TCredentials, TState> =
-    Box<dyn AuthenticateLegTrait<TTransports, TCredentials, TState>>;
+pub type AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage> =
+    Box<dyn AuthenticateLegTrait<TTransport, TUnsignedMessage, TSignedMessage>>;
 
 #[async_trait]
-pub trait AuthenticateLegTrait<TTransports, TCredentials, TState>: Send + Sync
+pub trait AuthenticateLegTrait<TTransport, TUnsignedMessage, TSignedMessage>: Send + Sync
 where
-    TState: Default,
+    TTransport: TransportTrait + ?Sized,
 {
     async fn do_leg(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: TState,
-    ) -> StockTrekResult<TState>;
+        signer: Signer<TUnsignedMessage, TSignedMessage>,
+    ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>>;
 }
 
-pub struct AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
-where
-    TAuthTransport: TransportTrait,
+pub struct AuthenticateLegImpl<
+    TTransport,
+    TUnsignedMessage,
+    TSignedMessage,
+    TRawReply,
+    TAuthentication,
+> where
+    TTransport: TransportTrait + ?Sized,
 {
-    get_transport: fn(transports: &TTransports) -> &TAuthTransport,
+    transport: Arc<TTransport>,
     timeout: Duration,
-    get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
-    update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
+    create_auth_message: CreateAuthMessage<TUnsignedMessage>,
+    to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
+    deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawReply>,
+    filter_reply: FilterReply<TRawReply, TAuthentication>,
+    create_signer: CreateSigner<TAuthentication, TUnsignedMessage, TSignedMessage>,
 }
 
-impl<TTransports, TCredentials, TState, TAuthTransport>
-    AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+impl<TTransport, TUnsignedMessage, TSignedMessage, TRawReply, TAuthentication>
+    AuthenticateLegImpl<TTransport, TUnsignedMessage, TSignedMessage, TRawReply, TAuthentication>
 where
-    TTransports: Sync + 'static,
-    TCredentials: Sync + 'static,
-    TState: Default + Send + 'static,
-    TAuthTransport: TransportTrait + 'static,
+    TTransport: TransportTrait + ?Sized + 'static,
+    TUnsignedMessage: Send + Sync + 'static,
+    TSignedMessage: Send + Sync + 'static,
+    TRawReply: Send + Sync + 'static,
+    TAuthentication: Send + Sync + 'static,
 {
     pub fn new(
-        get_transport: fn(transports: &TTransports) -> &TAuthTransport,
+        transport: Arc<TTransport>,
         timeout: Duration,
-        get_auth_message: fn(&TAuthTransport, &TCredentials, &TState) -> TAuthTransport::MessageDto,
-        update_state: fn(TAuthTransport::MessageDto, state: TState) -> StockTrekResult<TState>,
-    ) -> AuthenticateLeg<TTransports, TCredentials, TState> {
+        create_auth_message: CreateAuthMessage<TUnsignedMessage>,
+        to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
+        deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawReply>,
+        filter_reply: FilterReply<TRawReply, TAuthentication>,
+        create_signer: CreateSigner<TAuthentication, TUnsignedMessage, TSignedMessage>,
+    ) -> AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage> {
         Box::new(Self {
-            get_transport,
+            transport,
             timeout,
-            get_auth_message,
-            update_state,
+            create_auth_message,
+            to_dto,
+            deserialize_reply,
+            filter_reply,
+            create_signer,
         })
     }
 }
 
 #[async_trait]
-impl<TTransports, TCredentials, TState, TAuthTransport>
-    AuthenticateLegTrait<TTransports, TCredentials, TState>
-    for AuthenticateLegImpl<TTransports, TCredentials, TState, TAuthTransport>
+impl<TTransport, TUnsignedMessage, TSignedMessage, TRawReply, TAuthentication>
+    AuthenticateLegTrait<TTransport, TUnsignedMessage, TSignedMessage>
+    for AuthenticateLegImpl<
+        TTransport,
+        TUnsignedMessage,
+        TSignedMessage,
+        TRawReply,
+        TAuthentication,
+    >
 where
-    TTransports: Sync,
-    TCredentials: Sync,
-    TState: Default + Send,
-    TAuthTransport: TransportTrait + 'static,
+    TTransport: TransportTrait + Send + Sync + ?Sized,
+    TUnsignedMessage: Send + Sync,
+    TSignedMessage: Send + Sync,
 {
     async fn do_leg(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: TState,
-    ) -> StockTrekResult<TState> {
-        let transport = (self.get_transport)(transports);
-        let auth_message = (self.get_auth_message)(transport, credentials, &state);
-        let reply = transport
-            .send(auth_message, self.timeout)
-            .await
-            .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;
-        (self.update_state)(reply, state)
+        signer: Signer<TUnsignedMessage, TSignedMessage>,
+    ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>> {
+        let signed_auth_message = signer.sign((self.create_auth_message)())?;
+        let message = (self.to_dto)(&signed_auth_message)?;
+        let reply_dto = self.transport.send(message, self.timeout).await?;
+        let deserialized_reply = (self.deserialize_reply)(reply_dto)?;
+        let authentication = (self.filter_reply)(deserialized_reply)?;
+        Ok((self.create_signer)(&authentication))
     }
 }

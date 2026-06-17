@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
+bimap = "0.6.3"
 bs58 = "0.5.1"
 chrono = "0.4.44"
 data-encoding = "2.11.0"
@@ -14,9 +15,13 @@ p256 = "0.13"
 p384 = "0.13"
 rust_decimal = "1.42.0"
 secrecy = "0.10.3"
+serde = "1.0.228"
+serde_json = "1.0.150"
+serde_urlencoded = "0.7.1"
 sha2 = "0.10"
-stock-trek = "0.8.7"
+stock-trek = "0.8.13"
 strum = "0.28.0"
+uuid = { version = "1.23.3", features = ["v4"] }
 
 [lints.clippy]
 new_ret_no_self = "allow"

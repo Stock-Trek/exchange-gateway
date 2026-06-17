@@ -1,25 +1,25 @@
+use crate::{cex::increment_sizes::IncrementSizes, sign::signer::Signer};
 use async_trait::async_trait;
-use stock_trek::{error::result::StockTrekResult, preferences::Preferences};
+use std::collections::HashMap;
+use stock_trek::{
+    cex::trading_pair::TradingPair, error::result::StockTrekResult, preferences::Preferences,
+};
 
-pub type ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> =
-    Box<dyn ExchangeSpecTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>>;
+pub type ExchangeSpec<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
+    Box<dyn ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>>;
 
 #[async_trait]
-pub trait ExchangeSpecTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-where
-    TState: Default,
-{
+pub trait ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
+    async fn increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>>;
     async fn authenticate(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-    ) -> StockTrekResult<TState>;
+        initial_auth_leg_signer: Signer<TUnsignedMessage, TSignedMessage>,
+    ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>>;
     async fn send_trade_request(
         &self,
-        transports: &TTransports,
-        credentials: &TCredentials,
-        state: &TState,
         preferences: &Preferences,
         trade_request: TTradeRequest,
+        increments: &HashMap<TradingPair, IncrementSizes>,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<TTradeResponse>;
 }

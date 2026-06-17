@@ -9,6 +9,12 @@ pub struct IncrementSizes {
 }
 
 impl IncrementSizes {
+    pub fn new(tick_size: Decimal, lot_size: Decimal) -> Self {
+        Self {
+            tick_size,
+            lot_size,
+        }
+    }
     pub fn to_valid_tick(&self, tick: f64, strategy: RoundingStrategy) -> Decimal {
         Self::to_valid_decimal(tick, self.tick_size, strategy)
     }

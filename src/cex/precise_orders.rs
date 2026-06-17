@@ -10,12 +10,7 @@ use stock_trek::{
         order_quantity::OrderQuantity,
         order_request::OrderRequest,
         order_trigger_direction::OrderTriggerDirection,
-        orders::{
-            one_cancels_other::OneCancelsOtherOrderGeneric,
-            one_triggers_oco::OneTriggersOcoOrderGeneric,
-            one_triggers_other::OneTriggersOtherOrderGeneric,
-            single::{SingleOrder, SingleOrderGeneric},
-        },
+        orders::single::{SingleOrder, SingleOrderGeneric},
         trading_pair::TradingPair,
     },
     error::{
@@ -34,31 +29,6 @@ impl PreciseOrders {
         rounding: &Rounding,
     ) -> StockTrekResult<OrderRequest<AssetId, Decimal>> {
         match order_request {
-            OrderRequest::OneCancelsOther(oco) => {
-                let primary = self.precise_single_order(oco.primary, increments, rounding)?;
-                let secondary = self.precise_single_order(oco.secondary, increments, rounding)?;
-                let precise = OneCancelsOtherOrderGeneric { primary, secondary };
-                Ok(OrderRequest::OneCancelsOther(precise))
-            }
-            OrderRequest::OneTriggersOther(oco) => {
-                let primary = self.precise_single_order(oco.primary, increments, rounding)?;
-                let secondary = self.precise_single_order(oco.secondary, increments, rounding)?;
-                let precise = OneTriggersOtherOrderGeneric { primary, secondary };
-                Ok(OrderRequest::OneTriggersOther(precise))
-            }
-            OrderRequest::OneTriggersOco(oco) => {
-                let primary = self.precise_single_order(oco.primary, increments, rounding)?;
-                let oco_primary =
-                    self.precise_single_order(oco.oco_order.primary, increments, rounding)?;
-                let oco_secondary =
-                    self.precise_single_order(oco.oco_order.secondary, increments, rounding)?;
-                let oco_order = OneCancelsOtherOrderGeneric {
-                    primary: oco_primary,
-                    secondary: oco_secondary,
-                };
-                let precise = OneTriggersOcoOrderGeneric { primary, oco_order };
-                Ok(OrderRequest::OneTriggersOco(precise))
-            }
             OrderRequest::Single(single) => {
                 let precise = self.precise_single_order(single, increments, rounding)?;
                 Ok(OrderRequest::Single(precise))
@@ -75,7 +45,7 @@ impl PreciseOrders {
             activation,
             base,
             constraints,
-            intent,
+            order_tag,
             pricing,
             quantity,
             quote,
@@ -147,7 +117,7 @@ impl PreciseOrders {
             activation,
             base,
             constraints,
-            intent,
+            order_tag,
             pricing,
             quantity,
             quote,

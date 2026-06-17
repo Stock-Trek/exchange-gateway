@@ -1,13 +1,13 @@
 use crate::exchange_spec::ExchangeSpec;
+use stock_trek::error::result::StockTrekResult;
 
-pub type SpecCreator<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse> =
-    Box<dyn SpecCreatorTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>>;
+pub type SpecCreator<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
+    Box<dyn SpecCreatorTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>>;
 
-pub trait SpecCreatorTrait<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>
-where
-    TState: Default,
-{
-    fn create_spec(
-        &self,
-    ) -> ExchangeSpec<TTransports, TCredentials, TState, TTradeRequest, TTradeResponse>;
+pub trait SpecCreatorTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
+    fn into_spec(
+        self,
+    ) -> StockTrekResult<
+        ExchangeSpec<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>,
+    >;
 }
