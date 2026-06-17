@@ -26,7 +26,6 @@ use stock_trek::{
         asset_id::AssetId,
         capability::{CexCapability, QuoteQuantityCexCapability},
         cex_preferences::CexPreferences,
-        order_id::OrderId,
         order_pricing::OrderPricing,
         order_quantity::OrderQuantity,
         order_request::OrderRequest,
@@ -365,7 +364,6 @@ impl
             credentials,
             transport,
         } = self;
-        let transport: Arc<dyn WebsocketTransportTrait> = Arc::from(transport);
         Ok(CexSpec::new(
             capabilities(),
             request_weights(),
@@ -506,14 +504,13 @@ fn to_create_auth_message(api_key: String) -> CreateAuthMessage<UnsignedMessageT
             apiKey: api_key.clone(),
             timestamp,
         };
-        let message = UnsignedMessageToBinance {
+        UnsignedMessageToBinance {
             metadata: MetadataToBinance {
                 id,
                 method: MethodName::Logon,
             },
             params: Some(UnsignedMessageToBinanceParams::LogonParams(params)),
-        };
-        message
+        }
     })
 }
 
@@ -663,7 +660,7 @@ fn filter_reply_session_authentication(reply: MessageFromBinance) -> StockTrekRe
 
 fn filter_reply_order_placed(reply: MessageFromBinance) -> StockTrekResult<OrderResponse> {
     let MessageFromBinance {
-        id,
+        id: _id,
         result,
         error,
         status,
@@ -681,7 +678,6 @@ fn filter_reply_order_placed(reply: MessageFromBinance) -> StockTrekResult<Order
     }
     match result {
         MessageFromBinanceResult::OrderPlaced(order_placed) => Ok(OrderResponse {
-            id: OrderId(id),
             tag: OrderTag(order_placed.clientOrderId),
         }),
         _ => Err(StockTrekError::General(GeneralError::Message(

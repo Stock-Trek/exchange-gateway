@@ -123,7 +123,7 @@ where
             &preferences.cex,
         )?;
         self.message_leg
-            .send_trade_request(preferences, &self.tickers, precise_trade_request, &signer)
+            .send_trade_request(preferences, &self.tickers, precise_trade_request, signer)
             .await
     }
 }

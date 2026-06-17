@@ -26,32 +26,23 @@ impl SemanticChecker {
     ) -> StockTrekResult<()> {
         match order_request {
             OrderRequest::Single(single_order) => {
-                match single_order.quantity {
-                    OrderQuantity::OfQuote { .. } => {
-                        match single_order.pricing {
-                            OrderPricing::Limit { .. } => {
-                                self.check_capability(
-                                    capabilities,
-                                    &CexCapability::QuoteQuantity(
-                                        capability::QuoteQuantityCexCapability::AllowLimitPricing,
-                                    ),
-                                )?;
-                            }
-                            _ => {}
-                        }
-                        match single_order.activation {
-                            OrderActivation::PriceTriggered { .. } => {
-                                self.check_capability(
-                                    capabilities,
-                                    &CexCapability::QuoteQuantity(
-                                        capability::QuoteQuantityCexCapability::AllowTriggeredTiming,
-                                    ),
-                                )?;
-                            }
-                            _ => {}
-                        }
+                if let OrderQuantity::OfQuote { .. } = single_order.quantity {
+                    if let OrderPricing::Limit { .. } = single_order.pricing {
+                        self.check_capability(
+                            capabilities,
+                            &CexCapability::QuoteQuantity(
+                                capability::QuoteQuantityCexCapability::AllowLimitPricing,
+                            ),
+                        )?;
                     }
-                    _ => {}
+                    if let OrderActivation::PriceTriggered { .. } = single_order.activation {
+                        self.check_capability(
+                            capabilities,
+                            &CexCapability::QuoteQuantity(
+                                capability::QuoteQuantityCexCapability::AllowTriggeredTiming,
+                            ),
+                        )?;
+                    }
                 }
                 Ok(())
             }
