@@ -8,6 +8,7 @@ use crate::{
     functions::{CreateAuthMessage, CreateSigner, SignatureAppender},
     increments_leg::{IncrementsLeg, IncrementsLegImpl},
     message_leg::{MessageLeg, MessageLegImpl},
+    messenger::MessengerImpl,
     sign::{
         encode::byte_encoding::ByteEncoding,
         encrypt::{data_signer::DataSigner, signing_algorithm::SigningAlgorithm},
@@ -50,21 +51,21 @@ pub struct UnsignedMessageToBinance {
     params: Option<UnsignedMessageToBinanceParams>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SignedMessageToBinance {
     #[serde(flatten)]
     metadata: MetadataToBinance,
     params: Option<SignedMessageToBinanceParams>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct MetadataToBinance {
     id: String,
     method: MethodName,
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum MethodName {
     #[serde(rename = "exchangeInfo")]
     ExchangeInfo,
@@ -80,7 +81,7 @@ pub enum MethodName {
     Time,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SignedMessageToBinanceParams {
     #[serde(flatten)]
     signature: Option<Signature>,
@@ -89,13 +90,13 @@ pub struct SignedMessageToBinanceParams {
 }
 
 #[allow(non_snake_case)]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Signature {
     apiKey: String,
     signature: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(untagged)]
 pub enum UnsignedMessageToBinanceParams {
     LogonParams(UnsignedLogonParams),
@@ -106,21 +107,21 @@ pub enum UnsignedMessageToBinanceParams {
 }
 
 #[allow(non_snake_case)]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct UnsignedLogonParams {
     apiKey: String,
     timestamp: i64,
 }
 
 #[allow(non_snake_case)]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ExchangeInfoParams {
     permissions: Vec<String>,
     symbolStatus: String,
 }
 
 #[allow(non_snake_case)]
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct UnsignedSingleOrderParams {
     icebergQty: Option<Decimal>,
     newClientOrderId: String,
@@ -145,7 +146,7 @@ pub struct UnsignedSingleOrderParams {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum NewOrderRespType {
     ACK,
     RESULT,
@@ -153,7 +154,7 @@ pub enum NewOrderRespType {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum OrderType {
     LIMIT,
     LIMIT_MAKER,
@@ -165,26 +166,26 @@ pub enum OrderType {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum PegPriceType {
     PRIMARY_PEG,
     MARKET_PEG,
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum PegOffsetType {
     PRICE_LEVEL,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum Side {
     BUY,
     SELL,
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum SelfTradeProtection {
     EXPIRE_BOTH,
     EXPIRE_MAKER,
@@ -195,7 +196,7 @@ pub enum SelfTradeProtection {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub enum TimeInForce {
     FOK,
     GTC,
@@ -398,15 +399,14 @@ fn tickers() -> BiMap<AssetId, String> {
 
 fn increments_leg(transport: Arc<dyn WebsocketTransportTrait>) -> IncrementsLeg {
     let timeout = Duration::seconds(30);
-    IncrementsLegImpl::new(
+    let messenger = MessengerImpl::new(
         transport,
         timeout,
-        increments_message(),
         to_dto,
         deserialize_reply,
         filter_reply_exchange_info,
-        to_increments,
-    )
+    );
+    IncrementsLegImpl::new(increments_message(), messenger, to_increments)
 }
 
 fn authenticate_legs(
@@ -417,23 +417,20 @@ fn authenticate_legs(
     if use_session {
         let timeout = Duration::seconds(20);
         let create_auth_message = to_create_auth_message(credentials.api_key.clone());
-        let create_signer: CreateSigner<(), UnsignedMessageToBinance, SignedMessageToBinance> =
-            to_create_signer(credentials)?;
-        let authentication_leg = AuthenticateLegImpl::<
-            dyn WebsocketTransportTrait,
-            UnsignedMessageToBinance,
-            SignedMessageToBinance,
-            MessageFromBinance,
-            (),
-        >::new(
+        let messenger = MessengerImpl::new(
             transport,
             timeout,
-            create_auth_message,
             to_dto,
             deserialize_reply,
             filter_reply_session_authentication,
-            create_signer,
         );
+        let create_signer: CreateSigner<(), UnsignedMessageToBinance, SignedMessageToBinance> =
+            to_create_signer(credentials)?;
+        let authentication_leg = AuthenticateLegImpl::<
+            UnsignedMessageToBinance,
+            SignedMessageToBinance,
+            (),
+        >::new(create_auth_message, messenger, create_signer);
         Ok(vec![authentication_leg])
     } else {
         Ok(vec![])
@@ -449,21 +446,19 @@ fn message_leg(
     OrderResponse,
 > {
     let timeout = Duration::seconds(10);
-    MessageLegImpl::<
-        dyn WebsocketTransportTrait,
-        OrderRequest<AssetId, Decimal>,
-        UnsignedMessageToBinance,
-        SignedMessageToBinance,
-        MessageFromBinance,
-        OrderResponse,
-    >::new(
+    let messenger = MessengerImpl::new(
         transport,
         timeout,
-        trade_request_to_message,
         to_dto,
         deserialize_reply,
         filter_reply_order_placed,
-    )
+    );
+    MessageLegImpl::<
+        OrderRequest<AssetId, Decimal>,
+        UnsignedMessageToBinance,
+        SignedMessageToBinance,
+        OrderResponse,
+    >::new(trade_request_to_message, messenger)
 }
 
 fn increments_message() -> SignedMessageToBinance {
