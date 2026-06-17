@@ -396,9 +396,7 @@ fn tickers() -> BiMap<AssetId, String> {
     tickers
 }
 
-fn increments_leg(
-    transport: Arc<dyn WebsocketTransportTrait>,
-) -> IncrementsLeg<dyn WebsocketTransportTrait> {
+fn increments_leg(transport: Arc<dyn WebsocketTransportTrait>) -> IncrementsLeg {
     let timeout = Duration::seconds(30);
     IncrementsLegImpl::new(
         transport,
@@ -415,15 +413,7 @@ fn authenticate_legs(
     credentials: ApiKeyCredentials,
     transport: Arc<dyn WebsocketTransportTrait>,
     use_session: bool,
-) -> StockTrekResult<
-    Vec<
-        AuthenticateLeg<
-            dyn WebsocketTransportTrait,
-            UnsignedMessageToBinance,
-            SignedMessageToBinance,
-        >,
-    >,
-> {
+) -> StockTrekResult<Vec<AuthenticateLeg<UnsignedMessageToBinance, SignedMessageToBinance>>> {
     if use_session {
         let timeout = Duration::seconds(20);
         let create_auth_message = to_create_auth_message(credentials.api_key.clone());
@@ -453,7 +443,6 @@ fn authenticate_legs(
 fn message_leg(
     transport: Arc<dyn WebsocketTransportTrait>,
 ) -> MessageLeg<
-    dyn WebsocketTransportTrait,
     OrderRequest<AssetId, Decimal>,
     UnsignedMessageToBinance,
     SignedMessageToBinance,

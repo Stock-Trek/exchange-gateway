@@ -8,14 +8,11 @@ use chrono::Duration;
 use std::sync::Arc;
 use stock_trek::error::result::StockTrekResult;
 
-pub type AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage> =
-    Box<dyn AuthenticateLegTrait<TTransport, TUnsignedMessage, TSignedMessage>>;
+pub type AuthenticateLeg<TUnsignedMessage, TSignedMessage> =
+    Box<dyn AuthenticateLegTrait<TUnsignedMessage, TSignedMessage>>;
 
 #[async_trait]
-pub trait AuthenticateLegTrait<TTransport, TUnsignedMessage, TSignedMessage>: Send + Sync
-where
-    TTransport: TransportTrait + ?Sized,
-{
+pub trait AuthenticateLegTrait<TUnsignedMessage, TSignedMessage>: Send + Sync {
     async fn do_leg(
         &self,
         signer: Signer<TUnsignedMessage, TSignedMessage>,
@@ -57,7 +54,7 @@ where
         deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawReply>,
         filter_reply: FilterReply<TRawReply, TAuthentication>,
         create_signer: CreateSigner<TAuthentication, TUnsignedMessage, TSignedMessage>,
-    ) -> AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage> {
+    ) -> AuthenticateLeg<TUnsignedMessage, TSignedMessage> {
         Box::new(Self {
             transport,
             timeout,
@@ -72,7 +69,7 @@ where
 
 #[async_trait]
 impl<TTransport, TUnsignedMessage, TSignedMessage, TRawReply, TAuthentication>
-    AuthenticateLegTrait<TTransport, TUnsignedMessage, TSignedMessage>
+    AuthenticateLegTrait<TUnsignedMessage, TSignedMessage>
     for AuthenticateLegImpl<
         TTransport,
         TUnsignedMessage,

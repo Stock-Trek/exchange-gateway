@@ -11,26 +11,12 @@ use stock_trek::{
     cex::asset_id::AssetId, error::result::StockTrekResult, preferences::Preferences,
 };
 
-pub type MessageLeg<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
-    Box<
-        dyn MessageLegTrait<
-                TTransport,
-                TTradeRequest,
-                TUnsignedMessage,
-                TSignedMessage,
-                TTradeResponse,
-            >,
-    >;
+pub type MessageLeg<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
+    Box<dyn MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>>;
 
 #[async_trait]
-pub trait MessageLegTrait<
-    TTransport,
-    TTradeRequest,
-    TUnsignedMessage,
-    TSignedMessage,
-    TTradeResponse,
->: Send + Sync where
-    TTransport: TransportTrait + ?Sized,
+pub trait MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>:
+    Send + Sync
 {
     async fn send_trade_request(
         &self,
@@ -83,8 +69,7 @@ where
         to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
         deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawResponse>,
         filter_reply: FilterReply<TRawResponse, TTradeResponse>,
-    ) -> MessageLeg<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
-    {
+    ) -> MessageLeg<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
         Box::new(Self {
             transport,
             timeout,
@@ -98,7 +83,7 @@ where
 
 #[async_trait]
 impl<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TRawResponse, TTradeResponse>
-    MessageLegTrait<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+    MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
     for MessageLegImpl<
         TTransport,
         TTradeRequest,

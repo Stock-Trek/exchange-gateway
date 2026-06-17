@@ -8,13 +8,10 @@ use chrono::Duration;
 use std::{collections::HashMap, sync::Arc};
 use stock_trek::{cex::trading_pair::TradingPair, error::result::StockTrekResult};
 
-pub type IncrementsLeg<TTransport> = Box<dyn IncrementsLegTrait<TTransport>>;
+pub type IncrementsLeg = Box<dyn IncrementsLegTrait>;
 
 #[async_trait]
-pub trait IncrementsLegTrait<TTransport>: Send + Sync
-where
-    TTransport: TransportTrait + ?Sized,
-{
+pub trait IncrementsLegTrait: Send + Sync {
     async fn get_increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>>;
 }
 
@@ -47,7 +44,7 @@ where
         deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawReply>,
         filter_reply: FilterReply<TRawReply, TIncrements>,
         to_increments: ToIncrements<TIncrements>,
-    ) -> IncrementsLeg<TTransport> {
+    ) -> IncrementsLeg {
         Box::new(Self {
             transport,
             timeout,
@@ -61,7 +58,7 @@ where
 }
 
 #[async_trait]
-impl<TTransport, TMessage, TRawReply, TIncrements> IncrementsLegTrait<TTransport>
+impl<TTransport, TMessage, TRawReply, TIncrements> IncrementsLegTrait
     for IncrementsLegImpl<TTransport, TMessage, TRawReply, TIncrements>
 where
     TTransport: TransportTrait + Send + Sync + ?Sized,

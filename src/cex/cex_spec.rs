@@ -8,7 +8,6 @@ use crate::{
     increments_leg::IncrementsLeg,
     message_leg::MessageLeg,
     sign::signer::Signer,
-    transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
 use bimap::BiMap;
@@ -23,29 +22,19 @@ use stock_trek::{
     preferences::Preferences,
 };
 
-pub struct CexSpec<TTransport, TUnsignedMessage, TSignedMessage>
-where
-    TTransport: TransportTrait + ?Sized,
-{
+pub struct CexSpec<TUnsignedMessage, TSignedMessage> {
     capabilities: Vec<CexCapability>,
     #[allow(unused)]
     request_weights: RequestWeights,
     tickers: BiMap<AssetId, String>,
-    increments_leg: IncrementsLeg<TTransport>,
-    authenticate_legs: Vec<AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage>>,
-    message_leg: MessageLeg<
-        TTransport,
-        OrderRequest<AssetId, Decimal>,
-        TUnsignedMessage,
-        TSignedMessage,
-        OrderResponse,
-    >,
+    increments_leg: IncrementsLeg,
+    authenticate_legs: Vec<AuthenticateLeg<TUnsignedMessage, TSignedMessage>>,
+    message_leg:
+        MessageLeg<OrderRequest<AssetId, Decimal>, TUnsignedMessage, TSignedMessage, OrderResponse>,
 }
 
-impl<TTransport, TUnsignedMessage, TSignedMessage>
-    CexSpec<TTransport, TUnsignedMessage, TSignedMessage>
+impl<TUnsignedMessage, TSignedMessage> CexSpec<TUnsignedMessage, TSignedMessage>
 where
-    TTransport: TransportTrait + Send + Sync + ?Sized + 'static,
     TUnsignedMessage: 'static,
     TSignedMessage: 'static,
 {
@@ -53,10 +42,9 @@ where
         capabilities: Vec<CexCapability>,
         request_weights: RequestWeights,
         tickers: BiMap<AssetId, String>,
-        increments_leg: IncrementsLeg<TTransport>,
-        authenticate_legs: Vec<AuthenticateLeg<TTransport, TUnsignedMessage, TSignedMessage>>,
+        increments_leg: IncrementsLeg,
+        authenticate_legs: Vec<AuthenticateLeg<TUnsignedMessage, TSignedMessage>>,
         message_leg: MessageLeg<
-            TTransport,
             OrderRequest<AssetId, Decimal>,
             TUnsignedMessage,
             TSignedMessage,
@@ -76,11 +64,9 @@ where
 }
 
 #[async_trait]
-impl<TTransport, TUnsignedMessage, TSignedMessage>
+impl<TUnsignedMessage, TSignedMessage>
     ExchangeSpecTrait<OrderRequest<AssetId, f64>, TUnsignedMessage, TSignedMessage, OrderResponse>
-    for CexSpec<TTransport, TUnsignedMessage, TSignedMessage>
-where
-    TTransport: TransportTrait + Send + Sync + ?Sized,
+    for CexSpec<TUnsignedMessage, TSignedMessage>
 {
     async fn increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>> {
         self.increments_leg.get_increments().await
