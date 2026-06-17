@@ -7,6 +7,7 @@ pub mod exchange_spec;
 pub mod functions;
 pub mod increments_leg;
 pub mod message_leg;
+pub mod messenger;
 pub mod rate_limit;
 pub mod sign;
 pub mod spec_creator;

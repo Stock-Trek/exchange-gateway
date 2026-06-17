@@ -1,12 +1,6 @@
-use crate::{
-    functions::{DeserializeReply, FilterReply, MessageToDto, TradeRequestToMessage},
-    sign::signer::Signer,
-    transports::transport::TransportTrait,
-};
+use crate::{functions::TradeRequestToMessage, messenger::Messenger, sign::signer::Signer};
 use async_trait::async_trait;
 use bimap::BiMap;
-use chrono::Duration;
-use std::sync::Arc;
 use stock_trek::{
     cex::asset_id::AssetId, error::result::StockTrekResult, preferences::Preferences,
 };
@@ -27,77 +21,39 @@ pub trait MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTrad
     ) -> StockTrekResult<TTradeResponse>;
 }
 
-pub struct MessageLegImpl<
-    TTransport,
-    TTradeRequest,
-    TUnsignedMessage,
-    TSignedMessage,
-    TRawResponse,
-    TTradeResponse,
-> where
-    TTransport: TransportTrait + ?Sized,
-{
-    transport: Arc<TTransport>,
-    timeout: Duration,
+pub struct MessageLegImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
     trade_request_to_message: TradeRequestToMessage<TTradeRequest, TUnsignedMessage>,
-    to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
-    deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawResponse>,
-    filter_reply: FilterReply<TRawResponse, TTradeResponse>,
+    messenger: Messenger<TSignedMessage, TTradeResponse>,
 }
 
-impl<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TRawResponse, TTradeResponse>
-    MessageLegImpl<
-        TTransport,
-        TTradeRequest,
-        TUnsignedMessage,
-        TSignedMessage,
-        TRawResponse,
-        TTradeResponse,
-    >
+impl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+    MessageLegImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
 where
-    TTransport: TransportTrait + ?Sized + 'static,
     TTradeRequest: Send + Sync + 'static,
     TUnsignedMessage: Send + Sync + 'static,
     TSignedMessage: Send + Sync + 'static,
-    TRawResponse: Send + Sync + 'static,
     TTradeResponse: Send + Sync + 'static,
 {
     pub fn new(
-        transport: Arc<TTransport>,
-        timeout: Duration,
         trade_request_to_message: TradeRequestToMessage<TTradeRequest, TUnsignedMessage>,
-        to_dto: MessageToDto<TSignedMessage, TTransport::MessageDto>,
-        deserialize_reply: DeserializeReply<TTransport::MessageDto, TRawResponse>,
-        filter_reply: FilterReply<TRawResponse, TTradeResponse>,
+        messenger: Messenger<TSignedMessage, TTradeResponse>,
     ) -> MessageLeg<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
         Box::new(Self {
-            transport,
-            timeout,
             trade_request_to_message,
-            to_dto,
-            deserialize_reply,
-            filter_reply,
+            messenger,
         })
     }
 }
 
 #[async_trait]
-impl<TTransport, TTradeRequest, TUnsignedMessage, TSignedMessage, TRawResponse, TTradeResponse>
+impl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
     MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
-    for MessageLegImpl<
-        TTransport,
-        TTradeRequest,
-        TUnsignedMessage,
-        TSignedMessage,
-        TRawResponse,
-        TTradeResponse,
-    >
+    for MessageLegImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
 where
-    TTransport: TransportTrait + Sync + ?Sized,
     TTradeRequest: Send + Sync,
     TUnsignedMessage: Send + Sync,
     TSignedMessage: Send + Sync,
-    TRawResponse: Send + Sync,
+    TTradeResponse: Send + Sync,
 {
     async fn send_trade_request(
         &self,
@@ -108,9 +64,6 @@ where
     ) -> StockTrekResult<TTradeResponse> {
         let unsigned = (self.trade_request_to_message)(preferences, tickers, trade_request)?;
         let signed = signer.sign(unsigned)?;
-        let message = (self.to_dto)(&signed)?;
-        let reply = self.transport.send(message, self.timeout).await?;
-        let deserialized_reply = (self.deserialize_reply)(reply)?;
-        (self.filter_reply)(deserialized_reply)
+        self.messenger.send(signed).await
     }
 }
