@@ -391,9 +391,34 @@ fn request_weights() -> RequestWeights {
 
 fn tickers() -> BiMap<AssetId, String> {
     let mut tickers = BiMap::new();
-    // TODO finish
-    tickers.insert(AssetId::usdc(), "USDC".to_string());
+    tickers.insert(AssetId::aave(), "AAVE".to_string());
+    tickers.insert(AssetId::arbitrum(), "ARB".to_string());
+    tickers.insert(AssetId::avalanche(), "AVAX".to_string());
     tickers.insert(AssetId::bitcoin(), "BTC".to_string());
+    tickers.insert(AssetId::bitcoin_cash(), "BCH".to_string());
+    tickers.insert(AssetId::bnb(), "BNB".to_string());
+    tickers.insert(AssetId::celo(), "CELO".to_string());
+    tickers.insert(AssetId::cosmos(), "ATOM".to_string());
+    tickers.insert(AssetId::cronos(), "CRO".to_string());
+    tickers.insert(AssetId::dai(), "DAI".to_string());
+    tickers.insert(AssetId::dogecoin(), "DOGE".to_string());
+    tickers.insert(AssetId::ethereum(), "ETH".to_string());
+    tickers.insert(AssetId::fantom(), "FTM".to_string());
+    tickers.insert(AssetId::gnosis(), "GNO".to_string());
+    tickers.insert(AssetId::link(), "LINK".to_string());
+    tickers.insert(AssetId::litecoin(), "LTC".to_string());
+    tickers.insert(AssetId::moonbeam(), "GLMR".to_string());
+    tickers.insert(AssetId::near(), "NEAR".to_string());
+    tickers.insert(AssetId::optimism(), "OP".to_string());
+    tickers.insert(AssetId::osmosis(), "OSMO".to_string());
+    tickers.insert(AssetId::polygon(), "POL".to_string());
+    tickers.insert(AssetId::solana(), "SOL".to_string());
+    tickers.insert(AssetId::tron(), "TRX".to_string());
+    tickers.insert(AssetId::uni(), "UNI".to_string());
+    tickers.insert(AssetId::usdc(), "USDC".to_string());
+    tickers.insert(AssetId::usdt(), "USDT".to_string());
+    tickers.insert(AssetId::wbtc(), "WBTC".to_string());
+    tickers.insert(AssetId::weth(), "WETH".to_string());
     tickers
 }
 
