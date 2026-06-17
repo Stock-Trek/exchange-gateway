@@ -105,12 +105,11 @@ impl PreciseOrders {
             },
         };
         let quantity: OrderQuantity<Decimal> = match quantity {
-            // TODO this is probably wrong, uses same lot size for base and quote
             OrderQuantity::OfBase(q) => {
                 OrderQuantity::OfBase(trading_pair_increments.to_valid_lot(q, rounding.quantity))
             }
             OrderQuantity::OfQuote(q) => {
-                OrderQuantity::OfQuote(trading_pair_increments.to_valid_lot(q, rounding.quantity))
+                OrderQuantity::OfQuote(trading_pair_increments.to_valid_quote(q, rounding.quantity))
             }
         };
         Ok(SingleOrderGeneric::<AssetId, Decimal> {
