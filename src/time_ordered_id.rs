@@ -7,9 +7,12 @@ use uuid::Uuid;
 pub struct TimeOrderedId(pub String);
 
 impl TimeOrderedId {
-    pub fn new<T: Hash>(order_request: &T) -> Self {
+    pub fn new<T>(hashable: &T) -> Self
+    where
+        T: Hash,
+    {
         let mut state = DefaultHasher::new();
-        order_request.hash(&mut state);
+        hashable.hash(&mut state);
         let high_bits = Utc::now().timestamp_millis() as u64;
         let low_bits = state.finish();
         let id = Uuid::from_u64_pair(high_bits, low_bits).to_string();
