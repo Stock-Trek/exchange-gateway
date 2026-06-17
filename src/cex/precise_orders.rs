@@ -109,7 +109,7 @@ impl PreciseOrders {
                 OrderQuantity::OfBase(trading_pair_increments.to_valid_lot(q, rounding.quantity))
             }
             OrderQuantity::OfQuote(q) => {
-                OrderQuantity::OfQuote(trading_pair_increments.to_valid_quote(q, rounding.quantity))
+                OrderQuantity::OfQuote(trading_pair_increments.to_valid_lot(q, rounding.quantity))
             }
         };
         Ok(SingleOrderGeneric::<AssetId, Decimal> {

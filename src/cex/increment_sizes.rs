@@ -21,10 +21,6 @@ impl IncrementSizes {
     pub fn to_valid_lot(&self, lot: f64, strategy: RoundingStrategy) -> Decimal {
         Self::to_valid_decimal(lot, self.lot_size, strategy)
     }
-    pub fn to_valid_quote(&self, quote: f64, strategy: RoundingStrategy) -> Decimal {
-        let quote_increment = self.tick_size * self.lot_size;
-        Self::to_valid_decimal(quote, quote_increment, strategy)
-    }
     pub fn to_valid_decimal(value: f64, step: Decimal, strategy: RoundingStrategy) -> Decimal {
         let value_as_decimal = Decimal::from_f64(value).unwrap_or(Decimal::ZERO);
         if step == Decimal::ZERO {
