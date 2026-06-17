@@ -27,6 +27,7 @@ use stock_trek::{
         asset_id::AssetId,
         capability::{CexCapability, QuoteQuantityCexCapability},
         cex_preferences::CexPreferences,
+        order_activation::OrderActivation,
         order_pricing::OrderPricing,
         order_quantity::OrderQuantity,
         order_request::OrderRequest,
@@ -34,6 +35,7 @@ use stock_trek::{
         order_side::OrderSide,
         order_tag::OrderTag,
         order_time_in_force::OrderTimeInForce,
+        order_trigger_direction::OrderTriggerDirection,
         trading_pair::TradingPair,
     },
     error::{
@@ -549,15 +551,13 @@ fn to_binance_params(
                 };
                 #[allow(non_snake_case)]
                 let stopPrice = match single_order_request.activation {
-                    stock_trek::cex::order_activation::OrderActivation::PriceTriggered {
-                        activation_price,
-                        ..
+                    OrderActivation::PriceTriggered {
+                        activation_price, ..
                     } => Some(activation_price),
-                    stock_trek::cex::order_activation::OrderActivation::Trailing {
-                        activation_price,
-                        ..
+                    OrderActivation::Trailing {
+                        activation_price, ..
                     } => Some(activation_price),
-                    stock_trek::cex::order_activation::OrderActivation::Immediate => None,
+                    OrderActivation::Immediate => None,
                 };
                 let symbol = format!("{}{}", base, quote);
                 #[allow(non_snake_case)]
@@ -570,46 +570,30 @@ fn to_binance_params(
                     },
                 };
                 let r#type = match single_order_request.activation {
-                    stock_trek::cex::order_activation::OrderActivation::PriceTriggered {
-                        direction,
-                        ..
-                    } => match direction {
-                        stock_trek::cex::order_trigger_direction::OrderTriggerDirection::Above => {
-                            match single_order_request.pricing {
-                                OrderPricing::Market => OrderType::TAKE_PROFIT,
-                                OrderPricing::Limit { .. } => OrderType::TAKE_PROFIT_LIMIT,
-                            }
-                        }
-                        stock_trek::cex::order_trigger_direction::OrderTriggerDirection::Below => {
-                            match single_order_request.pricing {
-                                OrderPricing::Market => OrderType::STOP_LOSS,
-                                OrderPricing::Limit { .. } => OrderType::STOP_LOSS_LIMIT,
-                            }
-                        }
+                    OrderActivation::PriceTriggered { direction, .. } => match direction {
+                        OrderTriggerDirection::Above => match single_order_request.pricing {
+                            OrderPricing::Market => OrderType::TAKE_PROFIT,
+                            OrderPricing::Limit { .. } => OrderType::TAKE_PROFIT_LIMIT,
+                        },
+                        OrderTriggerDirection::Below => match single_order_request.pricing {
+                            OrderPricing::Market => OrderType::STOP_LOSS,
+                            OrderPricing::Limit { .. } => OrderType::STOP_LOSS_LIMIT,
+                        },
                     },
-                    stock_trek::cex::order_activation::OrderActivation::Trailing {
-                        direction,
-                        ..
-                    } => match direction {
-                        stock_trek::cex::order_trigger_direction::OrderTriggerDirection::Above => {
-                            match single_order_request.pricing {
-                                OrderPricing::Market => OrderType::TAKE_PROFIT,
-                                OrderPricing::Limit { .. } => OrderType::TAKE_PROFIT_LIMIT,
-                            }
-                        }
-                        stock_trek::cex::order_trigger_direction::OrderTriggerDirection::Below => {
-                            match single_order_request.pricing {
-                                OrderPricing::Market => OrderType::STOP_LOSS,
-                                OrderPricing::Limit { .. } => OrderType::STOP_LOSS_LIMIT,
-                            }
-                        }
+                    OrderActivation::Trailing { direction, .. } => match direction {
+                        OrderTriggerDirection::Above => match single_order_request.pricing {
+                            OrderPricing::Market => OrderType::TAKE_PROFIT,
+                            OrderPricing::Limit { .. } => OrderType::TAKE_PROFIT_LIMIT,
+                        },
+                        OrderTriggerDirection::Below => match single_order_request.pricing {
+                            OrderPricing::Market => OrderType::STOP_LOSS,
+                            OrderPricing::Limit { .. } => OrderType::STOP_LOSS_LIMIT,
+                        },
                     },
-                    stock_trek::cex::order_activation::OrderActivation::Immediate => {
-                        match single_order_request.pricing {
-                            OrderPricing::Market => OrderType::MARKET,
-                            OrderPricing::Limit { .. } => OrderType::LIMIT,
-                        }
-                    }
+                    OrderActivation::Immediate => match single_order_request.pricing {
+                        OrderPricing::Market => OrderType::MARKET,
+                        OrderPricing::Limit { .. } => OrderType::LIMIT,
+                    },
                 };
                 let params = UnsignedSingleOrderParams {
                     icebergQty: None,
