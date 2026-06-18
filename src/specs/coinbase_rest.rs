@@ -20,8 +20,8 @@ use bimap::BiMap;
 use chrono::{Duration, Utc};
 use p256::ecdsa::SigningKey;
 use p256::ecdsa::signature::Signer as P256Signer;
-use secrecy::ExposeSecret;
 use rust_decimal::Decimal;
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use stock_trek::{
@@ -610,10 +610,11 @@ struct CoinbaseJwtAuthenticateLeg {
 }
 
 #[async_trait]
-impl crate::authenticate_leg::AuthenticateLegTrait<
-    UnsignedMessageToCoinbase,
-    SignedMessageToCoinbase,
-> for CoinbaseJwtAuthenticateLeg
+impl
+    crate::authenticate_leg::AuthenticateLegTrait<
+        UnsignedMessageToCoinbase,
+        SignedMessageToCoinbase,
+    > for CoinbaseJwtAuthenticateLeg
 {
     async fn do_leg(
         &self,
@@ -666,9 +667,7 @@ struct CoinbaseJwtSigner {
     bearer_token: String,
 }
 
-impl SignerTrait<UnsignedMessageToCoinbase, SignedMessageToCoinbase>
-    for CoinbaseJwtSigner
-{
+impl SignerTrait<UnsignedMessageToCoinbase, SignedMessageToCoinbase> for CoinbaseJwtSigner {
     fn sign(
         &self,
         unsigned: UnsignedMessageToCoinbase,
