@@ -11,17 +11,15 @@ use crate::{
     messenger::MessengerImpl,
     sign::{
         convert_signer::ConvertSigner,
+        jwt::build_coinbase_jwt,
         signer::{Signer, SignerTrait},
     },
     transports::http_transport::{HttpMessageDto, HttpTransportTrait},
 };
 use async_trait::async_trait;
 use bimap::BiMap;
-use chrono::{Duration, Utc};
-use p256::ecdsa::SigningKey;
-use p256::ecdsa::signature::Signer as P256Signer;
+use chrono::Duration;
 use rust_decimal::Decimal;
-use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use stock_trek::{
@@ -561,49 +559,19 @@ fn filter_reply_order_placed(reply: MessageFromCoinbase) -> StockTrekResult<Orde
 
 // ─── JWT authentication ───────────────────────────────────────────────────
 
-/// The unsigned JWT payload for Coinbase Cloud API authentication.
-/// https://docs.cdp.coinbase.com/advanced-trade/docs/rest-api-auth
-#[derive(Serialize)]
-pub struct UnsignedJwtForCoinbase {
-    sub: String,
-    iss: String,
-    #[serde(rename = "aud")]
-    aud: Vec<String>,
-    iat: i64,
-    exp: i64,
-}
-
-/// The full JWT structure before signing (header + payload as base64url-encoded segments).
-pub struct UnsignedJwtMessage {
-    pub jwt_unsigned: String, // "header.payload" in base64url
-}
-
-/// The signed JWT bearer token.
-pub struct JwtToken {
-    pub token: String,
-}
-
 /// Authenticate leg for Coinbase REST API.
 /// Generates a JWT bearer token using the Cloud API credentials (ECDSA P-256 key),
 /// then creates a signer that embeds this token into all subsequent messages.
 fn authenticate_leg(
     credentials: &JwtCredentials,
 ) -> AuthenticateLeg<UnsignedMessageToCoinbase, SignedMessageToCoinbase> {
-    let api_key = credentials.api_key.clone();
-    let signing_key = SigningKey::from_slice(credentials._secret.expose_secret().as_bytes())
-        .expect("Failed to create Coinbase ECDSA P-256 signing key");
+    let credentials = JwtCredentials::new(credentials.api_key.clone(), credentials.secret.clone());
 
-    Box::new(CoinbaseJwtAuthenticateLeg {
-        api_key,
-        signing_key,
-        _secret: credentials._secret.clone(),
-    })
+    Box::new(CoinbaseJwtAuthenticateLeg { credentials })
 }
 
 struct CoinbaseJwtAuthenticateLeg {
-    api_key: String,
-    signing_key: SigningKey,
-    _secret: secrecy::SecretString,
+    credentials: JwtCredentials,
 }
 
 #[async_trait]
@@ -617,43 +585,7 @@ impl
         &self,
         _signer: &Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>,
     ) -> StockTrekResult<Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>> {
-        let now = Utc::now().timestamp();
-        let payload = UnsignedJwtForCoinbase {
-            sub: self.api_key.clone(),
-            iss: "coinbase-cloud".to_string(),
-            aud: vec!["rest.coinbase.com".to_string()],
-            iat: now,
-            exp: now + 120,
-        };
-
-        // Build JWT header: {"alg":"ES256","kid":"<api_key>","typ":"JWT"}
-        let header = serde_json::json!({
-            "alg": "ES256",
-            "kid": self.api_key,
-            "typ": "JWT",
-        });
-
-        // Base64url-encode header and payload
-        let header_b64 = base64url_encode(&serde_json::to_vec(&header).map_err(|e| {
-            StockTrekError::General(GeneralError::Message(format!(
-                "Failed to serialize JWT header: {e}"
-            )))
-        })?);
-        let payload_b64 = base64url_encode(&serde_json::to_vec(&payload).map_err(|e| {
-            StockTrekError::General(GeneralError::Message(format!(
-                "Failed to serialize JWT payload: {e}"
-            )))
-        })?);
-
-        // Sign the "header.payload" string using raw ECDSA P-256 (ES256)
-        let signing_input = format!("{header_b64}.{payload_b64}");
-        let signature: p256::ecdsa::Signature = self.signing_key.sign(signing_input.as_bytes());
-        // ES256 uses raw R||S format (64 bytes); to_bytes() gives the fixed-size big-endian format
-        let signature_b64 = base64url_encode(&signature.to_vec());
-
-        let jwt = format!("{signing_input}.{signature_b64}");
-
-        // Create a new signer that embeds this JWT as bearer token
+        let jwt = build_coinbase_jwt(&self.credentials)?;
         let signer = CoinbaseJwtSigner { bearer_token: jwt };
         Ok(Box::new(signer))
     }
@@ -674,11 +606,6 @@ impl SignerTrait<UnsignedMessageToCoinbase, SignedMessageToCoinbase> for Coinbas
             bearer_token: self.bearer_token.clone(),
         })
     }
-}
-
-/// Base64url-encode bytes (no padding, URL-safe).
-fn base64url_encode(data: &[u8]) -> String {
-    data_encoding::BASE64URL_NOPAD.encode(data)
 }
 
 /// Initial no-op signer used before the authentication leg runs.
