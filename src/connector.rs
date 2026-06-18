@@ -18,10 +18,10 @@ pub trait AuthenticatorTrait<TTradeRequest, TTradeResponse> {
 }
 #[async_trait]
 pub trait ConnectorTrait<TTradeRequest, TTradeResponse> {
-    async fn send_trade_request(
+    async fn send(
         &self,
+        request: TTradeRequest,
         preferences: &Preferences,
-        trade_request: TTradeRequest,
         increments: &HashMap<TradingPair, IncrementSizes>,
     ) -> StockTrekResult<TTradeResponse>;
 }
@@ -68,23 +68,23 @@ where
 }
 
 #[async_trait]
-impl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
-    ConnectorTrait<TTradeRequest, TTradeResponse>
-    for ConnectorImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+impl<TRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+    ConnectorTrait<TRequest, TTradeResponse>
+    for ConnectorImpl<TRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
 where
-    TTradeRequest: Send + Sync,
+    TRequest: Send + Sync,
     TUnsignedMessage: Send + Sync,
     TSignedMessage: Send + Sync,
     TTradeResponse: Send + Sync,
 {
-    async fn send_trade_request(
+    async fn send(
         &self,
+        request: TRequest,
         preferences: &Preferences,
-        trade_request: TTradeRequest,
         increments: &HashMap<TradingPair, IncrementSizes>,
     ) -> StockTrekResult<TTradeResponse> {
         self.spec
-            .send_trade_request(preferences, trade_request, increments, &self.signer)
+            .send(request, &self.signer, preferences, increments)
             .await
     }
 }

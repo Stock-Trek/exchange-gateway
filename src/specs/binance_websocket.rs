@@ -50,7 +50,7 @@ use uuid::Uuid;
 pub struct UnsignedMessageToBinance {
     #[serde(flatten)]
     metadata: MetadataToBinance,
-    params: Option<UnsignedMessageToBinanceParams>,
+    params: Option<MessageToBinanceParams>,
 }
 
 #[derive(Clone, Serialize)]
@@ -75,12 +75,8 @@ pub enum MethodName {
     Logon,
     #[serde(rename = "session.logout")]
     Logout,
-    #[serde(rename = "time")]
-    Ping,
     #[serde(rename = "order.place")]
     PlaceOrder,
-    #[serde(rename = "time")]
-    Time,
 }
 
 #[derive(Clone, Serialize)]
@@ -88,7 +84,7 @@ pub struct SignedMessageToBinanceParams {
     #[serde(flatten)]
     signature: Option<Signature>,
     #[serde(flatten)]
-    unsigned_params: UnsignedMessageToBinanceParams,
+    params: MessageToBinanceParams,
 }
 
 #[allow(non_snake_case)]
@@ -100,18 +96,10 @@ pub struct Signature {
 
 #[derive(Clone, Serialize)]
 #[serde(untagged)]
-pub enum UnsignedMessageToBinanceParams {
-    LogonParams(UnsignedLogonParams),
+pub enum MessageToBinanceParams {
     ExchangeInfoParams(ExchangeInfoParams),
-    PingParams(()),
-    SingleOrderParams(UnsignedSingleOrderParams),
-    TimeParams(()),
-}
-
-#[allow(non_snake_case)]
-#[derive(Clone, Serialize)]
-pub struct UnsignedLogonParams {
-    timestamp: i64,
+    LogonParams(LogonParams),
+    SingleOrderParams(SingleOrderParams),
 }
 
 #[allow(non_snake_case)]
@@ -123,7 +111,13 @@ pub struct ExchangeInfoParams {
 
 #[allow(non_snake_case)]
 #[derive(Clone, Serialize)]
-pub struct UnsignedSingleOrderParams {
+pub struct LogonParams {
+    timestamp: i64,
+}
+
+#[allow(non_snake_case)]
+#[derive(Clone, Serialize)]
+pub struct SingleOrderParams {
     icebergQty: Option<Decimal>,
     newClientOrderId: String,
     newOrderRespType: NewOrderRespType,
@@ -226,10 +220,8 @@ pub struct MessageFromBinanceError {
 #[serde(untagged)]
 pub enum MessageFromBinanceResult {
     ExchangeInfo(ExchangeInfoResult),
-    OrderPlaced(OrderPlaceResult),
     SessionAuthentication(SessionAuthenticationResult),
-    Pong(PongResult),
-    Time(TimeResult),
+    OrderPlaced(OrderPlaceResult),
 }
 
 #[allow(non_snake_case, unused)]
@@ -325,16 +317,6 @@ pub struct SessionAuthenticationResult {
     returnRateLimits: bool,
     serverTime: i64,
     userDataStream: bool,
-}
-
-#[allow(non_snake_case)]
-#[derive(Deserialize)]
-pub struct PongResult {}
-
-#[allow(non_snake_case, unused)]
-#[derive(Deserialize)]
-pub struct TimeResult {
-    serverTime: i64,
 }
 
 pub struct BinanceWebsocketSpecCreator {
@@ -475,7 +457,7 @@ fn message_leg(
         UnsignedMessageToBinance,
         SignedMessageToBinance,
         OrderResponse,
-    >::new(trade_request_to_message, messenger)
+    >::new(request_to_unsigned_message, messenger)
 }
 
 fn increments_message() -> SignedMessageToBinance {
@@ -487,12 +469,10 @@ fn increments_message() -> SignedMessageToBinance {
         },
         params: Some(SignedMessageToBinanceParams {
             signature: None,
-            unsigned_params: UnsignedMessageToBinanceParams::ExchangeInfoParams(
-                ExchangeInfoParams {
-                    permissions: vec!["SPOT".to_string()],
-                    symbolStatus: "TRADING".to_string(),
-                },
-            ),
+            params: MessageToBinanceParams::ExchangeInfoParams(ExchangeInfoParams {
+                permissions: vec!["SPOT".to_string()],
+                symbolStatus: "TRADING".to_string(),
+            }),
         }),
     }
 }
@@ -501,13 +481,13 @@ fn create_auth_message() -> CreateAuthMessage<UnsignedMessageToBinance> {
     || {
         let id = id();
         let timestamp = timestamp();
-        let params = UnsignedLogonParams { timestamp };
+        let params = LogonParams { timestamp };
         UnsignedMessageToBinance {
             metadata: MetadataToBinance {
                 id,
                 method: MethodName::Logon,
             },
-            params: Some(UnsignedMessageToBinanceParams::LogonParams(params)),
+            params: Some(MessageToBinanceParams::LogonParams(params)),
         }
     }
 }
@@ -516,10 +496,10 @@ fn unsigned_message_bytes(message: &UnsignedMessageToBinance) -> Vec<u8> {
     serde_urlencoded::to_string(message).unwrap().into_bytes()
 }
 
-fn trade_request_to_message(
+fn request_to_unsigned_message(
+    order_request: OrderRequest<AssetId, Decimal>,
     preferences: &Preferences,
     tickers: &BiMap<AssetId, String>,
-    order_request: OrderRequest<AssetId, Decimal>,
 ) -> StockTrekResult<UnsignedMessageToBinance> {
     let id = id();
     let method = MethodName::PlaceOrder;
@@ -534,7 +514,7 @@ fn unsigned_binance_params(
     preferences: &CexPreferences,
     tickers: &BiMap<AssetId, String>,
     order_request: OrderRequest<AssetId, Decimal>,
-) -> StockTrekResult<UnsignedMessageToBinanceParams> {
+) -> StockTrekResult<MessageToBinanceParams> {
     match order_request {
         OrderRequest::Single(single_order_request) => {
             let base = tickers.get_by_left(&single_order_request.base);
@@ -607,7 +587,7 @@ fn unsigned_binance_params(
                         OrderPricing::Limit { .. } => OrderType::LIMIT,
                     },
                 };
-                let params = UnsignedSingleOrderParams {
+                let params = SingleOrderParams {
                     icebergQty: None,
                     newClientOrderId: single_order_request.order_tag.0,
                     newOrderRespType: NewOrderRespType::FULL,
@@ -629,7 +609,7 @@ fn unsigned_binance_params(
                     trailingDelta: None,
                     r#type,
                 };
-                Ok(UnsignedMessageToBinanceParams::SingleOrderParams(params))
+                Ok(MessageToBinanceParams::SingleOrderParams(params))
             } else {
                 Err(StockTrekError::General(GeneralError::Message(
                     "Failed to find ticker for base or quote".to_string(),
@@ -755,9 +735,9 @@ fn message_signer(
 
 fn converter(unsigned: UnsignedMessageToBinance) -> SignedMessageToBinance {
     let UnsignedMessageToBinance { metadata, params } = unsigned;
-    let params = params.map(|unsigned_params| SignedMessageToBinanceParams {
+    let params = params.map(|params| SignedMessageToBinanceParams {
         signature: None,
-        unsigned_params,
+        params,
     });
     SignedMessageToBinance { metadata, params }
 }
@@ -770,8 +750,7 @@ fn signature_appender(
             metadata,
             params: unsigned_params,
         } = unsigned;
-        let params: Option<SignedMessageToBinanceParams> = if let Some(unsigned_params) =
-            unsigned_params
+        let params: Option<SignedMessageToBinanceParams> = if let Some(params) = unsigned_params
             && let Some(signature) = signature
         {
             Some(SignedMessageToBinanceParams {
@@ -779,7 +758,7 @@ fn signature_appender(
                     apiKey: api_key.to_string(),
                     signature,
                 }),
-                unsigned_params,
+                params,
             })
         } else {
             None
