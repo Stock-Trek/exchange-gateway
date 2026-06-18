@@ -73,11 +73,10 @@ impl<TUnsignedMessage, TSignedMessage>
     }
     async fn authenticate(
         &self,
-        initial_auth_leg_signer: Signer<TUnsignedMessage, TSignedMessage>,
+        mut signer: Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>> {
-        let mut signer = initial_auth_leg_signer;
-        for authentication_leg in &self.authenticate_legs {
-            signer = authentication_leg.do_leg(signer).await?;
+        for leg in &self.authenticate_legs {
+            signer = leg.do_leg(&signer).await?;
         }
         Ok(signer)
     }

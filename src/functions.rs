@@ -9,9 +9,9 @@ use stock_trek::{
 
 pub type ToIncrements<TMessage> = fn(TMessage) -> HashMap<TradingPair, IncrementSizes>;
 
-pub type CreateAuthMessage<TUnsignedMessage> = Box<dyn Fn() -> TUnsignedMessage + Send + Sync>;
+pub type CreateAuthMessage<TAuthMessage> = fn() -> TAuthMessage;
 
-pub type CreateSigner<TAuthentication, TUnsignedMessage, TSignedMessage> =
+pub type CreateSignerFrom<TAuthentication, TUnsignedMessage, TSignedMessage> =
     Box<dyn Fn(&TAuthentication) -> Signer<TUnsignedMessage, TSignedMessage> + Send + Sync>;
 
 pub type SignatureAppender<TUnsignedMessage, TSignedMessage> =
@@ -27,3 +27,6 @@ pub type TradeRequestToMessage<TTradeRequest, TUnsignedMessage> =
     fn(&Preferences, &BiMap<AssetId, String>, TTradeRequest) -> StockTrekResult<TUnsignedMessage>;
 
 pub type ToBytes<T> = fn(&T) -> Vec<u8>;
+
+pub type MessageConverter<TUnsignedMessage, TSignedMessage> =
+    fn(TUnsignedMessage) -> TSignedMessage;

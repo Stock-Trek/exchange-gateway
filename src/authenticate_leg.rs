@@ -1,5 +1,5 @@
 use crate::{
-    functions::{CreateAuthMessage, CreateSigner},
+    functions::{CreateAuthMessage, CreateSignerFrom},
     messenger::Messenger,
     sign::signer::Signer,
 };
@@ -13,14 +13,14 @@ pub type AuthenticateLeg<TUnsignedMessage, TSignedMessage> =
 pub trait AuthenticateLegTrait<TUnsignedMessage, TSignedMessage>: Send + Sync {
     async fn do_leg(
         &self,
-        signer: Signer<TUnsignedMessage, TSignedMessage>,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>>;
 }
 
 pub struct AuthenticateLegImpl<TUnsignedMessage, TSignedMessage, TAuthentication> {
     create_auth_message: CreateAuthMessage<TUnsignedMessage>,
     messenger: Messenger<TSignedMessage, TAuthentication>,
-    create_signer: CreateSigner<TAuthentication, TUnsignedMessage, TSignedMessage>,
+    create_signer_from: CreateSignerFrom<TAuthentication, TUnsignedMessage, TSignedMessage>,
 }
 
 impl<TUnsignedMessage, TSignedMessage, TAuthentication>
@@ -33,12 +33,12 @@ where
     pub fn new(
         create_auth_message: CreateAuthMessage<TUnsignedMessage>,
         messenger: Messenger<TSignedMessage, TAuthentication>,
-        create_signer: CreateSigner<TAuthentication, TUnsignedMessage, TSignedMessage>,
+        create_signer_from: CreateSignerFrom<TAuthentication, TUnsignedMessage, TSignedMessage>,
     ) -> AuthenticateLeg<TUnsignedMessage, TSignedMessage> {
         Box::new(Self {
             create_auth_message,
             messenger,
-            create_signer,
+            create_signer_from,
         })
     }
 }
@@ -53,10 +53,12 @@ where
 {
     async fn do_leg(
         &self,
-        signer: Signer<TUnsignedMessage, TSignedMessage>,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>> {
-        let signed_auth_message = signer.sign((self.create_auth_message)())?;
+        let auth_message = (self.create_auth_message)();
+        let signed_auth_message = signer.sign(auth_message)?;
         let authentication = self.messenger.send(signed_auth_message).await?;
-        Ok((self.create_signer)(&authentication))
+        let signer = (self.create_signer_from)(&authentication);
+        Ok(signer)
     }
 }

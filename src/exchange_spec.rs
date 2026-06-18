@@ -9,7 +9,9 @@ pub type ExchangeSpec<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeRes
     Box<dyn ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>>;
 
 #[async_trait]
-pub trait ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
+pub trait ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>:
+    Send + Sync
+{
     async fn increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>>;
     async fn authenticate(
         &self,

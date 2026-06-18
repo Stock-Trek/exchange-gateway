@@ -1,20 +1,20 @@
 use crate::{
     authenticate_leg::{AuthenticateLeg, AuthenticateLegImpl},
+    authenticator_creator::AuthenticatorCreatorTrait,
     cex::{
         cex_spec::CexSpec, increment_sizes::IncrementSizes, rate_limits_weights::RequestWeights,
     },
+    connector::{Authenticator, ConnectorImpl},
     credentials::api_key_credential::ApiKeyCredentials,
-    exchange_spec::ExchangeSpec,
-    functions::{CreateAuthMessage, CreateSigner, SignatureAppender},
+    functions::{CreateAuthMessage, CreateSignerFrom, SignatureAppender},
     increments_leg::{IncrementsLeg, IncrementsLegImpl},
     message_leg::{MessageLeg, MessageLegImpl},
     messenger::MessengerImpl,
     sign::{
-        encode::byte_encoding::ByteEncoding,
-        encrypt::{data_signer::DataSigner, signing_algorithm::SigningAlgorithm},
-        message_signer::MessageSigner,
+        convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
+        encrypt::signing_algorithm::SigningAlgorithm, message_signer::MessageSigner,
+        signer::Signer,
     },
-    spec_creator::SpecCreatorTrait,
     transports::websocket_transport::{WebsocketMessageDto, WebsocketTransportTrait},
 };
 use bimap::BiMap;
@@ -111,7 +111,6 @@ pub enum UnsignedMessageToBinanceParams {
 #[allow(non_snake_case)]
 #[derive(Clone, Serialize)]
 pub struct UnsignedLogonParams {
-    apiKey: String,
     timestamp: i64,
 }
 
@@ -339,42 +338,41 @@ pub struct TimeResult {
 }
 
 pub struct BinanceWebsocketSpecCreator {
-    pub use_session: bool,
     pub credentials: ApiKeyCredentials,
     pub transport: Arc<dyn WebsocketTransportTrait>,
+    pub use_session: bool,
 }
 
 impl
-    SpecCreatorTrait<
+    AuthenticatorCreatorTrait<
         OrderRequest<AssetId, f64>,
         UnsignedMessageToBinance,
         SignedMessageToBinance,
         OrderResponse,
     > for BinanceWebsocketSpecCreator
 {
-    fn into_spec(
+    fn into_authenticator(
         self,
-    ) -> StockTrekResult<
-        ExchangeSpec<
-            OrderRequest<AssetId, f64>,
-            UnsignedMessageToBinance,
-            SignedMessageToBinance,
-            OrderResponse,
-        >,
-    > {
+    ) -> StockTrekResult<Authenticator<OrderRequest<AssetId, f64>, OrderResponse>> {
         let BinanceWebsocketSpecCreator {
             use_session,
             credentials,
             transport,
         } = self;
-        Ok(CexSpec::new(
+        let authenticate_legs = if use_session {
+            vec![authenticate_leg(transport.clone())]
+        } else {
+            vec![]
+        };
+        let spec = CexSpec::new(
             capabilities(),
             request_weights(),
             tickers(),
             increments_leg(transport.clone()),
-            authenticate_legs(credentials, transport.clone(), use_session)?,
+            authenticate_legs,
             message_leg(transport.clone()),
-        ))
+        );
+        Ok(ConnectorImpl::new(spec, message_signer(credentials)?))
     }
 }
 
@@ -429,39 +427,31 @@ fn increments_leg(transport: Arc<dyn WebsocketTransportTrait>) -> IncrementsLeg 
     let messenger = MessengerImpl::new(
         transport,
         timeout,
-        to_dto,
+        dto,
         deserialize_reply,
         filter_reply_exchange_info,
     );
-    IncrementsLegImpl::new(increments_message(), messenger, to_increments)
+    IncrementsLegImpl::new(increments_message(), messenger, increments)
 }
 
-fn authenticate_legs(
-    credentials: ApiKeyCredentials,
+fn authenticate_leg(
     transport: Arc<dyn WebsocketTransportTrait>,
-    use_session: bool,
-) -> StockTrekResult<Vec<AuthenticateLeg<UnsignedMessageToBinance, SignedMessageToBinance>>> {
-    if use_session {
-        let timeout = Duration::seconds(20);
-        let create_auth_message = to_create_auth_message(credentials.api_key.clone());
-        let messenger = MessengerImpl::new(
-            transport,
-            timeout,
-            to_dto,
-            deserialize_reply,
-            filter_reply_session_authentication,
-        );
-        let create_signer: CreateSigner<(), UnsignedMessageToBinance, SignedMessageToBinance> =
-            to_create_signer(credentials)?;
-        let authentication_leg = AuthenticateLegImpl::<
-            UnsignedMessageToBinance,
-            SignedMessageToBinance,
-            (),
-        >::new(create_auth_message, messenger, create_signer);
-        Ok(vec![authentication_leg])
-    } else {
-        Ok(vec![])
-    }
+) -> AuthenticateLeg<UnsignedMessageToBinance, SignedMessageToBinance> {
+    let timeout = Duration::seconds(20);
+    let messenger = MessengerImpl::new(
+        transport,
+        timeout,
+        dto,
+        deserialize_reply,
+        filter_reply_session_authentication,
+    );
+    let create_signer_from: CreateSignerFrom<(), UnsignedMessageToBinance, SignedMessageToBinance> =
+        Box::new(|_m| ConvertSigner::new(converter));
+    AuthenticateLegImpl::<UnsignedMessageToBinance, SignedMessageToBinance, ()>::new(
+        create_auth_message(),
+        messenger,
+        create_signer_from,
+    )
 }
 
 fn message_leg(
@@ -476,7 +466,7 @@ fn message_leg(
     let messenger = MessengerImpl::new(
         transport,
         timeout,
-        to_dto,
+        dto,
         deserialize_reply,
         filter_reply_order_placed,
     );
@@ -507,14 +497,11 @@ fn increments_message() -> SignedMessageToBinance {
     }
 }
 
-fn to_create_auth_message(api_key: String) -> CreateAuthMessage<UnsignedMessageToBinance> {
-    Box::new(move || {
+fn create_auth_message() -> CreateAuthMessage<UnsignedMessageToBinance> {
+    || {
         let id = id();
         let timestamp = timestamp();
-        let params = UnsignedLogonParams {
-            apiKey: api_key.clone(),
-            timestamp,
-        };
+        let params = UnsignedLogonParams { timestamp };
         UnsignedMessageToBinance {
             metadata: MetadataToBinance {
                 id,
@@ -522,10 +509,10 @@ fn to_create_auth_message(api_key: String) -> CreateAuthMessage<UnsignedMessageT
             },
             params: Some(UnsignedMessageToBinanceParams::LogonParams(params)),
         }
-    })
+    }
 }
 
-fn to_bytes(message: &UnsignedMessageToBinance) -> Vec<u8> {
+fn unsigned_message_bytes(message: &UnsignedMessageToBinance) -> Vec<u8> {
     serde_urlencoded::to_string(message).unwrap().into_bytes()
 }
 
@@ -536,14 +523,14 @@ fn trade_request_to_message(
 ) -> StockTrekResult<UnsignedMessageToBinance> {
     let id = id();
     let method = MethodName::PlaceOrder;
-    let params = to_binance_params(&preferences.cex, tickers, order_request)?;
+    let params = unsigned_binance_params(&preferences.cex, tickers, order_request)?;
     Ok(UnsignedMessageToBinance {
         metadata: MetadataToBinance { id, method },
         params: Some(params),
     })
 }
 
-fn to_binance_params(
+fn unsigned_binance_params(
     preferences: &CexPreferences,
     tickers: &BiMap<AssetId, String>,
     order_request: OrderRequest<AssetId, Decimal>,
@@ -652,7 +639,7 @@ fn to_binance_params(
     }
 }
 
-fn to_dto(message: &SignedMessageToBinance) -> StockTrekResult<WebsocketMessageDto> {
+fn dto(message: &SignedMessageToBinance) -> StockTrekResult<WebsocketMessageDto> {
     let body_json = serde_json::to_string(&message)
         .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;
     Ok(WebsocketMessageDto { body_json })
@@ -748,27 +735,34 @@ fn filter_reply_exchange_info(reply: MessageFromBinance) -> StockTrekResult<Exch
     }
 }
 
-fn to_create_signer(
+fn message_signer(
     credentials: ApiKeyCredentials,
-) -> StockTrekResult<CreateSigner<(), UnsignedMessageToBinance, SignedMessageToBinance>> {
-    let signer: DataSigner = SigningAlgorithm::Ed25519
-        .signer(&credentials.secret)
-        .map_err(|_e| {
-            StockTrekError::General(GeneralError::Message("Cannot create signer".to_string()))
-        })?;
-    let create_signer: CreateSigner<(), UnsignedMessageToBinance, SignedMessageToBinance> =
-        Box::new(move |_m| {
-            MessageSigner::<UnsignedMessageToBinance, SignedMessageToBinance>::new(
-                to_bytes,
-                signer.clone(),
-                ByteEncoding::Base64,
-                create_signature_appender(credentials.api_key.clone()),
-            )
-        });
-    Ok(create_signer)
+) -> StockTrekResult<Signer<UnsignedMessageToBinance, SignedMessageToBinance>> {
+    let ApiKeyCredentials { api_key, secret } = credentials;
+    let data_signer = SigningAlgorithm::Ed25519.signer(&secret).map_err(|_e| {
+        StockTrekError::General(GeneralError::Message("Cannot create signer".to_string()))
+    })?;
+    Ok(MessageSigner::<
+        UnsignedMessageToBinance,
+        SignedMessageToBinance,
+    >::new(
+        unsigned_message_bytes,
+        data_signer,
+        ByteEncoding::Base64,
+        signature_appender(api_key),
+    ))
 }
 
-fn create_signature_appender(
+fn converter(unsigned: UnsignedMessageToBinance) -> SignedMessageToBinance {
+    let UnsignedMessageToBinance { metadata, params } = unsigned;
+    let params = params.map(|unsigned_params| SignedMessageToBinanceParams {
+        signature: None,
+        unsigned_params,
+    });
+    SignedMessageToBinance { metadata, params }
+}
+
+fn signature_appender(
     api_key: String,
 ) -> SignatureAppender<UnsignedMessageToBinance, SignedMessageToBinance> {
     Box::new(move |unsigned, signature| {
@@ -776,15 +770,16 @@ fn create_signature_appender(
             metadata,
             params: unsigned_params,
         } = unsigned;
-        let params: Option<SignedMessageToBinanceParams> = if let Some(p) = unsigned_params
-            && let Some(s) = signature
+        let params: Option<SignedMessageToBinanceParams> = if let Some(unsigned_params) =
+            unsigned_params
+            && let Some(signature) = signature
         {
             Some(SignedMessageToBinanceParams {
                 signature: Some(Signature {
                     apiKey: api_key.to_string(),
-                    signature: s,
+                    signature,
                 }),
-                unsigned_params: p,
+                unsigned_params,
             })
         } else {
             None
@@ -793,7 +788,7 @@ fn create_signature_appender(
     })
 }
 
-fn to_increments(exchange_info_result: ExchangeInfoResult) -> HashMap<TradingPair, IncrementSizes> {
+fn increments(exchange_info_result: ExchangeInfoResult) -> HashMap<TradingPair, IncrementSizes> {
     let tickers = tickers();
     let ExchangeInfoResult { symbols, .. } = exchange_info_result;
     let mut increments = HashMap::new();
