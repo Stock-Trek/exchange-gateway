@@ -358,13 +358,13 @@ fn message_leg(
         UnsignedMessageToCoinbase,
         SignedMessageToCoinbase,
         OrderResponse,
-    >::new(trade_request_to_message, messenger)
+    >::new(request_to_unsigned_message, messenger)
 }
 
-fn trade_request_to_message(
+fn request_to_unsigned_message(
+    order_request: OrderRequest<AssetId, Decimal>,
     _preferences: &Preferences,
     tickers: &BiMap<AssetId, String>,
-    order_request: OrderRequest<AssetId, Decimal>,
 ) -> StockTrekResult<UnsignedMessageToCoinbase> {
     match order_request {
         OrderRequest::Single(single_order_request) => {
