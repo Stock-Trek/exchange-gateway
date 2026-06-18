@@ -1,8 +1,13 @@
 use crate::{
-    authenticator_creator::AuthenticatorCreatorTrait, connector::Authenticator,
+    authenticator_creator::AuthenticatorCreatorTrait,
+    connector::Authenticator,
     credentials::api_key_credential::ApiKeyCredentials,
-    specs::binance_websocket::BinanceWebsocketSpecCreator,
-    transports::websocket_transport::WebsocketTransportTrait,
+    specs::{
+        binance_websocket::BinanceWebsocketSpecCreator, coinbase_rest::CoinbaseRestSpecCreator,
+    },
+    transports::{
+        http_transport::HttpTransportTrait, websocket_transport::WebsocketTransportTrait,
+    },
 };
 use std::sync::Arc;
 use stock_trek::{
@@ -26,6 +31,21 @@ impl Connectors {
             credentials,
             transport: Arc::new(transport),
             use_session,
+        };
+        spec_creator.into_authenticator()
+    }
+
+    pub async fn coinbase_rest<TTransport>(
+        &self,
+        credentials: ApiKeyCredentials,
+        transport: TTransport,
+    ) -> StockTrekResult<Authenticator<OrderRequest<AssetId, f64>, OrderResponse>>
+    where
+        TTransport: HttpTransportTrait + 'static,
+    {
+        let spec_creator = CoinbaseRestSpecCreator {
+            credentials,
+            transport: Arc::new(transport),
         };
         spec_creator.into_authenticator()
     }
