@@ -49,9 +49,6 @@ use stock_trek::{
     preferences::Preferences,
 };
 
-// ─── Outgoing message types ───────────────────────────────────────────────
-
-/// The unsigned JSON body sent to Coinbase's POST /api/v3/brokerage/orders.
 #[derive(Serialize)]
 pub struct UnsignedMessageToCoinbase {
     pub product_id: String,
@@ -61,17 +58,12 @@ pub struct UnsignedMessageToCoinbase {
     pub order_configuration: OrderConfiguration,
 }
 
-/// A signed (bearer-token) HTTP request to Coinbase.
 #[derive(Serialize)]
 pub struct SignedMessageToCoinbase {
     pub body: UnsignedMessageToCoinbase,
     pub bearer_token: String,
 }
 
-// ─── Order configuration types ────────────────────────────────────────────
-
-/// Maps to the `order_configuration` field of the Coinbase create-order request.
-/// Each variant corresponds to a supported order type.
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum OrderConfiguration {
@@ -126,8 +118,6 @@ pub enum Side {
     SELL,
 }
 
-// ─── Response types ───────────────────────────────────────────────────────
-
 #[derive(Deserialize)]
 pub struct MessageFromCoinbase {
     pub success: bool,
@@ -154,8 +144,6 @@ pub struct ErrorResponse {
     pub new_order_failure_reason: Option<String>,
 }
 
-// ─── Products (increments) response types ─────────────────────────────────
-
 #[derive(Clone, Serialize)]
 pub struct UnsignedProductsMessage {
     pub bearer_token: String,
@@ -175,8 +163,6 @@ pub struct ProductInfo {
     pub quote_increment: String,
     pub status: String,
 }
-
-// ─── Spec creator ─────────────────────────────────────────────────────────
 
 pub struct CoinbaseRestSpecCreator {
     pub credentials: JwtCredentials,
@@ -210,8 +196,6 @@ impl
         Ok(ConnectorImpl::new(spec, signer))
     }
 }
-
-// ─── Capabilities / weights / tickers ─────────────────────────────────────
 
 fn capabilities() -> Vec<CexCapability> {
     vec![
@@ -258,8 +242,6 @@ fn tickers() -> BiMap<AssetId, String> {
     tickers.insert(AssetId::weth(), "WETH".to_string());
     tickers
 }
-
-// ─── Increments leg ───────────────────────────────────────────────────────
 
 fn increments_leg(transport: Arc<dyn HttpTransportTrait>) -> IncrementsLeg {
     let timeout = Duration::seconds(30);
@@ -309,7 +291,6 @@ fn to_increments(response: ProductsResponse) -> HashMap<TradingPair, IncrementSi
     let tickers = tickers();
     let mut increments = HashMap::new();
     for product in response.products {
-        // Product ID format: "BTC-USD"
         let parts: Vec<&str> = product.product_id.split('-').collect();
         if parts.len() != 2 {
             continue;
@@ -322,7 +303,6 @@ fn to_increments(response: ProductsResponse) -> HashMap<TradingPair, IncrementSi
             && let Some(quote) = quote
         {
             let trading_pair = TradingPair::new(base.clone(), quote.clone());
-            // Parse decimal increments
             if let (Ok(base_inc), Ok(quote_inc)) = (
                 Decimal::from_str_exact(&product.base_increment),
                 Decimal::from_str_exact(&product.quote_increment),
@@ -334,8 +314,6 @@ fn to_increments(response: ProductsResponse) -> HashMap<TradingPair, IncrementSi
     }
     increments
 }
-
-// ─── Message leg (order placement) ────────────────────────────────────────
 
 fn message_leg(
     transport: Arc<dyn HttpTransportTrait>,
@@ -377,7 +355,7 @@ fn request_to_unsigned_message(
                     OrderSide::Buy => Side::BUY,
                     OrderSide::Sell => Side::SELL,
                 };
-                let product_id = format!("{}-{}", base, quote);
+                let product_id = format!("{base}-{quote}");
                 let order_configuration = order_configuration(&single_order_request)?;
                 Ok(UnsignedMessageToCoinbase {
                     product_id,
@@ -448,8 +426,7 @@ fn order_configuration(
                 },
                 OrderTimeInForce::ImmediateOrCancel => {
                     Err(StockTrekError::General(GeneralError::Message(
-                        "Coinbase does not support IOC limit orders directly; use SOR_LIMIT_IOC"
-                            .to_string(),
+                        "Coinbase does not support IOC limit orders directly".to_string(),
                     )))
                 }
             },
@@ -509,8 +486,6 @@ fn order_configuration(
     }
 }
 
-// ─── DTO / serialization helpers ──────────────────────────────────────────
-
 fn dto(message: &SignedMessageToCoinbase) -> StockTrekResult<HttpMessageDto> {
     let body_json = serde_json::to_string(&message.body).map_err(|_e| {
         StockTrekError::General(GeneralError::Message(
@@ -558,10 +533,6 @@ fn filter_reply_order_placed(reply: MessageFromCoinbase) -> StockTrekResult<Orde
     }
 }
 
-// ─── JWT authentication ───────────────────────────────────────────────────
-
-/// The unsigned JWT payload for Coinbase Cloud API authentication.
-/// https://docs.cdp.coinbase.com/advanced-trade/docs/rest-api-auth
 #[derive(Serialize)]
 struct JwtPayload {
     sub: String,
@@ -572,15 +543,6 @@ struct JwtPayload {
     exp: i64,
 }
 
-/// Builds a Coinbase Cloud API JWT bearer token from the given credentials.
-///
-/// Uses ECDSA P-256 (ES256) signing with raw R||S format (64 bytes) as required
-/// by Coinbase's JWT authentication. The JWT is constructed with:
-/// - `sub` and `kid` set to the API key name
-/// - `iss` set to "coinbase-cloud"
-/// - `aud` set to `["rest.coinbase.com"]`
-/// - `iat` set to current time
-/// - `exp` set to current time + 120 seconds
 fn build_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
     let api_key = &credentials.api_key;
     let signing_key = SigningKey::from_slice(credentials.secret.expose_secret().as_bytes())
@@ -589,7 +551,6 @@ fn build_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
                 "Failed to create Coinbase ECDSA P-256 signing key: {e}"
             )))
         })?;
-
     let now = Utc::now().timestamp();
     let payload = JwtPayload {
         sub: api_key.clone(),
@@ -598,15 +559,11 @@ fn build_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
         iat: now,
         exp: now + 120,
     };
-
-    // Build JWT header: {"alg":"ES256","kid":"<api_key>","typ":"JWT"}
     let header = serde_json::json!({
         "alg": "ES256",
         "kid": api_key,
         "typ": "JWT",
     });
-
-    // Base64url-encode header and payload using the reusable Base64Encoder
     let encoder = Base64Encoder;
     let header_b64 = encoder.encode(&serde_json::to_vec(&header).map_err(|e| {
         StockTrekError::General(GeneralError::Message(format!(
@@ -618,23 +575,12 @@ fn build_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
             "Failed to serialize JWT payload: {e}"
         )))
     })?);
-
-    // Sign the "header.payload" string using ECDSA P-256 (ES256)
     let signing_input = format!("{header_b64}.{payload_b64}");
     let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
-    // ES256 uses raw R||S format (64 bytes)
     let signature_b64 = encoder.encode(&signature.to_vec());
-
     Ok(format!("{signing_input}.{signature_b64}"))
 }
 
-/// Build a signer that generates a fresh JWT bearer token for each message.
-///
-/// Uses the reusable `MessageSigner` from the sign folder: the unsigned message
-/// is converted to empty bytes (the JWT is not derived from the message), so no
-/// cryptographic signing is performed on a per-message basis. Instead, the
-/// `SignatureAppender` captures the credentials and calls `build_jwt` to produce
-/// a fresh JWT with current timestamps for each signed message.
 fn message_signer(
     credentials: &JwtCredentials,
 ) -> StockTrekResult<Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>> {

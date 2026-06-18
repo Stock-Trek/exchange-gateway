@@ -56,7 +56,7 @@ impl PreciseOrders {
             .ok_or_else(|| {
                 StockTrekError::Value(ValueError::NotFound {
                     name: "Market".to_string(),
-                    key: format!("Symbol({}/{})", base, quote),
+                    key: format!("Symbol({base}/{quote})"),
                 })
             })?;
         let activation: OrderActivation<Decimal> = match activation {

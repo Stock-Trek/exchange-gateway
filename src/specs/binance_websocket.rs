@@ -551,7 +551,7 @@ fn unsigned_binance_params(
                     } => Some(activation_price),
                     OrderActivation::Immediate => None,
                 };
-                let symbol = format!("{}{}", base, quote);
+                let symbol = format!("{base}{quote}");
                 #[allow(non_snake_case)]
                 let timeInForce = match single_order_request.pricing {
                     OrderPricing::Market => None,
