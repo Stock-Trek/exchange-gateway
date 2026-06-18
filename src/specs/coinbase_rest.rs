@@ -5,7 +5,7 @@ use crate::{
         cex_spec::CexSpec, increment_sizes::IncrementSizes, rate_limits_weights::RequestWeights,
     },
     connector::{Authenticator, ConnectorImpl},
-    credentials::coinbase_jwt_credential::CoinbaseJwtCredentials,
+    credentials::jwt_credential::JwtCredentials,
     increments_leg::{IncrementsLeg, IncrementsLegImpl},
     message_leg::{MessageLeg, MessageLegImpl},
     messenger::MessengerImpl,
@@ -176,7 +176,7 @@ pub struct ProductInfo {
 // ─── Spec creator ─────────────────────────────────────────────────────────
 
 pub struct CoinbaseRestSpecCreator {
-    pub credentials: CoinbaseJwtCredentials,
+    pub credentials: JwtCredentials,
     pub transport: Arc<dyn HttpTransportTrait>,
 }
 
@@ -338,7 +338,7 @@ fn to_increments(response: ProductsResponse) -> HashMap<TradingPair, IncrementSi
 
 fn message_leg(
     transport: Arc<dyn HttpTransportTrait>,
-    credentials: &CoinbaseJwtCredentials,
+    credentials: &JwtCredentials,
 ) -> MessageLeg<
     OrderRequest<AssetId, Decimal>,
     UnsignedMessageToCoinbase,
@@ -587,7 +587,7 @@ pub struct JwtToken {
 /// Generates a JWT bearer token using the Cloud API credentials (ECDSA P-256 key),
 /// then creates a signer that embeds this token into all subsequent messages.
 fn authenticate_leg(
-    credentials: &CoinbaseJwtCredentials,
+    credentials: &JwtCredentials,
 ) -> AuthenticateLeg<UnsignedMessageToCoinbase, SignedMessageToCoinbase> {
     let api_key = credentials.api_key.clone();
     let signing_key = SigningKey::from_slice(credentials._secret.expose_secret().as_bytes())
