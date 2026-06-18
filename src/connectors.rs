@@ -1,7 +1,9 @@
 use crate::{
     authenticator_creator::AuthenticatorCreatorTrait,
     connector::Authenticator,
-    credentials::api_key_credential::ApiKeyCredentials,
+    credentials::{
+        api_key_credential::ApiKeyCredentials, coinbase_jwt_credential::CoinbaseJwtCredentials,
+    },
     specs::{
         binance_websocket::BinanceWebsocketSpecCreator, coinbase_rest::CoinbaseRestSpecCreator,
     },
@@ -37,7 +39,7 @@ impl Connectors {
 
     pub async fn coinbase_rest<TTransport>(
         &self,
-        credentials: ApiKeyCredentials,
+        credentials: CoinbaseJwtCredentials,
         transport: TTransport,
     ) -> StockTrekResult<Authenticator<OrderRequest<AssetId, f64>, OrderResponse>>
     where

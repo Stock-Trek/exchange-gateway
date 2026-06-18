@@ -5,7 +5,7 @@ use crate::{
         cex_spec::CexSpec, increment_sizes::IncrementSizes, rate_limits_weights::RequestWeights,
     },
     connector::{Authenticator, ConnectorImpl},
-    credentials::api_key_credential::ApiKeyCredentials,
+    credentials::coinbase_jwt_credential::CoinbaseJwtCredentials,
     increments_leg::{IncrementsLeg, IncrementsLegImpl},
     message_leg::{MessageLeg, MessageLegImpl},
     messenger::MessengerImpl,
@@ -176,7 +176,7 @@ pub struct ProductInfo {
 // ─── Spec creator ─────────────────────────────────────────────────────────
 
 pub struct CoinbaseRestSpecCreator {
-    pub credentials: crate::credentials::api_key_credential::ApiKeyCredentials,
+    pub credentials: CoinbaseJwtCredentials,
     pub transport: Arc<dyn HttpTransportTrait>,
 }
 
@@ -338,7 +338,7 @@ fn to_increments(response: ProductsResponse) -> HashMap<TradingPair, IncrementSi
 
 fn message_leg(
     transport: Arc<dyn HttpTransportTrait>,
-    credentials: &crate::credentials::api_key_credential::ApiKeyCredentials,
+    credentials: &CoinbaseJwtCredentials,
 ) -> MessageLeg<
     OrderRequest<AssetId, Decimal>,
     UnsignedMessageToCoinbase,
@@ -587,19 +587,16 @@ pub struct JwtToken {
 /// Generates a JWT bearer token using the Cloud API credentials (ECDSA P-256 key),
 /// then creates a signer that embeds this token into all subsequent messages.
 fn authenticate_leg(
-    credentials: &ApiKeyCredentials,
+    credentials: &CoinbaseJwtCredentials,
 ) -> AuthenticateLeg<UnsignedMessageToCoinbase, SignedMessageToCoinbase> {
     let api_key = credentials.api_key.clone();
-    let secret = credentials.secret.clone();
-
-    // Build the signing key from the secret (ECDSA P-256 private key bytes)
-    let signing_key = SigningKey::from_slice(secret.expose_secret().as_bytes())
+    let signing_key = SigningKey::from_slice(credentials._secret.expose_secret().as_bytes())
         .expect("Failed to create Coinbase ECDSA P-256 signing key");
 
     Box::new(CoinbaseJwtAuthenticateLeg {
         api_key,
         signing_key,
-        _secret: secret,
+        _secret: credentials._secret.clone(),
     })
 }
 
