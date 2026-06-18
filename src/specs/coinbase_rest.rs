@@ -11,6 +11,7 @@ use crate::{
     messenger::MessengerImpl,
     sign::{
         convert_signer::ConvertSigner,
+        encode::{base64::Base64Encoder, byte_encoder::ByteEncoderTrait},
         signer::{Signer, SignerTrait},
     },
     transports::http_transport::{HttpMessageDto, HttpTransportTrait},
@@ -379,7 +380,7 @@ fn trade_request_to_message(
                     OrderSide::Sell => Side::SELL,
                 };
                 let product_id = format!("{}-{}", base, quote);
-                let order_configuration = coinbase_order_configuration(&single_order_request)?;
+                let order_configuration = order_configuration(&single_order_request)?;
                 Ok(UnsignedMessageToCoinbase {
                     product_id,
                     side,
@@ -395,7 +396,7 @@ fn trade_request_to_message(
     }
 }
 
-fn coinbase_order_configuration(
+fn order_configuration(
     order: &stock_trek::cex::orders::single::SingleOrderGeneric<AssetId, Decimal>,
 ) -> StockTrekResult<OrderConfiguration> {
     match order.activation {
@@ -561,6 +562,18 @@ fn filter_reply_order_placed(reply: MessageFromCoinbase) -> StockTrekResult<Orde
 
 // ─── JWT authentication ───────────────────────────────────────────────────
 
+/// The unsigned JWT payload for Coinbase Cloud API authentication.
+/// https://docs.cdp.coinbase.com/advanced-trade/docs/rest-api-auth
+#[derive(Serialize)]
+struct JwtPayload {
+    sub: String,
+    iss: String,
+    #[serde(rename = "aud")]
+    aud: Vec<String>,
+    iat: i64,
+    exp: i64,
+}
+
 /// Builds a Coinbase Cloud API JWT bearer token from the given credentials.
 ///
 /// Uses ECDSA P-256 (ES256) signing with raw R||S format (64 bytes) as required
@@ -570,7 +583,7 @@ fn filter_reply_order_placed(reply: MessageFromCoinbase) -> StockTrekResult<Orde
 /// - `aud` set to `["rest.coinbase.com"]`
 /// - `iat` set to current time
 /// - `exp` set to current time + 120 seconds
-fn build_coinbase_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
+fn build_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
     let api_key = &credentials.api_key;
     let signing_key = SigningKey::from_slice(credentials.secret.expose_secret().as_bytes())
         .map_err(|e| {
@@ -580,7 +593,7 @@ fn build_coinbase_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
         })?;
 
     let now = Utc::now().timestamp();
-    let payload = CoinbaseJwtPayload {
+    let payload = JwtPayload {
         sub: api_key.clone(),
         iss: "coinbase-cloud".to_string(),
         aud: vec!["rest.coinbase.com".to_string()],
@@ -595,13 +608,14 @@ fn build_coinbase_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
         "typ": "JWT",
     });
 
-    // Base64url-encode header and payload
-    let header_b64 = base64url_encode(&serde_json::to_vec(&header).map_err(|e| {
+    // Base64url-encode header and payload using the reusable Base64Encoder
+    let encoder = Base64Encoder;
+    let header_b64 = encoder.encode(&serde_json::to_vec(&header).map_err(|e| {
         StockTrekError::General(GeneralError::Message(format!(
             "Failed to serialize JWT header: {e}"
         )))
     })?);
-    let payload_b64 = base64url_encode(&serde_json::to_vec(&payload).map_err(|e| {
+    let payload_b64 = encoder.encode(&serde_json::to_vec(&payload).map_err(|e| {
         StockTrekError::General(GeneralError::Message(format!(
             "Failed to serialize JWT payload: {e}"
         )))
@@ -611,26 +625,9 @@ fn build_coinbase_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
     let signing_input = format!("{header_b64}.{payload_b64}");
     let signature: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
     // ES256 uses raw R||S format (64 bytes)
-    let signature_b64 = base64url_encode(&signature.to_vec());
+    let signature_b64 = encoder.encode(&signature.to_vec());
 
     Ok(format!("{signing_input}.{signature_b64}"))
-}
-
-/// The unsigned JWT payload for Coinbase Cloud API authentication.
-/// https://docs.cdp.coinbase.com/advanced-trade/docs/rest-api-auth
-#[derive(Serialize)]
-struct CoinbaseJwtPayload {
-    sub: String,
-    iss: String,
-    #[serde(rename = "aud")]
-    aud: Vec<String>,
-    iat: i64,
-    exp: i64,
-}
-
-/// Base64url-encode bytes (no padding, URL-safe).
-fn base64url_encode(data: &[u8]) -> String {
-    data_encoding::BASE64URL_NOPAD.encode(data)
 }
 
 /// Authenticate leg for Coinbase REST API.
@@ -641,10 +638,10 @@ fn authenticate_leg(
 ) -> AuthenticateLeg<UnsignedMessageToCoinbase, SignedMessageToCoinbase> {
     let credentials = JwtCredentials::new(credentials.api_key.clone(), credentials.secret.clone());
 
-    Box::new(CoinbaseJwtAuthenticateLeg { credentials })
+    Box::new(JwtAuthenticateLeg { credentials })
 }
 
-struct CoinbaseJwtAuthenticateLeg {
+struct JwtAuthenticateLeg {
     credentials: JwtCredentials,
 }
 
@@ -653,24 +650,23 @@ impl
     crate::authenticate_leg::AuthenticateLegTrait<
         UnsignedMessageToCoinbase,
         SignedMessageToCoinbase,
-    > for CoinbaseJwtAuthenticateLeg
+    > for JwtAuthenticateLeg
 {
     async fn do_leg(
         &self,
         _signer: &Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>,
     ) -> StockTrekResult<Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>> {
-        let jwt = build_coinbase_jwt(&self.credentials)?;
-        let signer = CoinbaseJwtSigner { bearer_token: jwt };
-        Ok(Box::new(signer))
+        let jwt = build_jwt(&self.credentials)?;
+        Ok(Box::new(JwtSigner { bearer_token: jwt }))
     }
 }
 
 /// Signer that wraps unsigned messages with a JWT bearer token.
-struct CoinbaseJwtSigner {
+struct JwtSigner {
     bearer_token: String,
 }
 
-impl SignerTrait<UnsignedMessageToCoinbase, SignedMessageToCoinbase> for CoinbaseJwtSigner {
+impl SignerTrait<UnsignedMessageToCoinbase, SignedMessageToCoinbase> for JwtSigner {
     fn sign(
         &self,
         unsigned: UnsignedMessageToCoinbase,
