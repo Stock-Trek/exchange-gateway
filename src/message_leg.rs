@@ -1,68 +1,68 @@
-use crate::{functions::TradeRequestToMessage, messenger::Messenger, sign::signer::Signer};
+use crate::{functions::RequestToUnsignedMessage, messenger::Messenger, sign::signer::Signer};
 use async_trait::async_trait;
 use bimap::BiMap;
 use stock_trek::{
     cex::asset_id::AssetId, error::result::StockTrekResult, preferences::Preferences,
 };
 
-pub type MessageLeg<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
-    Box<dyn MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>>;
+pub type MessageLeg<TRequest, TUnsignedMessage, TSignedMessage, TResponse> =
+    Box<dyn MessageLegTrait<TRequest, TUnsignedMessage, TSignedMessage, TResponse>>;
 
 #[async_trait]
-pub trait MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>:
+pub trait MessageLegTrait<TRequest, TUnsignedMessage, TSignedMessage, TResponse>:
     Send + Sync
 {
-    async fn send_trade_request(
+    async fn send(
         &self,
+        request: TRequest,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
         preferences: &Preferences,
         tickers: &BiMap<AssetId, String>,
-        trade_request: TTradeRequest,
-        signer: &Signer<TUnsignedMessage, TSignedMessage>,
-    ) -> StockTrekResult<TTradeResponse>;
+    ) -> StockTrekResult<TResponse>;
 }
 
-pub struct MessageLegImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
-    trade_request_to_message: TradeRequestToMessage<TTradeRequest, TUnsignedMessage>,
-    messenger: Messenger<TSignedMessage, TTradeResponse>,
+pub struct MessageLegImpl<TRequest, TUnsignedMessage, TSignedMessage, TResponse> {
+    request_to_unsigned_message: RequestToUnsignedMessage<TRequest, TUnsignedMessage>,
+    messenger: Messenger<TSignedMessage, TResponse>,
 }
 
-impl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
-    MessageLegImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+impl<TRequest, TUnsignedMessage, TSignedMessage, TResponse>
+    MessageLegImpl<TRequest, TUnsignedMessage, TSignedMessage, TResponse>
 where
-    TTradeRequest: Send + Sync + 'static,
+    TRequest: Send + Sync + 'static,
     TUnsignedMessage: Send + Sync + 'static,
     TSignedMessage: Send + Sync + 'static,
-    TTradeResponse: Send + Sync + 'static,
+    TResponse: Send + Sync + 'static,
 {
     pub fn new(
-        trade_request_to_message: TradeRequestToMessage<TTradeRequest, TUnsignedMessage>,
-        messenger: Messenger<TSignedMessage, TTradeResponse>,
-    ) -> MessageLeg<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> {
+        request_to_unsigned_message: RequestToUnsignedMessage<TRequest, TUnsignedMessage>,
+        messenger: Messenger<TSignedMessage, TResponse>,
+    ) -> MessageLeg<TRequest, TUnsignedMessage, TSignedMessage, TResponse> {
         Box::new(Self {
-            trade_request_to_message,
+            request_to_unsigned_message,
             messenger,
         })
     }
 }
 
 #[async_trait]
-impl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
-    MessageLegTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
-    for MessageLegImpl<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>
+impl<TRequest, TUnsignedMessage, TSignedMessage, TResponse>
+    MessageLegTrait<TRequest, TUnsignedMessage, TSignedMessage, TResponse>
+    for MessageLegImpl<TRequest, TUnsignedMessage, TSignedMessage, TResponse>
 where
-    TTradeRequest: Send + Sync,
+    TRequest: Send + Sync,
     TUnsignedMessage: Send + Sync,
     TSignedMessage: Send + Sync,
-    TTradeResponse: Send + Sync,
+    TResponse: Send + Sync,
 {
-    async fn send_trade_request(
+    async fn send(
         &self,
+        request: TRequest,
+        signer: &Signer<TUnsignedMessage, TSignedMessage>,
         preferences: &Preferences,
         tickers: &BiMap<AssetId, String>,
-        trade_request: TTradeRequest,
-        signer: &Signer<TUnsignedMessage, TSignedMessage>,
-    ) -> StockTrekResult<TTradeResponse> {
-        let unsigned = (self.trade_request_to_message)(preferences, tickers, trade_request)?;
+    ) -> StockTrekResult<TResponse> {
+        let unsigned = (self.request_to_unsigned_message)(request, preferences, tickers)?;
         let signed = signer.sign(unsigned)?;
         self.messenger.send(signed).await
     }

@@ -17,14 +17,14 @@ pub type CreateSignerFrom<TAuthentication, TUnsignedMessage, TSignedMessage> =
 pub type SignatureAppender<TUnsignedMessage, TSignedMessage> =
     Box<dyn Fn(TUnsignedMessage, Option<String>) -> TSignedMessage + Send + Sync>;
 
-pub type MessageToDto<TMessage, TDto> = fn(message: &TMessage) -> StockTrekResult<TDto>;
+pub type MessageToDto<TMessage, TDto> = fn(&TMessage) -> StockTrekResult<TDto>;
 
 pub type DeserializeReply<TDto, TRawReply> = fn(TDto) -> StockTrekResult<TRawReply>;
 
 pub type FilterReply<TRawReply, TReply> = fn(TRawReply) -> StockTrekResult<TReply>;
 
-pub type TradeRequestToMessage<TTradeRequest, TUnsignedMessage> =
-    fn(&Preferences, &BiMap<AssetId, String>, TTradeRequest) -> StockTrekResult<TUnsignedMessage>;
+pub type RequestToUnsignedMessage<TRequest, TUnsignedMessage> =
+    fn(TRequest, &Preferences, &BiMap<AssetId, String>) -> StockTrekResult<TUnsignedMessage>;
 
 pub type ToBytes<T> = fn(&T) -> Vec<u8>;
 

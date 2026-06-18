@@ -5,11 +5,11 @@ use stock_trek::{
     cex::trading_pair::TradingPair, error::result::StockTrekResult, preferences::Preferences,
 };
 
-pub type ExchangeSpec<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse> =
-    Box<dyn ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>>;
+pub type ExchangeSpec<TRequest, TUnsignedMessage, TSignedMessage, TResponse> =
+    Box<dyn ExchangeSpecTrait<TRequest, TUnsignedMessage, TSignedMessage, TResponse>>;
 
 #[async_trait]
-pub trait ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTradeResponse>:
+pub trait ExchangeSpecTrait<TRequest, TUnsignedMessage, TSignedMessage, TResponse>:
     Send + Sync
 {
     async fn increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>>;
@@ -17,11 +17,11 @@ pub trait ExchangeSpecTrait<TTradeRequest, TUnsignedMessage, TSignedMessage, TTr
         &self,
         initial_auth_leg_signer: Signer<TUnsignedMessage, TSignedMessage>,
     ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>>;
-    async fn send_trade_request(
+    async fn send(
         &self,
-        preferences: &Preferences,
-        trade_request: TTradeRequest,
-        increments: &HashMap<TradingPair, IncrementSizes>,
+        request: TRequest,
         signer: &Signer<TUnsignedMessage, TSignedMessage>,
-    ) -> StockTrekResult<TTradeResponse>;
+        preferences: &Preferences,
+        increments: &HashMap<TradingPair, IncrementSizes>,
+    ) -> StockTrekResult<TResponse>;
 }

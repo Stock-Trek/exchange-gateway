@@ -80,12 +80,12 @@ impl<TUnsignedMessage, TSignedMessage>
         }
         Ok(signer)
     }
-    async fn send_trade_request(
+    async fn send(
         &self,
-        preferences: &Preferences,
-        trade_request: OrderRequest<AssetId, f64>,
-        increments: &HashMap<TradingPair, IncrementSizes>,
+        request: OrderRequest<AssetId, f64>,
         signer: &Signer<TUnsignedMessage, TSignedMessage>,
+        preferences: &Preferences,
+        increments: &HashMap<TradingPair, IncrementSizes>,
     ) -> StockTrekResult<OrderResponse> {
         // TODO add rate limits back in
         // if !self
@@ -97,18 +97,15 @@ impl<TUnsignedMessage, TSignedMessage>
         //         "Rate limited".to_string(),
         //     )));
         // }
-        let precise_trade_request = PreciseOrders.precise_order_request(
-            trade_request,
-            increments,
-            &preferences.cex.rounding,
-        )?;
+        let precise_trade_request =
+            PreciseOrders.precise_order_request(request, increments, &preferences.cex.rounding)?;
         SemanticChecker.conversion_will_be_semantically_consistent(
             &precise_trade_request,
             &self.capabilities,
             &preferences.cex,
         )?;
         self.message_leg
-            .send_trade_request(preferences, &self.tickers, precise_trade_request, signer)
+            .send(precise_trade_request, signer, preferences, &self.tickers)
             .await
     }
 }
