@@ -1,22 +1,24 @@
 use crate::{
-    authenticate_leg::AuthenticateLeg,
     authenticator_creator::AuthenticatorCreatorTrait,
     cex::{
         cex_spec::CexSpec, increment_sizes::IncrementSizes, rate_limits_weights::RequestWeights,
     },
     connector::{Authenticator, ConnectorImpl},
     credentials::jwt_credential::JwtCredentials,
+    functions::{SignatureAppender, ToBytes},
     increments_leg::{IncrementsLeg, IncrementsLegImpl},
     message_leg::{MessageLeg, MessageLegImpl},
     messenger::MessengerImpl,
     sign::{
-        convert_signer::ConvertSigner,
-        encode::{base64::Base64Encoder, byte_encoder::ByteEncoderTrait},
-        signer::{Signer, SignerTrait},
+        encode::{
+            base64::Base64Encoder, byte_encoder::ByteEncoderTrait, byte_encoding::ByteEncoding,
+        },
+        encrypt::signing_algorithm::SigningAlgorithm,
+        message_signer::MessageSigner,
+        signer::Signer,
     },
     transports::http_transport::{HttpMessageDto, HttpTransportTrait},
 };
-use async_trait::async_trait;
 use bimap::BiMap;
 use chrono::{Duration, Utc};
 use p256::ecdsa::SigningKey;
@@ -196,18 +198,16 @@ impl
             credentials,
             transport,
         } = self;
-        let authenticate_legs: Vec<
-            AuthenticateLeg<UnsignedMessageToCoinbase, SignedMessageToCoinbase>,
-        > = vec![authenticate_leg(&credentials)];
+        let signer = message_signer(&credentials)?;
         let spec = CexSpec::new(
             capabilities(),
             request_weights(),
             tickers(),
             increments_leg(transport.clone()),
-            authenticate_legs,
-            message_leg(transport.clone(), &credentials),
+            vec![],
+            message_leg(transport.clone()),
         );
-        Ok(ConnectorImpl::new(spec, initial_signer()))
+        Ok(ConnectorImpl::new(spec, signer))
     }
 }
 
@@ -339,14 +339,12 @@ fn to_increments(response: ProductsResponse) -> HashMap<TradingPair, IncrementSi
 
 fn message_leg(
     transport: Arc<dyn HttpTransportTrait>,
-    credentials: &JwtCredentials,
 ) -> MessageLeg<
     OrderRequest<AssetId, Decimal>,
     UnsignedMessageToCoinbase,
     SignedMessageToCoinbase,
     OrderResponse,
 > {
-    let _ = credentials;
     let timeout = Duration::seconds(10);
     let messenger = MessengerImpl::new(
         transport,
@@ -630,58 +628,35 @@ fn build_jwt(credentials: &JwtCredentials) -> StockTrekResult<String> {
     Ok(format!("{signing_input}.{signature_b64}"))
 }
 
-/// Authenticate leg for Coinbase REST API.
-/// Generates a JWT bearer token using the Cloud API credentials (ECDSA P-256 key),
-/// then creates a signer that embeds this token into all subsequent messages.
-fn authenticate_leg(
+/// Build a signer that generates a fresh JWT bearer token for each message.
+///
+/// Uses the reusable `MessageSigner` from the sign folder: the unsigned message
+/// is converted to empty bytes (the JWT is not derived from the message), so no
+/// cryptographic signing is performed on a per-message basis. Instead, the
+/// `SignatureAppender` captures the credentials and calls `build_jwt` to produce
+/// a fresh JWT with current timestamps for each signed message.
+fn message_signer(
     credentials: &JwtCredentials,
-) -> AuthenticateLeg<UnsignedMessageToCoinbase, SignedMessageToCoinbase> {
+) -> StockTrekResult<Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>> {
     let credentials = JwtCredentials::new(credentials.api_key.clone(), credentials.secret.clone());
-
-    Box::new(JwtAuthenticateLeg { credentials })
-}
-
-struct JwtAuthenticateLeg {
-    credentials: JwtCredentials,
-}
-
-#[async_trait]
-impl
-    crate::authenticate_leg::AuthenticateLegTrait<
+    let data_signer = SigningAlgorithm::EcdsaP256.signer(&credentials.secret)?;
+    let to_bytes: ToBytes<UnsignedMessageToCoinbase> = |_| vec![];
+    let byte_encoding = ByteEncoding::Base64;
+    let signature_appender: SignatureAppender<UnsignedMessageToCoinbase, SignedMessageToCoinbase> =
+        Box::new(move |unsigned, _sig| {
+            let jwt = build_jwt(&credentials).unwrap_or_default();
+            SignedMessageToCoinbase {
+                body: unsigned,
+                bearer_token: jwt,
+            }
+        });
+    Ok(MessageSigner::<
         UnsignedMessageToCoinbase,
         SignedMessageToCoinbase,
-    > for JwtAuthenticateLeg
-{
-    async fn do_leg(
-        &self,
-        _signer: &Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>,
-    ) -> StockTrekResult<Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase>> {
-        let jwt = build_jwt(&self.credentials)?;
-        Ok(Box::new(JwtSigner { bearer_token: jwt }))
-    }
-}
-
-/// Signer that wraps unsigned messages with a JWT bearer token.
-struct JwtSigner {
-    bearer_token: String,
-}
-
-impl SignerTrait<UnsignedMessageToCoinbase, SignedMessageToCoinbase> for JwtSigner {
-    fn sign(
-        &self,
-        unsigned: UnsignedMessageToCoinbase,
-    ) -> StockTrekResult<SignedMessageToCoinbase> {
-        Ok(SignedMessageToCoinbase {
-            body: unsigned,
-            bearer_token: self.bearer_token.clone(),
-        })
-    }
-}
-
-/// Initial no-op signer used before the authentication leg runs.
-fn initial_signer() -> Signer<UnsignedMessageToCoinbase, SignedMessageToCoinbase> {
-    ConvertSigner::new(|unsigned| SignedMessageToCoinbase {
-        body: unsigned,
-        bearer_token: String::new(),
-    })
+    >::new(
+        to_bytes,
+        data_signer,
+        byte_encoding,
+        signature_appender,
+    ))
 }
