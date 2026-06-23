@@ -1,32 +1,18 @@
-use crate::{cex::increment_sizes::IncrementSizes, sign::signer::Signer};
-use bimap::BiMap;
-use std::collections::HashMap;
-use stock_trek::{
-    cex::{asset_id::AssetId, trading_pair::TradingPair},
-    error::result::StockTrekResult,
-    preferences::Preferences,
-};
+use crate::{error::EGResult, sign::signer::Signer};
 
-pub type ToIncrements<TMessage> = fn(TMessage) -> HashMap<TradingPair, IncrementSizes>;
+pub type CreateAuthMessage<TUnsignedMessage> = fn() -> TUnsignedMessage;
 
-pub type CreateAuthMessage<TAuthMessage> = fn() -> TAuthMessage;
+pub type CreateSignerFrom<TMessageFromExchange, TUnsignedMessage, TSignedMessage> =
+    fn(&TMessageFromExchange) -> EGResult<Signer<TUnsignedMessage, TSignedMessage>>;
 
-pub type CreateSignerFrom<TAuthentication, TUnsignedMessage, TSignedMessage> =
-    Box<dyn Fn(&TAuthentication) -> Signer<TUnsignedMessage, TSignedMessage> + Send + Sync>;
+pub type TryConvertFromRequest<TRequest, TMessageToExchange> =
+    Box<dyn Fn(&TRequest) -> EGResult<TMessageToExchange> + Send + Sync>;
 
 pub type SignatureAppender<TUnsignedMessage, TSignedMessage> =
     Box<dyn Fn(TUnsignedMessage, Option<String>) -> TSignedMessage + Send + Sync>;
 
-pub type MessageToDto<TMessage, TDto> = fn(&TMessage) -> StockTrekResult<TDto>;
+pub type TryConvertToResponse<TMessageFromExchange, TResponse> =
+    fn(TMessageFromExchange) -> EGResult<TResponse>;
 
-pub type DeserializeReply<TDto, TRawReply> = fn(TDto) -> StockTrekResult<TRawReply>;
-
-pub type FilterReply<TRawReply, TReply> = fn(TRawReply) -> StockTrekResult<TReply>;
-
-pub type RequestToUnsignedMessage<TRequest, TUnsignedMessage> =
-    fn(TRequest, &Preferences, &BiMap<AssetId, String>) -> StockTrekResult<TUnsignedMessage>;
-
-pub type ToBytes<T> = fn(&T) -> Vec<u8>;
-
-pub type MessageConverter<TUnsignedMessage, TSignedMessage> =
-    fn(TUnsignedMessage) -> TSignedMessage;
+pub type TryConvertRef<From, To> = fn(&From) -> EGResult<To>;
+pub type TryConvertValue<From, To> = fn(From) -> EGResult<To>;

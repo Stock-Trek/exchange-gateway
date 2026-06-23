@@ -1,14 +1,13 @@
 use crate::{
-    authenticate_leg::{AuthenticateLeg, AuthenticateLegImpl},
-    authenticator_creator::AuthenticatorCreatorTrait,
     cex::{
-        cex_spec::CexSpec, increment_sizes::IncrementSizes, rate_limits_weights::RequestWeights,
+        cex_spec::{AuthenticateLeg, CexSpec, IncrementsLeg, RequestLeg},
+        rate_limits_weights::RequestWeights,
     },
-    connector::{Authenticator, ConnectorImpl},
+    connector::SpecCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
-    functions::{CreateAuthMessage, CreateSignerFrom, SignatureAppender},
-    increments_leg::{IncrementsLeg, IncrementsLegImpl},
-    message_leg::{MessageLeg, MessageLegImpl},
+    error::{EGError, EGResult},
+    exchange_spec::ExchangeSpec,
+    functions::{SignatureAppender, TryConvertFromRequest, TryConvertToResponse, TryConvertValue},
     messenger::MessengerImpl,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
@@ -17,352 +16,74 @@ use crate::{
     },
     transports::websocket_transport::{WebsocketMessageDto, WebsocketTransportTrait},
 };
-use bimap::BiMap;
 use chrono::{Duration, Utc};
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
-use stock_trek::{
-    cex::{
-        asset_id::AssetId,
-        capability::{CexCapability, QuoteQuantityCexCapability},
-        cex_preferences::CexPreferences,
-        order_activation::OrderActivation,
-        order_pricing::OrderPricing,
-        order_quantity::OrderQuantity,
-        order_request::OrderRequest,
-        order_response::OrderResponse,
-        order_side::OrderSide,
-        order_tag::OrderTag,
-        order_time_in_force::OrderTimeInForce,
-        order_trigger_direction::OrderTriggerDirection,
-        trading_pair::TradingPair,
+use exchange_types::binance::{
+    exchange_info::BinanceExchangeInfoParams,
+    logon::BinanceLogonParams,
+    signed::{BinanceParams, BinanceSignature, BinanceUnsignedParams},
+    websocket::{
+        BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
+        BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
-    error::{
-        general::GeneralError,
-        result::{StockTrekError, StockTrekResult},
-    },
-    preferences::Preferences,
 };
 use uuid::Uuid;
 
-#[derive(Serialize)]
-pub struct UnsignedMessageToBinance {
-    #[serde(flatten)]
-    metadata: MetadataToBinance,
-    params: Option<MessageToBinanceParams>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct SignedMessageToBinance {
-    #[serde(flatten)]
-    metadata: MetadataToBinance,
-    params: Option<SignedMessageToBinanceParams>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct MetadataToBinance {
-    id: String,
-    method: MethodName,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum MethodName {
-    #[serde(rename = "exchangeInfo")]
-    ExchangeInfo,
-    #[serde(rename = "session.logon")]
-    Logon,
-    #[serde(rename = "session.logout")]
-    Logout,
-    #[serde(rename = "order.place")]
-    PlaceOrder,
-}
-
-#[derive(Clone, Serialize)]
-pub struct SignedMessageToBinanceParams {
-    #[serde(flatten)]
-    signature: Option<Signature>,
-    #[serde(flatten)]
-    params: MessageToBinanceParams,
-}
-
-#[allow(non_snake_case)]
-#[derive(Clone, Serialize)]
-pub struct Signature {
-    apiKey: String,
-    signature: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(untagged)]
-pub enum MessageToBinanceParams {
-    ExchangeInfoParams(ExchangeInfoParams),
-    LogonParams(LogonParams),
-    SingleOrderParams(SingleOrderParams),
-}
-
-#[allow(non_snake_case)]
-#[derive(Clone, Serialize)]
-pub struct ExchangeInfoParams {
-    permissions: Vec<String>,
-    symbolStatus: String,
-}
-
-#[allow(non_snake_case)]
-#[derive(Clone, Serialize)]
-pub struct LogonParams {
-    timestamp: i64,
-}
-
-#[allow(non_snake_case)]
-#[derive(Clone, Serialize)]
-pub struct SingleOrderParams {
-    icebergQty: Option<Decimal>,
-    newClientOrderId: String,
-    newOrderRespType: NewOrderRespType,
-    pegPriceType: Option<PegPriceType>,
-    pegOffsetValue: Option<i32>,
-    pegOffsetType: Option<PegOffsetType>,
-    price: Option<Decimal>,
-    quantity: Option<Decimal>,
-    quoteOrderQty: Option<Decimal>,
-    recvWindow: Option<Decimal>,
-    selfTradePreventionMode: SelfTradeProtection,
-    side: Side,
-    stopPrice: Option<Decimal>,
-    strategyId: Option<i64>,
-    strategyType: Option<i32>,
-    symbol: String,
-    timeInForce: Option<TimeInForce>,
-    timestamp: i64,
-    trailingDelta: Option<i32>,
-    r#type: OrderType,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum NewOrderRespType {
-    ACK,
-    RESULT,
-    FULL,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum OrderType {
-    LIMIT,
-    LIMIT_MAKER,
-    MARKET,
-    STOP_LOSS,
-    STOP_LOSS_LIMIT,
-    TAKE_PROFIT,
-    TAKE_PROFIT_LIMIT,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum PegPriceType {
-    PRIMARY_PEG,
-    MARKET_PEG,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum PegOffsetType {
-    PRICE_LEVEL,
-}
-
-#[derive(Clone, Copy, Serialize)]
-pub enum Side {
-    BUY,
-    SELL,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum SelfTradeProtection {
-    EXPIRE_BOTH,
-    EXPIRE_MAKER,
-    EXPIRE_TAKER,
-    DECREMENT,
-    NONE,
-    TRANSFER,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Serialize)]
-pub enum TimeInForce {
-    FOK,
-    GTC,
-    IOC,
-}
-
-#[allow(non_snake_case)]
-#[derive(Deserialize)]
-pub struct MessageFromBinance {
-    error: Option<MessageFromBinanceError>,
-    id: String,
-    status: i32,
-    rateLimits: Vec<MessageFromBinanceRateLimit>,
-    result: MessageFromBinanceResult,
-}
-
-#[derive(Deserialize)]
-pub struct MessageFromBinanceError {
-    #[allow(unused)]
-    code: String,
-    msg: String,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Deserialize)]
-#[serde(untagged)]
-pub enum MessageFromBinanceResult {
-    ExchangeInfo(ExchangeInfoResult),
-    SessionAuthentication(SessionAuthenticationResult),
-    OrderPlaced(OrderPlaceResult),
-}
-
-#[allow(non_snake_case, unused)]
-#[derive(Deserialize)]
-pub struct ExchangeInfoResult {
-    timezone: String,
-    serverTime: i64,
-    rateLimits: Vec<MessageFromBinanceRateLimit>,
-    symbols: Vec<ExchangeInfoSymbol>,
-}
-
-#[allow(non_snake_case, unused)]
-#[derive(Deserialize)]
-pub struct ExchangeInfoSymbol {
-    baseAsset: String,
-    baseAssetPrecision: u8,
-    baseCommissionPrecision: u8,
-    isSpotTradingAllowed: bool,
-    orderTypes: Vec<ExchangeInfoSymbolOrderType>,
-    quoteAsset: String,
-    quoteAssetPrecision: u8,
-    quoteCommissionPrecision: u8,
-    quoteOrderQtyMarketAllowed: bool,
-    quotePrecision: u8,
-    status: String,
-    symbol: String,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Deserialize)]
-pub enum ExchangeInfoSymbolOrderType {
-    LIMIT,
-    LIMIT_MAKER,
-    MARKET,
-    STOP_LOSS_LIMIT,
-    TAKE_PROFIT_LIMIT,
-}
-
-#[allow(non_snake_case, unused)]
-#[derive(Deserialize)]
-pub struct OrderPlaceResult {
-    clientOrderId: String,
-    cummulativeQuoteQty: Decimal,
-    executedQty: Decimal,
-    orderId: i64,
-    orderListId: i32,
-    origQty: Decimal,
-    origQuoteOrderQty: Decimal,
-    price: Decimal,
-    selfTradePreventionMode: String,
-    side: String,
-    status: String,
-    symbol: String,
-    timeInForce: String,
-    transactTime: i64,
-    r#type: String,
-    workingTime: i64,
-}
-
-#[allow(non_snake_case, unused)]
-#[derive(Deserialize)]
-pub struct MessageFromBinanceRateLimit {
-    count: i64,
-    interval: RateLimitInterval,
-    intervalNum: i32,
-    limit: i64,
-    rateLimitType: RateLimitType,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Deserialize)]
-pub enum RateLimitInterval {
-    DAY,
-    HOUR,
-    MINUTE,
-    SECOND,
-}
-
-#[allow(non_camel_case_types)]
-#[derive(Deserialize)]
-pub enum RateLimitType {
-    CONNECTIONS,
-    ORDERS,
-    REQUEST_WEIGHT,
-}
-
-#[allow(non_snake_case, unused)]
-#[derive(Deserialize)]
-pub struct SessionAuthenticationResult {
-    apiKey: String,
-    authorizedSince: i64,
-    connectedSince: i64,
-    returnRateLimits: bool,
-    serverTime: i64,
-    userDataStream: bool,
-}
-
-pub struct BinanceWebsocketSpecCreator {
-    pub credentials: ApiKeyCredentials,
-    pub transport: Arc<dyn WebsocketTransportTrait>,
-    pub use_session: bool,
-}
-
-impl
-    AuthenticatorCreatorTrait<
-        OrderRequest<AssetId, f64>,
-        UnsignedMessageToBinance,
-        SignedMessageToBinance,
-        OrderResponse,
-    > for BinanceWebsocketSpecCreator
+pub struct BinanceWebsocketSpecCreator<TTransport, TRequest, TResponse>
+where
+    TTransport: WebsocketTransportTrait,
 {
-    fn into_authenticator(
+    pub(crate) credentials: ApiKeyCredentials,
+    pub(crate) transport: TTransport,
+    pub(crate) use_session: bool,
+    pub(crate) to_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
+    pub(crate) to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
+}
+
+impl<TTransport, TRequest, TResponse>
+    SpecCreatorTrait<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest, TResponse>
+    for BinanceWebsocketSpecCreator<TTransport, TRequest, TResponse>
+where
+    TTransport: WebsocketTransportTrait + 'static,
+    TRequest: Send + Sync + 'static,
+    TResponse: Send + Sync + 'static,
+{
+    fn into_spec_signer(
         self,
-    ) -> StockTrekResult<Authenticator<OrderRequest<AssetId, f64>, OrderResponse>> {
+    ) -> EGResult<(
+        ExchangeSpec<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest, TResponse>,
+        Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>,
+    )> {
         let BinanceWebsocketSpecCreator {
-            use_session,
             credentials,
             transport,
+            to_binance_params,
+            to_response,
+            use_session,
         } = self;
+        let messenger = Box::new(MessengerImpl::new(transport, dto, from_dto));
+        let increments_leg = increments_leg(to_response);
         let authenticate_legs = if use_session {
-            vec![authenticate_leg(transport.clone())]
+            vec![authenticate_leg::<TResponse>()]
         } else {
             vec![]
         };
-        let spec = CexSpec::new(
-            capabilities(),
+        let request_leg = request_leg(to_unsigned_message(to_binance_params), to_response);
+        let spec = Box::new(CexSpec::<
+            TRequest,
+            BinanceWebsocketUnsignedRequest,
+            BinanceWebsocketRequest,
+            BinanceWebsocketResponse,
+            TResponse,
+        >::new(
             request_weights(),
-            tickers(),
-            increments_leg(transport.clone()),
+            messenger,
+            increments_leg,
             authenticate_legs,
-            message_leg(transport.clone()),
-        );
-        Ok(ConnectorImpl::new(spec, message_signer(credentials)?))
+            request_leg,
+        ));
+        let initial_signer = message_signer(credentials)?;
+        Ok((spec, initial_signer))
     }
-}
-
-fn capabilities() -> Vec<CexCapability> {
-    vec![
-        CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowLimitPricing),
-        CexCapability::QuoteQuantity(QuoteQuantityCexCapability::AllowTriggeredTiming),
-    ]
 }
 
 fn request_weights() -> RequestWeights {
@@ -371,427 +92,167 @@ fn request_weights() -> RequestWeights {
     }
 }
 
-fn tickers() -> BiMap<AssetId, String> {
-    let mut tickers = BiMap::new();
-    tickers.insert(AssetId::aave(), "AAVE".to_string());
-    tickers.insert(AssetId::arbitrum(), "ARB".to_string());
-    tickers.insert(AssetId::avalanche(), "AVAX".to_string());
-    tickers.insert(AssetId::bitcoin(), "BTC".to_string());
-    tickers.insert(AssetId::bitcoin_cash(), "BCH".to_string());
-    tickers.insert(AssetId::bnb(), "BNB".to_string());
-    tickers.insert(AssetId::celo(), "CELO".to_string());
-    tickers.insert(AssetId::cosmos(), "ATOM".to_string());
-    tickers.insert(AssetId::cronos(), "CRO".to_string());
-    tickers.insert(AssetId::dai(), "DAI".to_string());
-    tickers.insert(AssetId::dogecoin(), "DOGE".to_string());
-    tickers.insert(AssetId::ethereum(), "ETH".to_string());
-    tickers.insert(AssetId::fantom(), "FTM".to_string());
-    tickers.insert(AssetId::gnosis(), "GNO".to_string());
-    tickers.insert(AssetId::link(), "LINK".to_string());
-    tickers.insert(AssetId::litecoin(), "LTC".to_string());
-    tickers.insert(AssetId::moonbeam(), "GLMR".to_string());
-    tickers.insert(AssetId::near(), "NEAR".to_string());
-    tickers.insert(AssetId::optimism(), "OP".to_string());
-    tickers.insert(AssetId::osmosis(), "OSMO".to_string());
-    tickers.insert(AssetId::polygon(), "POL".to_string());
-    tickers.insert(AssetId::solana(), "SOL".to_string());
-    tickers.insert(AssetId::tron(), "TRX".to_string());
-    tickers.insert(AssetId::uni(), "UNI".to_string());
-    tickers.insert(AssetId::usdc(), "USDC".to_string());
-    tickers.insert(AssetId::usdt(), "USDT".to_string());
-    tickers.insert(AssetId::wbtc(), "WBTC".to_string());
-    tickers.insert(AssetId::weth(), "WETH".to_string());
-    tickers
-}
-
-fn increments_leg(transport: Arc<dyn WebsocketTransportTrait>) -> IncrementsLeg {
+fn increments_leg<TResponse>(
+    to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
+) -> IncrementsLeg<BinanceWebsocketRequest, BinanceWebsocketResponse, TResponse> {
     let timeout = Duration::seconds(30);
-    let messenger = MessengerImpl::new(
-        transport,
+    let message = increments_message();
+    IncrementsLeg {
+        message,
         timeout,
-        dto,
-        deserialize_reply,
-        filter_reply_exchange_info,
-    );
-    IncrementsLegImpl::new(increments_message(), messenger, increments)
+        to_response,
+    }
 }
 
-fn authenticate_leg(
-    transport: Arc<dyn WebsocketTransportTrait>,
-) -> AuthenticateLeg<UnsignedMessageToBinance, SignedMessageToBinance> {
-    let timeout = Duration::seconds(20);
-    let messenger = MessengerImpl::new(
-        transport,
-        timeout,
-        dto,
-        deserialize_reply,
-        filter_reply_session_authentication,
-    );
-    let create_signer_from: CreateSignerFrom<(), UnsignedMessageToBinance, SignedMessageToBinance> =
-        Box::new(|_m| ConvertSigner::new(converter));
-    AuthenticateLegImpl::<UnsignedMessageToBinance, SignedMessageToBinance, ()>::new(
-        create_auth_message(),
-        messenger,
-        create_signer_from,
-    )
-}
-
-fn message_leg(
-    transport: Arc<dyn WebsocketTransportTrait>,
-) -> MessageLeg<
-    OrderRequest<AssetId, Decimal>,
-    UnsignedMessageToBinance,
-    SignedMessageToBinance,
-    OrderResponse,
+fn authenticate_leg<TResponse>() -> AuthenticateLeg<
+    BinanceWebsocketUnsignedRequest,
+    BinanceWebsocketRequest,
+    BinanceWebsocketResponse,
 > {
-    let timeout = Duration::seconds(10);
-    let messenger = MessengerImpl::new(
-        transport,
+    let timeout = Duration::seconds(20);
+    AuthenticateLeg {
+        create_auth_message,
+        create_signer_from,
         timeout,
-        dto,
-        deserialize_reply,
-        filter_reply_order_placed,
-    );
-    MessageLegImpl::<
-        OrderRequest<AssetId, Decimal>,
-        UnsignedMessageToBinance,
-        SignedMessageToBinance,
-        OrderResponse,
-    >::new(request_to_unsigned_message, messenger)
+    }
 }
 
-fn increments_message() -> SignedMessageToBinance {
+fn request_leg<TRequest, TResponse>(
+    to_unsigned_message: TryConvertFromRequest<TRequest, BinanceWebsocketUnsignedRequest>,
+    to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
+) -> RequestLeg<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse, TResponse> {
+    let timeout = Duration::seconds(10);
+    RequestLeg::<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse, TResponse> {
+        timeout,
+        to_unsigned_message,
+        to_response,
+    }
+}
+
+fn increments_message() -> BinanceWebsocketRequest {
     let id = id();
-    SignedMessageToBinance {
-        metadata: MetadataToBinance {
+    BinanceWebsocketRequest {
+        metadata: BinanceWebsocketMetadata {
             id,
-            method: MethodName::ExchangeInfo,
+            method: BinanceWebsocketMethodName::ExchangeInfo,
         },
-        params: Some(SignedMessageToBinanceParams {
+        params: BinanceParams {
             signature: None,
-            params: MessageToBinanceParams::ExchangeInfoParams(ExchangeInfoParams {
+            params: BinanceUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
                 permissions: vec!["SPOT".to_string()],
                 symbolStatus: "TRADING".to_string(),
             }),
-        }),
+        },
     }
 }
 
-fn create_auth_message() -> CreateAuthMessage<UnsignedMessageToBinance> {
-    || {
-        let id = id();
-        let timestamp = timestamp();
-        let params = LogonParams { timestamp };
-        UnsignedMessageToBinance {
-            metadata: MetadataToBinance {
-                id,
-                method: MethodName::Logon,
-            },
-            params: Some(MessageToBinanceParams::LogonParams(params)),
-        }
-    }
-}
-
-fn unsigned_message_bytes(message: &UnsignedMessageToBinance) -> Vec<u8> {
-    serde_urlencoded::to_string(message).unwrap().into_bytes()
-}
-
-fn request_to_unsigned_message(
-    order_request: OrderRequest<AssetId, Decimal>,
-    preferences: &Preferences,
-    tickers: &BiMap<AssetId, String>,
-) -> StockTrekResult<UnsignedMessageToBinance> {
+fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
     let id = id();
-    let method = MethodName::PlaceOrder;
-    let params = unsigned_binance_params(&preferences.cex, tickers, order_request)?;
-    Ok(UnsignedMessageToBinance {
-        metadata: MetadataToBinance { id, method },
-        params: Some(params),
-    })
-}
-
-fn unsigned_binance_params(
-    preferences: &CexPreferences,
-    tickers: &BiMap<AssetId, String>,
-    order_request: OrderRequest<AssetId, Decimal>,
-) -> StockTrekResult<MessageToBinanceParams> {
-    match order_request {
-        OrderRequest::Single(single_order_request) => {
-            let base = tickers.get_by_left(&single_order_request.base);
-            let quote = tickers.get_by_left(&single_order_request.quote);
-            if let Some(base) = base
-                && let Some(quote) = quote
-            {
-                let price = match single_order_request.pricing {
-                    OrderPricing::Market => None,
-                    OrderPricing::Limit { price, .. } => Some(price),
-                };
-                let quantity = match single_order_request.quantity {
-                    OrderQuantity::OfBase(q) => Some(q),
-                    OrderQuantity::OfQuote(..) => None,
-                };
-                #[allow(non_snake_case)]
-                let quoteOrderQty = match single_order_request.quantity {
-                    OrderQuantity::OfBase(..) => None,
-                    OrderQuantity::OfQuote(q) => Some(q),
-                };
-                #[allow(non_snake_case)]
-                let recvWindow = Some(Decimal::from(preferences.max_network_delay_millis));
-                let side = match single_order_request.side {
-                    OrderSide::Buy => Side::BUY,
-                    OrderSide::Sell => Side::SELL,
-                };
-                #[allow(non_snake_case)]
-                let stopPrice = match single_order_request.activation {
-                    OrderActivation::PriceTriggered {
-                        activation_price, ..
-                    } => Some(activation_price),
-                    OrderActivation::Trailing {
-                        activation_price, ..
-                    } => Some(activation_price),
-                    OrderActivation::Immediate => None,
-                };
-                let symbol = format!("{base}{quote}");
-                #[allow(non_snake_case)]
-                let timeInForce = match single_order_request.pricing {
-                    OrderPricing::Market => None,
-                    OrderPricing::Limit { time_in_force, .. } => match time_in_force {
-                        OrderTimeInForce::FillOrKill => Some(TimeInForce::FOK),
-                        OrderTimeInForce::GoodTillCancelled => Some(TimeInForce::GTC),
-                        OrderTimeInForce::ImmediateOrCancel => Some(TimeInForce::IOC),
-                    },
-                };
-                let r#type = match single_order_request.activation {
-                    OrderActivation::PriceTriggered { direction, .. } => match direction {
-                        OrderTriggerDirection::Above => match single_order_request.pricing {
-                            OrderPricing::Market => OrderType::TAKE_PROFIT,
-                            OrderPricing::Limit { .. } => OrderType::TAKE_PROFIT_LIMIT,
-                        },
-                        OrderTriggerDirection::Below => match single_order_request.pricing {
-                            OrderPricing::Market => OrderType::STOP_LOSS,
-                            OrderPricing::Limit { .. } => OrderType::STOP_LOSS_LIMIT,
-                        },
-                    },
-                    OrderActivation::Trailing { direction, .. } => match direction {
-                        OrderTriggerDirection::Above => match single_order_request.pricing {
-                            OrderPricing::Market => OrderType::TAKE_PROFIT,
-                            OrderPricing::Limit { .. } => OrderType::TAKE_PROFIT_LIMIT,
-                        },
-                        OrderTriggerDirection::Below => match single_order_request.pricing {
-                            OrderPricing::Market => OrderType::STOP_LOSS,
-                            OrderPricing::Limit { .. } => OrderType::STOP_LOSS_LIMIT,
-                        },
-                    },
-                    OrderActivation::Immediate => match single_order_request.pricing {
-                        OrderPricing::Market => OrderType::MARKET,
-                        OrderPricing::Limit { .. } => OrderType::LIMIT,
-                    },
-                };
-                let params = SingleOrderParams {
-                    icebergQty: None,
-                    newClientOrderId: single_order_request.order_tag.0,
-                    newOrderRespType: NewOrderRespType::FULL,
-                    pegPriceType: None,
-                    pegOffsetValue: None,
-                    pegOffsetType: None,
-                    price,
-                    quantity,
-                    quoteOrderQty,
-                    recvWindow,
-                    selfTradePreventionMode: SelfTradeProtection::NONE,
-                    side,
-                    stopPrice,
-                    strategyId: None,
-                    strategyType: None,
-                    symbol,
-                    timeInForce,
-                    timestamp: timestamp(),
-                    trailingDelta: None,
-                    r#type,
-                };
-                Ok(MessageToBinanceParams::SingleOrderParams(params))
-            } else {
-                Err(StockTrekError::General(GeneralError::Message(
-                    "Failed to find ticker for base or quote".to_string(),
-                )))
-            }
-        }
+    let timestamp = timestamp();
+    let params = BinanceLogonParams { timestamp };
+    BinanceWebsocketUnsignedRequest {
+        metadata: BinanceWebsocketMetadata {
+            id,
+            method: BinanceWebsocketMethodName::Logon,
+        },
+        params: BinanceUnsignedParams::Logon(params),
     }
 }
 
-fn dto(message: &SignedMessageToBinance) -> StockTrekResult<WebsocketMessageDto> {
-    let body_json = serde_json::to_string(&message)
-        .map_err(|_e| StockTrekError::General(GeneralError::Message("".to_string())))?;
+fn create_signer_from(
+    _message_from: &BinanceWebsocketResponse,
+) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
+    let converter = converter();
+    let signer = Box::new(ConvertSigner::new(converter));
+    Ok(signer)
+}
+
+fn unsigned_message_bytes(message: &BinanceWebsocketUnsignedRequest) -> EGResult<Vec<u8>> {
+    Ok(serde_urlencoded::to_string(message).unwrap().into_bytes())
+}
+
+fn to_unsigned_message<TRequest>(
+    to_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
+) -> TryConvertFromRequest<TRequest, BinanceWebsocketUnsignedRequest>
+where
+    TRequest: 'static,
+{
+    Box::new(
+        move |request| -> EGResult<BinanceWebsocketUnsignedRequest> {
+            let id = id();
+            let method = BinanceWebsocketMethodName::PlaceOrder;
+            let params = to_binance_params(request)?;
+            Ok(BinanceWebsocketUnsignedRequest {
+                metadata: BinanceWebsocketMetadata { id, method },
+                params,
+            })
+        },
+    )
+}
+
+fn dto(message: &BinanceWebsocketRequest) -> EGResult<WebsocketMessageDto> {
+    let body_json =
+        serde_json::to_string(&message).map_err(|_e| EGError::Custom("".to_string()))?;
     Ok(WebsocketMessageDto { body_json })
 }
 
-fn deserialize_reply(dto: WebsocketMessageDto) -> StockTrekResult<MessageFromBinance> {
-    let message: MessageFromBinance =
-        serde_json::from_str(dto.body_json.as_str()).map_err(|_e| {
-            StockTrekError::General(GeneralError::Message(
-                "Failed to deserialize response".to_string(),
-            ))
-        })?;
+fn from_dto(dto: WebsocketMessageDto) -> EGResult<BinanceWebsocketResponse> {
+    let message: BinanceWebsocketResponse = serde_json::from_str(dto.body_json.as_str())
+        .map_err(|_e| EGError::Custom("Failed to deserialize response".to_string()))?;
     Ok(message)
-}
-
-fn filter_reply_session_authentication(reply: MessageFromBinance) -> StockTrekResult<()> {
-    let MessageFromBinance {
-        id: _id,
-        result,
-        error,
-        status,
-        rateLimits: _rate_limits,
-    } = reply;
-    if status >= 300 {
-        let error_message = if let Some(e) = error {
-            e.msg
-        } else {
-            "Unknown error".to_string()
-        };
-        return Err(StockTrekError::General(GeneralError::Message(
-            error_message,
-        )));
-    }
-    match result {
-        MessageFromBinanceResult::SessionAuthentication(_session_authentication) => Ok(()),
-        _ => Err(StockTrekError::General(GeneralError::Message(
-            "Wrong result".to_string(),
-        ))),
-    }
-}
-
-fn filter_reply_order_placed(reply: MessageFromBinance) -> StockTrekResult<OrderResponse> {
-    let MessageFromBinance {
-        id: _id,
-        result,
-        error,
-        status,
-        rateLimits: _rate_limits,
-    } = reply;
-    if status >= 300 {
-        let error_message = if let Some(e) = error {
-            e.msg
-        } else {
-            "Unknown error".to_string()
-        };
-        return Err(StockTrekError::General(GeneralError::Message(
-            error_message,
-        )));
-    }
-    match result {
-        MessageFromBinanceResult::OrderPlaced(order_placed) => Ok(OrderResponse {
-            tag: OrderTag(order_placed.clientOrderId),
-        }),
-        _ => Err(StockTrekError::General(GeneralError::Message(
-            "Wrong result".to_string(),
-        ))),
-    }
-}
-
-fn filter_reply_exchange_info(reply: MessageFromBinance) -> StockTrekResult<ExchangeInfoResult> {
-    let MessageFromBinance {
-        id: _id,
-        result,
-        error,
-        status,
-        rateLimits: _rate_limits,
-    } = reply;
-    if status >= 300 {
-        let error_message = if let Some(e) = error {
-            e.msg
-        } else {
-            "Unknown error".to_string()
-        };
-        return Err(StockTrekError::General(GeneralError::Message(
-            error_message,
-        )));
-    }
-    match result {
-        MessageFromBinanceResult::ExchangeInfo(exchange_info) => Ok(exchange_info),
-        _ => Err(StockTrekError::General(GeneralError::Message(
-            "Wrong result".to_string(),
-        ))),
-    }
 }
 
 fn message_signer(
     credentials: ApiKeyCredentials,
-) -> StockTrekResult<Signer<UnsignedMessageToBinance, SignedMessageToBinance>> {
+) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
-    let data_signer = SigningAlgorithm::Ed25519.signer(&secret).map_err(|_e| {
-        StockTrekError::General(GeneralError::Message("Cannot create signer".to_string()))
-    })?;
-    Ok(MessageSigner::<
-        UnsignedMessageToBinance,
-        SignedMessageToBinance,
+    let data_signer = SigningAlgorithm::Ed25519
+        .signer(&secret)
+        .map_err(|_e| EGError::Custom("Cannot create signer".to_string()))?;
+    Ok(Box::new(MessageSigner::<
+        BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketRequest,
     >::new(
         unsigned_message_bytes,
         data_signer,
         ByteEncoding::Base64,
         signature_appender(api_key),
-    ))
+    )))
 }
 
-fn converter(unsigned: UnsignedMessageToBinance) -> SignedMessageToBinance {
-    let UnsignedMessageToBinance { metadata, params } = unsigned;
-    let params = params.map(|params| SignedMessageToBinanceParams {
-        signature: None,
-        params,
-    });
-    SignedMessageToBinance { metadata, params }
+fn converter() -> TryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
+    |unsigned| {
+        let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
+        let params =  BinanceParams {
+            signature: None,
+            params,
+        };
+        Ok(BinanceWebsocketRequest { metadata, params })
+    }
 }
 
 fn signature_appender(
     api_key: String,
-) -> SignatureAppender<UnsignedMessageToBinance, SignedMessageToBinance> {
+) -> SignatureAppender<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
     Box::new(move |unsigned, signature| {
-        let UnsignedMessageToBinance {
+        let BinanceWebsocketUnsignedRequest {
             metadata,
             params: unsigned_params,
         } = unsigned;
-        let params: Option<SignedMessageToBinanceParams> = if let Some(params) = unsigned_params
-            && let Some(signature) = signature
-        {
-            Some(SignedMessageToBinanceParams {
-                signature: Some(Signature {
-                    apiKey: api_key.to_string(),
-                    signature,
-                }),
-                params,
+        let signature = if let Some(signature) = signature {
+            Some(BinanceSignature {
+                apiKey: api_key.to_string(),
+                signature,
             })
         } else {
             None
         };
-        SignedMessageToBinance { metadata, params }
+        let params = BinanceParams {
+            params: unsigned_params,
+            signature,
+        };
+        BinanceWebsocketRequest { metadata, params }
     })
-}
-
-fn increments(exchange_info_result: ExchangeInfoResult) -> HashMap<TradingPair, IncrementSizes> {
-    let tickers = tickers();
-    let ExchangeInfoResult { symbols, .. } = exchange_info_result;
-    let mut increments = HashMap::new();
-    for symbol in symbols {
-        let ExchangeInfoSymbol {
-            baseAsset,
-            baseAssetPrecision,
-            quoteAsset,
-            quoteAssetPrecision,
-            ..
-        } = symbol;
-        let base = tickers.get_by_right(&baseAsset);
-        let quote = tickers.get_by_right(&quoteAsset);
-        if let Some(base) = base
-            && let Some(quote) = quote
-        {
-            let trading_pair = TradingPair::new(base.clone(), quote.clone());
-            let tick_size = Decimal::from_i128_with_scale(1, baseAssetPrecision as u32);
-            let lot_size = Decimal::from_i128_with_scale(1, quoteAssetPrecision as u32);
-            let increment_sizes = IncrementSizes::new(tick_size, lot_size);
-            increments.insert(trading_pair, increment_sizes);
-        }
-    }
-    increments
 }
 
 fn id() -> String {

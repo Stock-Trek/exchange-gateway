@@ -1,11 +1,10 @@
-use crate::sign::encrypt::data_signer::DataSignerTrait;
+use crate::{
+    error::{EGError, EGResult},
+    sign::encrypt::data_signer::DataSignerTrait,
+};
 use hmac::{Hmac, Mac};
 use secrecy::{ExposeSecret, SecretSlice};
 use sha2::Sha512;
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
-};
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -20,10 +19,9 @@ impl HmacSha512Signer {
 }
 
 impl DataSignerTrait for HmacSha512Signer {
-    fn sign(&self, data: &[u8]) -> StockTrekResult<Vec<u8>> {
-        let mut mac = HmacSha512::new_from_slice(self.hmac_slice.expose_secret()).map_err(|e| {
-            StockTrekError::General(GeneralError::Message(format!("HMAC-SHA512 key error: {e}")))
-        })?;
+    fn sign(&self, data: &[u8]) -> EGResult<Vec<u8>> {
+        let mut mac = HmacSha512::new_from_slice(self.hmac_slice.expose_secret())
+            .map_err(|e| EGError::Custom(format!("HMAC-SHA512 key error: {e}")))?;
         mac.update(data);
         Ok(mac.finalize().into_bytes().to_vec())
     }

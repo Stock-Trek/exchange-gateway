@@ -1,15 +1,15 @@
 use crate::{
-    functions::{SignatureAppender, ToBytes},
+    error::EGResult,
+    functions::{SignatureAppender, TryConvertRef},
     sign::{
         encode::{byte_encoder::ByteEncoder, byte_encoding::ByteEncoding},
         encrypt::data_signer::DataSigner,
-        signer::{Signer, SignerTrait},
+        signer::SignerTrait,
     },
 };
-use stock_trek::error::result::StockTrekResult;
 
 pub struct MessageSigner<TUnsignedMessage, TSignedMessage> {
-    to_bytes: ToBytes<TUnsignedMessage>,
+    to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
     signer: DataSigner,
     byte_encoding: ByteEncoding,
     signature_appender: SignatureAppender<TUnsignedMessage, TSignedMessage>,
@@ -21,17 +21,17 @@ where
     TSignedMessage: Send + Sync + 'static,
 {
     pub fn new(
-        to_bytes: ToBytes<TUnsignedMessage>,
+        to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
         signer: DataSigner,
         byte_encoding: ByteEncoding,
         signature_appender: SignatureAppender<TUnsignedMessage, TSignedMessage>,
-    ) -> Signer<TUnsignedMessage, TSignedMessage> {
-        Box::new(Self {
+    ) -> Self {
+        Self {
             to_bytes,
             signer,
             byte_encoding,
             signature_appender,
-        })
+        }
     }
 }
 
@@ -41,8 +41,8 @@ where
     TUnsignedMessage: Send + Sync,
     TSignedMessage: Send + Sync,
 {
-    fn sign(&self, unsigned: TUnsignedMessage) -> StockTrekResult<TSignedMessage> {
-        let bytes = (self.to_bytes)(&unsigned);
+    fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
+        let bytes = (self.to_bytes)(&unsigned)?;
         let signature = if bytes.is_empty() {
             None
         } else {

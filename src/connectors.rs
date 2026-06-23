@@ -1,52 +1,53 @@
 use crate::{
-    authenticator_creator::AuthenticatorCreatorTrait,
-    connector::Authenticator,
-    credentials::{api_key_credential::ApiKeyCredentials, jwt_credential::JwtCredentials},
-    specs::{
-        binance_websocket::BinanceWebsocketSpecCreator, coinbase_rest::CoinbaseRestSpecCreator,
-    },
-    transports::{
-        http_transport::HttpTransportTrait, websocket_transport::WebsocketTransportTrait,
+    connector::ConnectorCreator,
+    credentials::api_key_credential::ApiKeyCredentials,
+    functions::{TryConvertFromRequest, TryConvertToResponse},
+    specs::binance_websocket::BinanceWebsocketSpecCreator,
+    transports::websocket_transport::WebsocketTransportTrait,
+};
+use exchange_types::binance::{
+    signed::BinanceUnsignedParams,
+    websocket::{
+        BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
 };
-use std::sync::Arc;
-use stock_trek::{
-    cex::{asset_id::AssetId, order_request::OrderRequest, order_response::OrderResponse},
-    error::result::StockTrekResult,
-};
+use std::marker::PhantomData;
 
 pub struct Connectors;
 
 impl Connectors {
-    pub async fn binance_websocket<TTransport>(
+    pub async fn binance_websocket<TTransport, TRequest, TResponse>(
         &self,
         credentials: ApiKeyCredentials,
         transport: TTransport,
         use_session: bool,
-    ) -> StockTrekResult<Authenticator<OrderRequest<AssetId, f64>, OrderResponse>>
+        to_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
+        to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
+    ) -> ConnectorCreator<
+        BinanceWebsocketSpecCreator<TTransport, TRequest, TResponse>,
+        TRequest,
+        BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketRequest,
+        TResponse,
+    >
     where
         TTransport: WebsocketTransportTrait + 'static,
+        TRequest: Send + Sync + 'static,
+        TResponse: Send + Sync + 'static,
     {
         let spec_creator = BinanceWebsocketSpecCreator {
             credentials,
-            transport: Arc::new(transport),
+            transport,
             use_session,
+            to_binance_params,
+            to_response,
         };
-        spec_creator.into_authenticator()
-    }
-
-    pub async fn coinbase_rest<TTransport>(
-        &self,
-        credentials: JwtCredentials,
-        transport: TTransport,
-    ) -> StockTrekResult<Authenticator<OrderRequest<AssetId, f64>, OrderResponse>>
-    where
-        TTransport: HttpTransportTrait + 'static,
-    {
-        let spec_creator = CoinbaseRestSpecCreator {
-            credentials,
-            transport: Arc::new(transport),
-        };
-        spec_creator.into_authenticator()
+        ConnectorCreator {
+            spec_creator,
+            _phantom_request: PhantomData,
+            _phantom_signed_message: PhantomData,
+            _phantom_unsigned_message: PhantomData,
+            _phantom_response: PhantomData,
+        }
     }
 }

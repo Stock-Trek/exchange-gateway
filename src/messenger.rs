@@ -1,66 +1,67 @@
 use crate::{
-    functions::{DeserializeReply, FilterReply, MessageToDto},
+    error::EGResult,
+    functions::{TryConvertRef, TryConvertValue},
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
 use chrono::Duration;
-use std::sync::Arc;
-use stock_trek::error::result::StockTrekResult;
 
-pub type Messenger<TRequest, TResponse> = Box<dyn MessengerTrait<TRequest, TResponse>>;
+pub type Messenger<TMessageToExchange, TMessageFromExchange> =
+    Box<dyn MessengerTrait<TMessageToExchange, TMessageFromExchange>>;
 
 #[async_trait]
-pub trait MessengerTrait<TRequest, TResponse>: Send + Sync {
-    async fn send(&self, request: TRequest) -> StockTrekResult<TResponse>;
+pub trait MessengerTrait<TMessageToExchange, TMessageFromExchange>: Send + Sync {
+    async fn send(
+        &self,
+        request: &TMessageToExchange,
+        timeout: Duration,
+    ) -> EGResult<TMessageFromExchange>;
 }
 
-pub struct MessengerImpl<TTransport, TRequest, TResponse, TFilteredResponse>
+pub struct MessengerImpl<TTransport, TMessageToExchange, TMessageFromExchange>
 where
-    TTransport: TransportTrait + ?Sized,
+    TTransport: TransportTrait,
 {
-    transport: Arc<TTransport>,
-    timeout: Duration,
-    to_dto: MessageToDto<TRequest, TTransport::MessageDto>,
-    deserialize_reply: DeserializeReply<TTransport::MessageDto, TResponse>,
-    filter_reply: FilterReply<TResponse, TFilteredResponse>,
+    transport: TTransport,
+    to_dto: TryConvertRef<TMessageToExchange, TTransport::MessageDto>,
+    from_dto: TryConvertValue<TTransport::MessageDto, TMessageFromExchange>,
 }
 
-impl<TTransport, TRequest, TResponse, TFilteredResponse>
-    MessengerImpl<TTransport, TRequest, TResponse, TFilteredResponse>
+impl<TTransport, TMessageToExchange, TMessageFromExchange>
+    MessengerImpl<TTransport, TMessageToExchange, TMessageFromExchange>
 where
-    TTransport: TransportTrait + ?Sized + 'static,
-    TRequest: Send + Sync + 'static,
-    TResponse: Send + Sync + 'static,
-    TFilteredResponse: Send + Sync + 'static,
+    TTransport: TransportTrait + 'static,
+    TMessageToExchange: Send + Sync + 'static,
+    TMessageFromExchange: Send + Sync + 'static,
 {
     pub fn new(
-        transport: Arc<TTransport>,
-        timeout: Duration,
-        to_dto: MessageToDto<TRequest, TTransport::MessageDto>,
-        deserialize_reply: DeserializeReply<TTransport::MessageDto, TResponse>,
-        filter_reply: FilterReply<TResponse, TFilteredResponse>,
-    ) -> Messenger<TRequest, TFilteredResponse> {
-        Box::new(Self {
+        transport: TTransport,
+        to_dto: TryConvertRef<TMessageToExchange, TTransport::MessageDto>,
+        from_dto: TryConvertValue<TTransport::MessageDto, TMessageFromExchange>,
+    ) -> Self {
+        Self {
             transport,
-            timeout,
             to_dto,
-            deserialize_reply,
-            filter_reply,
-        })
+            from_dto,
+        }
     }
 }
 
 #[async_trait]
-impl<TTransport, TRequest, TResponse, TFilteredResponse> MessengerTrait<TRequest, TFilteredResponse>
-    for MessengerImpl<TTransport, TRequest, TResponse, TFilteredResponse>
+impl<TTransport, TMessageToExchange, TMessageFromExchange>
+    MessengerTrait<TMessageToExchange, TMessageFromExchange>
+    for MessengerImpl<TTransport, TMessageToExchange, TMessageFromExchange>
 where
-    TTransport: TransportTrait + ?Sized,
-    TRequest: Send,
+    TTransport: TransportTrait,
+    TMessageToExchange: Send + Sync,
 {
-    async fn send(&self, request: TRequest) -> StockTrekResult<TFilteredResponse> {
-        let dto = (self.to_dto)(&request)?;
-        let reply_dto = self.transport.send(dto, self.timeout).await?;
-        let reply = (self.deserialize_reply)(reply_dto)?;
-        (self.filter_reply)(reply)
+    async fn send(
+        &self,
+        request: &TMessageToExchange,
+        timeout: Duration,
+    ) -> EGResult<TMessageFromExchange> {
+        let request_dto = (self.to_dto)(request)?;
+        let reply_dto = self.transport.send(request_dto, timeout).await?;
+        (self.from_dto)(reply_dto)
     }
 }

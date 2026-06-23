@@ -1,6 +1,5 @@
-use crate::sign::encrypt::data_signer::DataSignerTrait;
+use crate::{error::EGResult, sign::encrypt::data_signer::DataSignerTrait};
 use ed25519_compact::SecretKey;
-use stock_trek::error::result::StockTrekResult;
 
 pub struct Ed25519Signer {
     secret_key: SecretKey,
@@ -13,7 +12,7 @@ impl Ed25519Signer {
 }
 
 impl DataSignerTrait for Ed25519Signer {
-    fn sign(&self, data: &[u8]) -> StockTrekResult<Vec<u8>> {
+    fn sign(&self, data: &[u8]) -> EGResult<Vec<u8>> {
         let signature = self.secret_key.sign(data, None);
         Ok(signature.to_vec())
     }

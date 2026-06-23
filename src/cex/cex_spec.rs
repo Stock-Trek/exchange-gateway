@@ -1,111 +1,128 @@
 use crate::{
-    authenticate_leg::AuthenticateLeg,
-    cex::{
-        increment_sizes::IncrementSizes, precise_orders::PreciseOrders,
-        rate_limits_weights::RequestWeights, semantic_checker::SemanticChecker,
-    },
-    exchange_spec::{ExchangeSpec, ExchangeSpecTrait},
-    increments_leg::IncrementsLeg,
-    message_leg::MessageLeg,
+    cex::rate_limits_weights::RequestWeights,
+    error::EGResult,
+    exchange_spec::ExchangeSpecTrait,
+    functions::{CreateAuthMessage, CreateSignerFrom, TryConvertFromRequest, TryConvertToResponse},
+    messenger::Messenger,
     sign::signer::Signer,
 };
 use async_trait::async_trait;
-use bimap::BiMap;
-use rust_decimal::Decimal;
-use std::collections::HashMap;
-use stock_trek::{
-    cex::{
-        asset_id::AssetId, capability::CexCapability, order_request::OrderRequest,
-        order_response::OrderResponse, trading_pair::TradingPair,
-    },
-    error::result::StockTrekResult,
-    preferences::Preferences,
-};
+use chrono::Duration;
 
-pub struct CexSpec<TUnsignedMessage, TSignedMessage> {
-    capabilities: Vec<CexCapability>,
+pub struct CexSpec<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
+{
     #[allow(unused)]
     request_weights: RequestWeights,
-    tickers: BiMap<AssetId, String>,
-    increments_leg: IncrementsLeg,
-    authenticate_legs: Vec<AuthenticateLeg<TUnsignedMessage, TSignedMessage>>,
-    message_leg:
-        MessageLeg<OrderRequest<AssetId, Decimal>, TUnsignedMessage, TSignedMessage, OrderResponse>,
+    messenger: Messenger<TMessageToExchange, TMessageFromExchange>,
+    increments_leg: IncrementsLeg<TMessageToExchange, TMessageFromExchange, TResponse>,
+    authenticate_legs:
+        Vec<AuthenticateLeg<TUnsignedMessage, TMessageToExchange, TMessageFromExchange>>,
+    request_leg: RequestLeg<TRequest, TUnsignedMessage, TMessageFromExchange, TResponse>,
 }
 
-impl<TUnsignedMessage, TSignedMessage> CexSpec<TUnsignedMessage, TSignedMessage>
+pub struct IncrementsLeg<TMessageToExchange, TMessageFromExchange, TResponse> {
+    pub(crate) message: TMessageToExchange,
+    pub(crate) timeout: Duration,
+    pub(crate) to_response: TryConvertToResponse<TMessageFromExchange, TResponse>,
+}
+
+pub struct AuthenticateLeg<TUnsignedMessage, TMessageToExchange, TMessageFromExchange> {
+    pub(crate) create_auth_message: CreateAuthMessage<TUnsignedMessage>,
+    pub(crate) timeout: Duration,
+    pub(crate) create_signer_from:
+        CreateSignerFrom<TMessageFromExchange, TUnsignedMessage, TMessageToExchange>,
+}
+
+pub struct RequestLeg<TRequest, TUnsignedMessage, TMessageFromExchange, TResponse> {
+    pub(crate) to_unsigned_message: TryConvertFromRequest<TRequest, TUnsignedMessage>,
+    pub(crate) timeout: Duration,
+    pub(crate) to_response: TryConvertToResponse<TMessageFromExchange, TResponse>,
+}
+
+impl<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
+    CexSpec<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
 where
-    TUnsignedMessage: 'static,
-    TSignedMessage: 'static,
+    TRequest: Send + Sync + 'static,
+    TUnsignedMessage: Send + Sync + 'static,
+    TMessageToExchange: Send + Sync + 'static,
+    TMessageFromExchange: Send + Sync + 'static,
+    TResponse: Send + Sync + 'static,
 {
     pub fn new(
-        capabilities: Vec<CexCapability>,
         request_weights: RequestWeights,
-        tickers: BiMap<AssetId, String>,
-        increments_leg: IncrementsLeg,
-        authenticate_legs: Vec<AuthenticateLeg<TUnsignedMessage, TSignedMessage>>,
-        message_leg: MessageLeg<
-            OrderRequest<AssetId, Decimal>,
-            TUnsignedMessage,
-            TSignedMessage,
-            OrderResponse,
+        messenger: Messenger<TMessageToExchange, TMessageFromExchange>,
+        increments_leg: IncrementsLeg<TMessageToExchange, TMessageFromExchange, TResponse>,
+        authenticate_legs: Vec<
+            AuthenticateLeg<TUnsignedMessage, TMessageToExchange, TMessageFromExchange>,
         >,
-    ) -> ExchangeSpec<OrderRequest<AssetId, f64>, TUnsignedMessage, TSignedMessage, OrderResponse>
-    {
-        Box::new(Self {
-            capabilities,
+        request_leg: RequestLeg<TRequest, TUnsignedMessage, TMessageFromExchange, TResponse>,
+    ) -> Self {
+        Self {
             request_weights,
-            tickers,
+            messenger,
             increments_leg,
             authenticate_legs,
-            message_leg,
-        })
+            request_leg,
+        }
     }
 }
 
 #[async_trait]
-impl<TUnsignedMessage, TSignedMessage>
-    ExchangeSpecTrait<OrderRequest<AssetId, f64>, TUnsignedMessage, TSignedMessage, OrderResponse>
-    for CexSpec<TUnsignedMessage, TSignedMessage>
+impl<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
+    ExchangeSpecTrait<TRequest, TUnsignedMessage, TMessageToExchange, TResponse>
+    for CexSpec<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
+where
+    TRequest: Send + Sync,
+    TUnsignedMessage: Send + Sync,
+    TMessageToExchange: Send + Sync,
+    TMessageFromExchange: Send + Sync,
+    TResponse: Send + Sync,
 {
-    async fn increments(&self) -> StockTrekResult<HashMap<TradingPair, IncrementSizes>> {
-        self.increments_leg.get_increments().await
+    async fn increments(&self) -> EGResult<TResponse> {
+        let message_from = self
+            .messenger
+            .send(&self.increments_leg.message, self.increments_leg.timeout)
+            .await?;
+        let response = ((self.increments_leg.to_response)(message_from))?;
+        Ok(response)
     }
     async fn authenticate(
         &self,
-        mut signer: Signer<TUnsignedMessage, TSignedMessage>,
-    ) -> StockTrekResult<Signer<TUnsignedMessage, TSignedMessage>> {
+        mut signer: Signer<TUnsignedMessage, TMessageToExchange>,
+    ) -> EGResult<Signer<TUnsignedMessage, TMessageToExchange>> {
         for leg in &self.authenticate_legs {
-            signer = leg.do_leg(&signer).await?;
+            let auth_message = (leg.create_auth_message)();
+            let signed_auth_message = signer.sign(auth_message)?;
+            let message_from = self
+                .messenger
+                .send(&signed_auth_message, leg.timeout)
+                .await?;
+            signer = (leg.create_signer_from)(&message_from)?;
         }
         Ok(signer)
     }
     async fn send(
         &self,
-        request: OrderRequest<AssetId, f64>,
-        signer: &Signer<TUnsignedMessage, TSignedMessage>,
-        preferences: &Preferences,
-        increments: &HashMap<TradingPair, IncrementSizes>,
-    ) -> StockTrekResult<OrderResponse> {
+        request: TRequest,
+        signer: &Signer<TUnsignedMessage, TMessageToExchange>,
+    ) -> EGResult<TResponse> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
         //     .send_order_request
         //     .did_acquire(self.request_weights.send_order_request)
         // {
-        //     return Err(StockTrekError::General(GeneralError::Message(
+        //     return Err(EGError::Custom(
         //         "Rate limited".to_string(),
-        //     )));
+        //     ));
         // }
-        let precise_trade_request =
-            PreciseOrders.precise_order_request(request, increments, &preferences.cex.rounding)?;
-        SemanticChecker.conversion_will_be_semantically_consistent(
-            &precise_trade_request,
-            &self.capabilities,
-            &preferences.cex,
-        )?;
-        self.message_leg
-            .send(precise_trade_request, signer, preferences, &self.tickers)
-            .await
+        let unsigned = (self.request_leg.to_unsigned_message)(&request)?;
+        let message_to = signer.sign(unsigned)?;
+        let message_from = self
+            .messenger
+            .send(&message_to, self.request_leg.timeout)
+            .await?;
+        let response = (self.request_leg.to_response)(message_from)?;
+        Ok(response)
     }
 }

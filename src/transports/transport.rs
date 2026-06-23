@@ -1,10 +1,7 @@
+use crate::error::{EGError, EGResult};
 use async_trait::async_trait;
 use chrono::Duration;
 use std::pin::Pin;
-use stock_trek::error::{
-    general::GeneralError,
-    result::{StockTrekError, StockTrekResult},
-};
 
 #[async_trait]
 pub trait TransportTrait: Send + Sync {
@@ -13,14 +10,14 @@ pub trait TransportTrait: Send + Sync {
         &self,
         message_dto: Self::MessageDto,
         timeout: Duration,
-    ) -> StockTrekResult<Self::MessageDto>;
+    ) -> EGResult<Self::MessageDto>;
 }
 
 pub struct TransportImpl<TransportMessage, MessageDto> {
     transporter:
         fn(TransportMessage, Duration) -> Box<dyn Future<Output = TransportMessage> + Send>,
     serializer: fn(MessageDto) -> TransportMessage,
-    deserializer: fn(TransportMessage) -> StockTrekResult<MessageDto>,
+    deserializer: fn(TransportMessage) -> EGResult<MessageDto>,
 }
 
 impl<TransportMessage, MessageDto> TransportImpl<TransportMessage, MessageDto> {
@@ -30,7 +27,7 @@ impl<TransportMessage, MessageDto> TransportImpl<TransportMessage, MessageDto> {
             Duration,
         ) -> Box<dyn Future<Output = TransportMessage> + Send>,
         serializer: fn(MessageDto) -> TransportMessage,
-        deserializer: fn(TransportMessage) -> StockTrekResult<MessageDto>,
+        deserializer: fn(TransportMessage) -> EGResult<MessageDto>,
     ) -> Self {
         Self {
             transporter,
@@ -46,19 +43,13 @@ where
     MessageDto: Send + Sync,
 {
     type MessageDto = MessageDto;
-    async fn send(
-        &self,
-        message_dto: MessageDto,
-        timeout: Duration,
-    ) -> StockTrekResult<MessageDto> {
+    async fn send(&self, message_dto: MessageDto, timeout: Duration) -> EGResult<MessageDto> {
         let transport_message = (self.serializer)(message_dto);
         let future = (self.transporter)(transport_message, timeout);
         let pinned_future = Pin::from(future);
         let result = pinned_future.await;
         match (self.deserializer)(result) {
-            Err(_e) => Err(StockTrekError::General(GeneralError::Message(
-                "".to_string(),
-            ))),
+            Err(_e) => Err(EGError::Custom("".to_string())),
             Ok(message) => Ok(message),
         }
     }

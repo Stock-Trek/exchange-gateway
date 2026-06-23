@@ -1,13 +1,10 @@
-pub mod authenticate_leg;
-pub mod authenticator_creator;
 pub mod cex;
 pub mod connector;
 pub mod connectors;
 pub mod credentials;
+pub mod error;
 pub mod exchange_spec;
 pub mod functions;
-pub mod increments_leg;
-pub mod message_leg;
 pub mod messenger;
 pub mod rate_limit;
 pub mod sign;
