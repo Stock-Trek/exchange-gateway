@@ -2,8 +2,8 @@ use crate::{error::EGResult, sign::signer::Signer};
 
 pub type CreateAuthMessage<TUnsignedMessage> = fn() -> TUnsignedMessage;
 
-pub type CreateSignerFrom<TMessageFromExchange, TUnsignedMessage, TSignedMessage> =
-    fn(&TMessageFromExchange) -> EGResult<Signer<TUnsignedMessage, TSignedMessage>>;
+pub type CreateSignerFrom<TFrom, TUnsignedMessage, TSignedMessage> =
+    fn(TFrom) -> EGResult<Signer<TUnsignedMessage, TSignedMessage>>;
 
 pub type TryConvertFromRequest<TRequest, TMessageToExchange> =
     Box<dyn Fn(&TRequest) -> EGResult<TMessageToExchange> + Send + Sync>;

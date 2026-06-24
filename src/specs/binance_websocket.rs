@@ -1,14 +1,12 @@
 use crate::{
-    cex::{
-        cex_spec::{AuthenticateLeg, CexSpec, IncrementsLeg, RequestLeg},
-        rate_limits_weights::RequestWeights,
-    },
-    connector::SpecCreatorTrait,
+    authenticator::{AuthenticateLeg, Authenticator, IncrementsLeg},
+    authenticator_creator::AuthenticatorCreator,
+    connector::{RateLimits, RequestWeights},
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    exchange_spec::ExchangeSpec,
-    functions::{SignatureAppender, TryConvertFromRequest, TryConvertToResponse, TryConvertValue},
+    functions::{SignatureAppender, TryConvertFromRequest, TryConvertToResponse},
     messenger::MessengerImpl,
+    rate_limit::{multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig},
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         encrypt::signing_algorithm::SigningAlgorithm, message_signer::MessageSigner,
@@ -28,83 +26,89 @@ use exchange_types::binance::{
 };
 use uuid::Uuid;
 
-pub struct BinanceWebsocketSpecCreator<TTransport, TRequest, TResponse>
+pub struct BinanceWebsocketAuthenticatorCreator<TTransport, TResponse>
 where
     TTransport: WebsocketTransportTrait,
 {
-    pub(crate) credentials: ApiKeyCredentials,
     pub(crate) transport: TTransport,
     pub(crate) use_session: bool,
-    pub(crate) to_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
     pub(crate) to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
+    pub(crate) connector_timeout: Duration,
 }
 
-impl<TTransport, TRequest, TResponse>
-    SpecCreatorTrait<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest, TResponse>
-    for BinanceWebsocketSpecCreator<TTransport, TRequest, TResponse>
+impl<TTransport, TResponse>
+    AuthenticatorCreator<
+        BinanceWebsocketUnsignedRequest,
+        ApiKeyCredentials,
+        BinanceWebsocketRequest,
+        BinanceWebsocketResponse,
+        TResponse,
+    > for BinanceWebsocketAuthenticatorCreator<TTransport, TResponse>
 where
     TTransport: WebsocketTransportTrait + 'static,
-    TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
-    fn into_spec_signer(
+    fn into_authenticator(
         self,
-    ) -> EGResult<(
-        ExchangeSpec<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest, TResponse>,
-        Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>,
-    )> {
-        let BinanceWebsocketSpecCreator {
-            credentials,
+    ) -> Authenticator<
+        BinanceWebsocketUnsignedRequest,
+        ApiKeyCredentials,
+        BinanceWebsocketRequest,
+        BinanceWebsocketResponse,
+        TResponse,
+    > {
+        let BinanceWebsocketAuthenticatorCreator {
             transport,
-            to_binance_params,
             to_response,
             use_session,
+            connector_timeout,
         } = self;
         let messenger = Box::new(MessengerImpl::new(transport, dto, from_dto));
-        let increments_leg = increments_leg(to_response);
+        let increments_leg = increments_leg();
         let authenticate_legs = if use_session {
-            vec![authenticate_leg::<TResponse>()]
+            vec![authenticate_leg()]
         } else {
             vec![]
         };
-        let request_leg = request_leg(to_unsigned_message(to_binance_params), to_response);
-        let spec = Box::new(CexSpec::<
-            TRequest,
-            BinanceWebsocketUnsignedRequest,
-            BinanceWebsocketRequest,
-            BinanceWebsocketResponse,
-            TResponse,
-        >::new(
-            request_weights(),
+        Authenticator {
             messenger,
             increments_leg,
+            to_response,
             authenticate_legs,
-            request_leg,
-        ));
-        let initial_signer = message_signer(credentials)?;
-        Ok((spec, initial_signer))
+            connector_timeout,
+            create_signer_from_credentials,
+            rate_limits: rate_limits(),
+            request_weights: request_weights(),
+        }
     }
 }
 
-fn request_weights() -> RequestWeights {
-    RequestWeights {
-        send_order_request: 1,
-    }
+pub fn unsigned_message_converter<TRequest>(
+    to_unsigned_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
+) -> TryConvertFromRequest<TRequest, BinanceWebsocketUnsignedRequest>
+where
+    TRequest: 'static,
+{
+    Box::new(
+        move |request| -> EGResult<BinanceWebsocketUnsignedRequest> {
+            let id = id();
+            let method = BinanceWebsocketMethodName::PlaceOrder;
+            let params = to_unsigned_binance_params(request)?;
+            Ok(BinanceWebsocketUnsignedRequest {
+                metadata: BinanceWebsocketMetadata { id, method },
+                params,
+            })
+        },
+    )
 }
 
-fn increments_leg<TResponse>(
-    to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
-) -> IncrementsLeg<BinanceWebsocketRequest, BinanceWebsocketResponse, TResponse> {
+fn increments_leg() -> IncrementsLeg<BinanceWebsocketRequest> {
     let timeout = Duration::seconds(30);
     let message = increments_message();
-    IncrementsLeg {
-        message,
-        timeout,
-        to_response,
-    }
+    IncrementsLeg { message, timeout }
 }
 
-fn authenticate_leg<TResponse>() -> AuthenticateLeg<
+fn authenticate_leg() -> AuthenticateLeg<
     BinanceWebsocketUnsignedRequest,
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
@@ -112,20 +116,8 @@ fn authenticate_leg<TResponse>() -> AuthenticateLeg<
     let timeout = Duration::seconds(20);
     AuthenticateLeg {
         create_auth_message,
-        create_signer_from,
+        create_signer_from: create_signer_from_message,
         timeout,
-    }
-}
-
-fn request_leg<TRequest, TResponse>(
-    to_unsigned_message: TryConvertFromRequest<TRequest, BinanceWebsocketUnsignedRequest>,
-    to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
-) -> RequestLeg<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse, TResponse> {
-    let timeout = Duration::seconds(10);
-    RequestLeg::<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse, TResponse> {
-        timeout,
-        to_unsigned_message,
-        to_response,
     }
 }
 
@@ -148,7 +140,7 @@ fn increments_message() -> BinanceWebsocketRequest {
 
 fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
     let id = id();
-    let timestamp = timestamp();
+    let timestamp = Utc::now().timestamp();
     let params = BinanceLogonParams { timestamp };
     BinanceWebsocketUnsignedRequest {
         metadata: BinanceWebsocketMetadata {
@@ -159,35 +151,8 @@ fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
     }
 }
 
-fn create_signer_from(
-    _message_from: &BinanceWebsocketResponse,
-) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
-    let converter = converter();
-    let signer = Box::new(ConvertSigner::new(converter));
-    Ok(signer)
-}
-
 fn unsigned_message_bytes(message: &BinanceWebsocketUnsignedRequest) -> EGResult<Vec<u8>> {
     Ok(serde_urlencoded::to_string(message).unwrap().into_bytes())
-}
-
-fn to_unsigned_message<TRequest>(
-    to_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
-) -> TryConvertFromRequest<TRequest, BinanceWebsocketUnsignedRequest>
-where
-    TRequest: 'static,
-{
-    Box::new(
-        move |request| -> EGResult<BinanceWebsocketUnsignedRequest> {
-            let id = id();
-            let method = BinanceWebsocketMethodName::PlaceOrder;
-            let params = to_binance_params(request)?;
-            Ok(BinanceWebsocketUnsignedRequest {
-                metadata: BinanceWebsocketMetadata { id, method },
-                params,
-            })
-        },
-    )
 }
 
 fn dto(message: &BinanceWebsocketRequest) -> EGResult<WebsocketMessageDto> {
@@ -202,7 +167,7 @@ fn from_dto(dto: WebsocketMessageDto) -> EGResult<BinanceWebsocketResponse> {
     Ok(message)
 }
 
-fn message_signer(
+fn create_signer_from_credentials(
     credentials: ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
@@ -220,14 +185,36 @@ fn message_signer(
     )))
 }
 
-fn converter() -> TryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
-    |unsigned| {
-        let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
-        let params =  BinanceParams {
-            signature: None,
-            params,
-        };
-        Ok(BinanceWebsocketRequest { metadata, params })
+fn create_signer_from_message(
+    _message: BinanceWebsocketResponse,
+) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
+    Ok(Box::new(ConvertSigner::new(converter)))
+}
+
+fn converter(unsigned: BinanceWebsocketUnsignedRequest) -> EGResult<BinanceWebsocketRequest> {
+    let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
+    let params = BinanceParams {
+        signature: None,
+        params,
+    };
+    Ok(BinanceWebsocketRequest { metadata, params })
+}
+
+// TODO ensure this is correct
+fn rate_limits() -> RateLimits {
+    let one_minute_nanos = Duration::minutes(1).num_nanoseconds().unwrap();
+    RateLimits {
+        send_order_request: MultiRateLimiter::new(vec![RateLimitConfig {
+            capacity_per_interval: 1200,
+            interval_nanos: one_minute_nanos as u128,
+        }]),
+    }
+}
+
+// TODO ensure this is correct
+fn request_weights() -> RequestWeights {
+    RequestWeights {
+        send_order_request: 1,
     }
 }
 
@@ -239,14 +226,10 @@ fn signature_appender(
             metadata,
             params: unsigned_params,
         } = unsigned;
-        let signature = if let Some(signature) = signature {
-            Some(BinanceSignature {
-                apiKey: api_key.to_string(),
-                signature,
-            })
-        } else {
-            None
-        };
+        let signature = signature.map(|signature| BinanceSignature {
+            apiKey: api_key.to_string(),
+            signature,
+        });
         let params = BinanceParams {
             params: unsigned_params,
             signature,
@@ -257,8 +240,4 @@ fn signature_appender(
 
 fn id() -> String {
     Uuid::new_v4().to_string()
-}
-
-fn timestamp() -> i64 {
-    Utc::now().timestamp()
 }
