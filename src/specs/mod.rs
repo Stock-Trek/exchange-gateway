@@ -1,1 +1,1 @@
-pub mod binance_websocket;
+pub mod binance;

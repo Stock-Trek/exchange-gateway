@@ -1,24 +1,48 @@
 use crate::{
-    authenticator::Authenticator, authenticator_creator::AuthenticatorCreator,
-    credentials::api_key_credential::ApiKeyCredentials, functions::TryConvertToResponse,
-    specs::binance_websocket::BinanceWebsocketAuthenticatorCreator,
-    transports::websocket_transport::WebsocketTransportTrait,
+    authenticator::Authenticator,
+    authenticator_creator::AuthenticatorCreator,
+    credentials::api_key_credential::ApiKeyCredentials,
+    functions::TryConvertToResponse,
+    specs::binance::{BinanceHttpAuthenticatorCreator, BinanceWebsocketAuthenticatorCreator},
+    transports::{
+        http_transport::HttpTransportTrait, websocket_transport::WebsocketTransportTrait,
+    },
 };
 use chrono::Duration;
-use exchange_types::binance::websocket::{
-    BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+use exchange_types::binance::{
+    http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
+    websocket::{BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest},
 };
 use std::marker::PhantomData;
 
 pub struct Connectors;
 
 impl Connectors {
+    pub fn binance_http<TTransport, TRequest, TResponse>(
+        &self,
+        transport: TTransport,
+        request_timeout: Duration,
+        to_response: TryConvertToResponse<BinanceHttpResponse, TResponse>,
+    ) -> Authenticator<TRequest, BinanceHttpUnsignedRequest, ApiKeyCredentials, TResponse>
+    where
+        TTransport: HttpTransportTrait + 'static,
+        TRequest: Send + Sync + 'static,
+        TResponse: Send + Sync + 'static,
+    {
+        BinanceHttpAuthenticatorCreator {
+            transport,
+            request_timeout,
+            to_response,
+            _phantom_request: PhantomData,
+        }
+        .into_authenticator()
+    }
     pub fn binance_websocket<TTransport, TRequest, TResponse>(
         &self,
-        use_session: bool,
-        connector_timeout: Duration,
         transport: TTransport,
+        request_timeout: Duration,
         to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
+        use_session: bool,
     ) -> Authenticator<TRequest, BinanceWebsocketUnsignedRequest, ApiKeyCredentials, TResponse>
     where
         TTransport: WebsocketTransportTrait + 'static,
@@ -26,9 +50,9 @@ impl Connectors {
         TResponse: Send + Sync + 'static,
     {
         BinanceWebsocketAuthenticatorCreator {
-            connector_timeout,
-            to_response,
             transport,
+            request_timeout,
+            to_response,
             use_session,
             _phantom_request: PhantomData,
         }
