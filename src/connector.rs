@@ -5,9 +5,17 @@ use crate::{
     rate_limit::multi_rate_limiter::MultiRateLimiter,
     sign::signer::Signer,
 };
+use async_trait::async_trait;
 use chrono::Duration;
 
-pub struct Connector<
+pub type Connector<TRequest, TResponse> = Box<dyn ConnectorTrait<TRequest, TResponse>>;
+
+#[async_trait]
+pub trait ConnectorTrait<TRequest, TResponse> {
+    async fn send(&self, request: TRequest) -> EGResult<TResponse>;
+}
+
+pub struct ConnectorImpl<
     TRequest,
     TUnsignedMessage,
     TMessageToExchange,
@@ -25,10 +33,24 @@ pub struct Connector<
     pub(crate) to_response: TryConvertToResponse<TMessageFromExchange, TResponse>,
 }
 
+#[async_trait]
 impl<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
-    Connector<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
+    ConnectorTrait<TRequest, TResponse>
+    for ConnectorImpl<
+        TRequest,
+        TUnsignedMessage,
+        TMessageToExchange,
+        TMessageFromExchange,
+        TResponse,
+    >
+where
+    TRequest: Send,
+    TUnsignedMessage: Send,
+    TMessageToExchange: Send,
+    TMessageFromExchange: Send,
+    TResponse: Send,
 {
-    pub async fn send(&self, request: TRequest) -> EGResult<TResponse> {
+    async fn send(&self, request: TRequest) -> EGResult<TResponse> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
@@ -39,7 +61,7 @@ impl<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResp
         //         "Rate limited".to_string(),
         //     ));
         // }
-        let unsigned = (self.to_unsigned_message)(&request)?;
+        let unsigned = (self.to_unsigned_message)(request)?;
         let message_to = self.signer.sign(unsigned)?;
         let message_from = self.messenger.send(&message_to, self.timeout).await?;
         let response = (self.to_response)(message_from)?;

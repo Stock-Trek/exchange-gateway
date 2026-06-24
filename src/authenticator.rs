@@ -1,12 +1,28 @@
 use crate::{
-    connector::{Connector, RateLimits, RequestWeights},
+    connector::{Connector, ConnectorImpl, RateLimits, RequestWeights},
     error::EGResult,
     functions::{CreateAuthMessage, CreateSignerFrom, TryConvertFromRequest, TryConvertToResponse},
     messenger::Messenger,
 };
+use async_trait::async_trait;
 use chrono::Duration;
+use std::marker::PhantomData;
 
-pub struct Authenticator<
+pub type Authenticator<TRequest, TUnsignedMessage, TCredentials, TResponse> =
+    Box<dyn AuthenticatorTrait<TRequest, TUnsignedMessage, TCredentials, TResponse>>;
+
+#[async_trait]
+pub trait AuthenticatorTrait<TRequest, TUnsignedMessage, TCredentials, TResponse> {
+    async fn increments(&self) -> EGResult<TResponse>;
+    async fn authenticate(
+        self,
+        credentials: TCredentials,
+        request_converter: TryConvertFromRequest<TRequest, TUnsignedMessage>,
+    ) -> EGResult<Connector<TRequest, TResponse>>;
+}
+
+pub struct AuthenticatorImpl<
+    TRequest,
     TUnsignedMessage,
     TCredentials,
     TMessageToExchange,
@@ -23,18 +39,29 @@ pub struct Authenticator<
     pub(crate) request_weights: RequestWeights,
     pub(crate) rate_limits: RateLimits,
     pub(crate) to_response: TryConvertToResponse<TMessageFromExchange, TResponse>,
+    pub(crate) _phantom_request: PhantomData<TRequest>,
 }
 
-impl<TUnsignedMessage, TCredentials, TMessageToExchange, TMessageFromExchange, TResponse>
-    Authenticator<
+#[async_trait]
+impl<TRequest, TUnsignedMessage, TCredentials, TMessageToExchange, TMessageFromExchange, TResponse>
+    AuthenticatorTrait<TRequest, TUnsignedMessage, TCredentials, TResponse>
+    for AuthenticatorImpl<
+        TRequest,
         TUnsignedMessage,
         TCredentials,
         TMessageToExchange,
         TMessageFromExchange,
         TResponse,
     >
+where
+    TRequest: Send + Sync + 'static,
+    TUnsignedMessage: Send + Sync + 'static,
+    TCredentials: Send + Sync + 'static,
+    TMessageToExchange: Send + Sync + 'static,
+    TMessageFromExchange: Send + Sync + 'static,
+    TResponse: Send + Sync + 'static,
 {
-    pub async fn increments(&self) -> EGResult<TResponse> {
+    async fn increments(&self) -> EGResult<TResponse> {
         let message_from = self
             .messenger
             .send(&self.increments_leg.message, self.increments_leg.timeout)
@@ -42,13 +69,11 @@ impl<TUnsignedMessage, TCredentials, TMessageToExchange, TMessageFromExchange, T
         let response = ((self.to_response)(message_from))?;
         Ok(response)
     }
-    pub async fn authenticate<TRequest>(
+    async fn authenticate(
         self,
         credentials: TCredentials,
         request_converter: TryConvertFromRequest<TRequest, TUnsignedMessage>,
-    ) -> EGResult<
-        Connector<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>,
-    > {
+    ) -> EGResult<Connector<TRequest, TResponse>> {
         let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
             let auth_message = (leg.create_auth_message)();
@@ -59,7 +84,7 @@ impl<TUnsignedMessage, TCredentials, TMessageToExchange, TMessageFromExchange, T
                 .await?;
             signer = (leg.create_signer_from)(message_from)?;
         }
-        let connector = Connector {
+        let connector = ConnectorImpl {
             messenger: self.messenger,
             to_unsigned_message: request_converter,
             signer,
@@ -68,7 +93,7 @@ impl<TUnsignedMessage, TCredentials, TMessageToExchange, TMessageFromExchange, T
             request_weights: self.request_weights.clone(),
             rate_limits: self.rate_limits.clone(),
         };
-        Ok(connector)
+        Ok(Box::new(connector))
     }
 }
 

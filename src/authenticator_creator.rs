@@ -1,20 +1,7 @@
 use crate::authenticator::Authenticator;
 
-pub trait AuthenticatorCreator<
-    TUnsignedMessage,
-    TCredentials,
-    TMessageToExchange,
-    TMessageFromExchange,
-    TResponse,
->
-{
+pub trait AuthenticatorCreator<TRequest, TUnsignedMessage, TCredentials, TResponse> {
     fn into_authenticator(
         self,
-    ) -> Authenticator<
-        TUnsignedMessage,
-        TCredentials,
-        TMessageToExchange,
-        TMessageFromExchange,
-        TResponse,
-    >;
+    ) -> Authenticator<TRequest, TUnsignedMessage, TCredentials, TResponse>;
 }

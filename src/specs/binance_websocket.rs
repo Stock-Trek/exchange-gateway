@@ -1,5 +1,5 @@
 use crate::{
-    authenticator::{AuthenticateLeg, Authenticator, IncrementsLeg},
+    authenticator::{AuthenticateLeg, Authenticator, AuthenticatorImpl, IncrementsLeg},
     authenticator_creator::AuthenticatorCreator,
     connector::{RateLimits, RequestWeights},
     credentials::api_key_credential::ApiKeyCredentials,
@@ -24,44 +24,35 @@ use exchange_types::binance::{
         BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
 };
+use std::marker::PhantomData;
 use uuid::Uuid;
 
-pub struct BinanceWebsocketAuthenticatorCreator<TTransport, TResponse>
-where
-    TTransport: WebsocketTransportTrait,
-{
+pub struct BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse> {
     pub(crate) transport: TTransport,
     pub(crate) use_session: bool,
     pub(crate) to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
     pub(crate) connector_timeout: Duration,
+    pub(crate) _phantom_request: PhantomData<TRequest>,
 }
 
-impl<TTransport, TResponse>
-    AuthenticatorCreator<
-        BinanceWebsocketUnsignedRequest,
-        ApiKeyCredentials,
-        BinanceWebsocketRequest,
-        BinanceWebsocketResponse,
-        TResponse,
-    > for BinanceWebsocketAuthenticatorCreator<TTransport, TResponse>
+impl<TTransport, TRequest, TResponse>
+    AuthenticatorCreator<TRequest, BinanceWebsocketUnsignedRequest, ApiKeyCredentials, TResponse>
+    for BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: WebsocketTransportTrait + 'static,
+    TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
     fn into_authenticator(
         self,
-    ) -> Authenticator<
-        BinanceWebsocketUnsignedRequest,
-        ApiKeyCredentials,
-        BinanceWebsocketRequest,
-        BinanceWebsocketResponse,
-        TResponse,
-    > {
+    ) -> Authenticator<TRequest, BinanceWebsocketUnsignedRequest, ApiKeyCredentials, TResponse>
+    {
         let BinanceWebsocketAuthenticatorCreator {
             transport,
             to_response,
             use_session,
             connector_timeout,
+            _phantom_request,
         } = self;
         let messenger = Box::new(MessengerImpl::new(transport, dto, from_dto));
         let increments_leg = increments_leg();
@@ -70,7 +61,7 @@ where
         } else {
             vec![]
         };
-        Authenticator {
+        Box::new(AuthenticatorImpl {
             messenger,
             increments_leg,
             to_response,
@@ -79,7 +70,8 @@ where
             create_signer_from_credentials,
             rate_limits: rate_limits(),
             request_weights: request_weights(),
-        }
+            _phantom_request,
+        })
     }
 }
 
