@@ -1,6 +1,6 @@
 [package]
 name = "exchange-gateway"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 
 [dependencies]
@@ -15,7 +15,7 @@ hmac = "0.12"
 p256 = "0.13"
 p384 = "0.13"
 rust_decimal = "1.42.1"
-secrecy = "0.10.3"
+secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_urlencoded = "0.7.1"
