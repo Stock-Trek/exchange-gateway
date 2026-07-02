@@ -2,9 +2,11 @@ pub mod authenticator;
 pub mod authenticator_creator;
 pub mod connector;
 pub mod connectors;
+pub mod converter;
 pub mod credentials;
 pub mod error;
 pub mod functions;
+pub mod listeners;
 pub mod messenger;
 pub mod rate_limit;
 pub mod sign;
@@ -16,8 +18,8 @@ pub mod prelude {
     pub use crate::{
         authenticator::Authenticator,
         connector::Connector,
-        connectors::Connectors,
+        // connectors::Connectors, TODO
         error::{EGError, EGResult},
-        functions::{TryConvertFromRequest, TryConvertToResponse},
+        functions::{TryConvertRequestTo, TryConvertResponseFrom},
     };
 }

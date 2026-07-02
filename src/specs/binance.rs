@@ -1,12 +1,18 @@
 use crate::{
     authenticator::{AuthenticateLeg, Authenticator, AuthenticatorImpl, IncrementsLeg},
     authenticator_creator::AuthenticatorCreator,
-    connector::{RateLimits, RequestWeights},
+    converter::Converter,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{SignatureAppender, TryConvertFromRequest, TryConvertToResponse},
-    messenger::MessengerImpl,
-    rate_limit::{multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig},
+    functions::{SignatureAppender, TryConvertRequestTo},
+    listeners::{
+        hybrid_listener::{HybridListener, ListenMode},
+        listener::Listener,
+    },
+    rate_limit::{
+        multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
+        rate_limits::RateLimits, request_weights::RequestWeights,
+    },
     sign::{
         convert_signer::ConvertSigner,
         encode::byte_encoding::ByteEncoding,
@@ -15,8 +21,8 @@ use crate::{
         signer::Signer,
     },
     transports::{
-        http_transport::{HttpMessageDto, HttpTransportTrait},
-        websocket_transport::{WebsocketMessageDto, WebsocketTransportTrait},
+        http_transport::HttpMessageDto, transport::TransportTrait,
+        transport_creator::TransportCreator, websocket_transport::WebsocketMessageDto,
     },
 };
 use chrono::{Duration, Utc};
@@ -31,103 +37,129 @@ use exchange_types::binance::{
     },
 };
 use secrecy::SecretString;
-use std::{collections::HashMap, marker::PhantomData};
+use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
-pub struct BinanceHttpAuthenticatorCreator<TTransport, TRequest, TResponse> {
-    pub(crate) transport: TTransport,
-    pub(crate) to_response: TryConvertToResponse<BinanceHttpResponse, TResponse>,
+pub struct BinanceHttpAuthenticatorCreator<TTransport>
+where
+    TTransport: TransportTrait<MessageDto = HttpMessageDto>,
+{
+    pub(crate) transport_creator: TransportCreator<TTransport, HttpMessageDto>,
     pub(crate) request_timeout: Duration,
-    pub(crate) _phantom_request: PhantomData<TRequest>,
 }
-pub struct BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse> {
-    pub(crate) transport: TTransport,
+pub struct BinanceWebsocketAuthenticatorCreator<TTransport>
+where
+    TTransport: TransportTrait<MessageDto = WebsocketMessageDto>,
+{
+    pub(crate) transport_creator: TransportCreator<TTransport, WebsocketMessageDto>,
     pub(crate) use_session: bool,
-    pub(crate) to_response: TryConvertToResponse<BinanceWebsocketResponse, TResponse>,
     pub(crate) request_timeout: Duration,
-    pub(crate) _phantom_request: PhantomData<TRequest>,
 }
 
 impl<TTransport, TRequest, TResponse>
-    AuthenticatorCreator<TRequest, BinanceHttpUnsignedRequest, ApiKeyCredentials, TResponse>
-    for BinanceHttpAuthenticatorCreator<TTransport, TRequest, TResponse>
+    AuthenticatorCreator<
+        TRequest,
+        BinanceHttpUnsignedRequest,
+        ApiKeyCredentials,
+        HttpMessageDto,
+        BinanceHttpResponse,
+        TResponse,
+    > for BinanceHttpAuthenticatorCreator<TTransport>
 where
-    TTransport: HttpTransportTrait + 'static,
+    TTransport: TransportTrait<MessageDto = HttpMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
     fn into_authenticator(
         self,
-    ) -> Authenticator<TRequest, BinanceHttpUnsignedRequest, ApiKeyCredentials, TResponse> {
+        converter: Converter<TRequest, BinanceHttpUnsignedRequest, BinanceHttpResponse, TResponse>,
+        listener: Listener<HttpMessageDto>,
+    ) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>> {
         let BinanceHttpAuthenticatorCreator {
-            transport,
-            to_response,
-            request_timeout: connector_timeout,
-            _phantom_request,
+            transport_creator,
+            request_timeout,
         } = self;
-        let messenger = Box::new(MessengerImpl::new(transport, to_http_dto, from_http_dto));
+        let listener = Arc::new(listener);
+        let transport = transport_creator.create_transport(listener.clone())?;
+        let wait_listener = HybridListener::new(ListenMode::OnDemand, listener.clone());
         let increments_leg = increments_http_leg();
         let authenticate_legs = vec![];
-        Box::new(AuthenticatorImpl {
-            messenger,
+        Ok(Box::new(AuthenticatorImpl {
+            exchange_converter: converter,
+            dto_converter: Converter {
+                convert_req: Box::new(to_http_dto),
+                convert_res: Box::new(from_http_dto),
+            },
+            transport,
+            wait_listener,
             increments_leg,
-            to_response,
-            authenticate_legs,
-            connector_timeout,
             create_signer_from_credentials: create_http_signer_from_credentials,
-            rate_limits: rate_limits(),
+            authenticate_legs,
+            connector_timeout: request_timeout,
             request_weights: request_weights(),
-            _phantom_request,
-        })
+            rate_limits: rate_limits(),
+        }))
     }
 }
 impl<TTransport, TRequest, TResponse>
-    AuthenticatorCreator<TRequest, BinanceWebsocketUnsignedRequest, ApiKeyCredentials, TResponse>
-    for BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse>
+    AuthenticatorCreator<
+        TRequest,
+        BinanceWebsocketUnsignedRequest,
+        ApiKeyCredentials,
+        WebsocketMessageDto,
+        BinanceWebsocketResponse,
+        TResponse,
+    > for BinanceWebsocketAuthenticatorCreator<TTransport>
 where
-    TTransport: WebsocketTransportTrait + 'static,
+    TTransport: TransportTrait<MessageDto = WebsocketMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
     fn into_authenticator(
         self,
-    ) -> Authenticator<TRequest, BinanceWebsocketUnsignedRequest, ApiKeyCredentials, TResponse>
-    {
+        converter: Converter<
+            TRequest,
+            BinanceWebsocketUnsignedRequest,
+            BinanceWebsocketResponse,
+            TResponse,
+        >,
+        listener: Listener<WebsocketMessageDto>,
+    ) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>> {
         let BinanceWebsocketAuthenticatorCreator {
-            transport,
-            to_response,
+            transport_creator,
             use_session,
-            request_timeout: connector_timeout,
-            _phantom_request,
+            request_timeout,
         } = self;
-        let messenger = Box::new(MessengerImpl::new(
-            transport,
-            to_websocket_dto,
-            from_websocket_dto,
-        ));
+        let listener = Arc::new(listener);
+        let transport = transport_creator.create_transport(listener.clone())?;
+        let wait_listener = HybridListener::new(ListenMode::OnDemand, listener.clone());
         let increments_leg = increments_websocket_leg();
         let authenticate_legs = if use_session {
             vec![authenticate_websocket_leg()]
         } else {
             vec![]
         };
-        Box::new(AuthenticatorImpl {
-            messenger,
+        Ok(Box::new(AuthenticatorImpl {
+            exchange_converter: converter,
+            dto_converter: Converter {
+                convert_req: Box::new(to_websocket_dto),
+                convert_res: Box::new(from_websocket_dto),
+            },
+            transport,
+            wait_listener,
             increments_leg,
-            to_response,
-            authenticate_legs,
-            connector_timeout,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
-            rate_limits: rate_limits(),
+            authenticate_legs,
+            connector_timeout: request_timeout,
             request_weights: request_weights(),
-            _phantom_request,
-        })
+            rate_limits: rate_limits(),
+        }))
     }
 }
 
 pub fn unsigned_message_converter<TRequest>(
-    to_unsigned_binance_params: TryConvertFromRequest<TRequest, BinanceUnsignedParams>,
-) -> TryConvertFromRequest<TRequest, BinanceWebsocketUnsignedRequest>
+    to_unsigned_binance_params: TryConvertRequestTo<TRequest, BinanceUnsignedParams>,
+) -> TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>
 where
     TRequest: 'static,
 {

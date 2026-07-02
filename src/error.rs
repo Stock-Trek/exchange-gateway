@@ -2,6 +2,9 @@ pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug)]
 pub enum EGError {
+    ListenModeMustBeOnDemand,
+    Poison,
+    Send,
     Io(std::io::Error),
     Parse(std::num::ParseIntError),
     Custom(String),
@@ -10,6 +13,9 @@ pub enum EGError {
 impl std::fmt::Display for EGError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            EGError::ListenModeMustBeOnDemand => write!(f, "ListenMode requires OnDemand"),
+            EGError::Poison => write!(f, "Poison error"),
+            EGError::Send => write!(f, "Send error"),
             EGError::Io(e) => write!(f, "IO error: {}", e),
             EGError::Parse(e) => write!(f, "Parse error: {}", e),
             EGError::Custom(s) => write!(f, "{}", s),

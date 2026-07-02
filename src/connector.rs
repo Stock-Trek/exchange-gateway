@@ -1,9 +1,9 @@
 use crate::{
+    converter::Converter,
     error::EGResult,
-    functions::{TryConvertFromRequest, TryConvertToResponse},
-    messenger::Messenger,
-    rate_limit::multi_rate_limiter::MultiRateLimiter,
+    rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
+    transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
 use chrono::Duration;
@@ -12,34 +12,44 @@ pub type Connector<TRequest, TResponse> = Box<dyn ConnectorTrait<TRequest, TResp
 
 #[async_trait]
 pub trait ConnectorTrait<TRequest, TResponse> {
-    async fn send(&self, request: TRequest) -> EGResult<TResponse>;
+    async fn send(&self, request: TRequest) -> EGResult<()>;
 }
 
 pub struct ConnectorImpl<
     TRequest,
     TUnsignedMessage,
     TMessageToExchange,
+    TTransport,
     TMessageFromExchange,
     TResponse,
-> {
-    #[allow(unused)]
-    pub(crate) request_weights: RequestWeights,
+> where
+    TTransport: TransportTrait,
+{
     #[allow(unused)]
     pub(crate) rate_limits: RateLimits,
-    pub(crate) to_unsigned_message: TryConvertFromRequest<TRequest, TUnsignedMessage>,
+    #[allow(unused)]
+    pub(crate) request_weights: RequestWeights,
+    pub(crate) exchange_converter:
+        Converter<TRequest, TUnsignedMessage, TMessageFromExchange, TResponse>,
     pub(crate) signer: Signer<TUnsignedMessage, TMessageToExchange>,
-    pub(crate) messenger: Messenger<TMessageToExchange, TMessageFromExchange>,
+    pub(crate) dto_converter: Converter<
+        TMessageToExchange,
+        TTransport::MessageDto,
+        TTransport::MessageDto,
+        TMessageFromExchange,
+    >,
+    pub(crate) transport: TTransport,
     pub(crate) timeout: Duration,
-    pub(crate) to_response: TryConvertToResponse<TMessageFromExchange, TResponse>,
 }
 
 #[async_trait]
-impl<TRequest, TUnsignedMessage, TMessageToExchange, TMessageFromExchange, TResponse>
+impl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport, TMessageFromExchange, TResponse>
     ConnectorTrait<TRequest, TResponse>
     for ConnectorImpl<
         TRequest,
         TUnsignedMessage,
         TMessageToExchange,
+        TTransport,
         TMessageFromExchange,
         TResponse,
     >
@@ -47,10 +57,11 @@ where
     TRequest: Send,
     TUnsignedMessage: Send,
     TMessageToExchange: Send,
+    TTransport: TransportTrait,
     TMessageFromExchange: Send,
     TResponse: Send,
 {
-    async fn send(&self, request: TRequest) -> EGResult<TResponse> {
+    async fn send(&self, request: TRequest) -> EGResult<()> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
@@ -61,20 +72,9 @@ where
         //         "Rate limited".to_string(),
         //     ));
         // }
-        let unsigned = (self.to_unsigned_message)(request)?;
+        let unsigned = (self.exchange_converter.convert_req(&request))?;
         let message_to = self.signer.sign(unsigned)?;
-        let message_from = self.messenger.send(&message_to, self.timeout).await?;
-        let response = (self.to_response)(message_from)?;
-        Ok(response)
+        let message_dto = self.dto_converter.convert_req(&message_to)?;
+        self.transport.send(message_dto, self.timeout).await
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct RequestWeights {
-    pub send_order_request: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct RateLimits {
-    pub send_order_request: MultiRateLimiter,
 }

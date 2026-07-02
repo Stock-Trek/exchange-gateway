@@ -4,14 +4,12 @@ pub type CreateAuthMessage<TUnsignedMessage> = fn() -> TUnsignedMessage;
 
 pub type CreateSignerFrom<TFrom, TUnsignedMessage, TSignedMessage> =
     fn(TFrom) -> EGResult<Signer<TUnsignedMessage, TSignedMessage>>;
-
-pub type TryConvertFromRequest<TRequest, TMessageToExchange> =
-    Box<dyn Fn(TRequest) -> EGResult<TMessageToExchange> + Send + Sync>;
-
 pub type SignatureAppender<TUnsignedMessage, TSignedMessage> =
     Box<dyn Fn(TUnsignedMessage, Option<String>) -> TSignedMessage + Send + Sync>;
 
-pub type TryConvertToResponse<TMessageFromExchange, TResponse> =
+pub type TryConvertRequestTo<TRequest, TMessageToExchange> =
+    Box<dyn Fn(&TRequest) -> EGResult<TMessageToExchange> + Send + Sync>;
+pub type TryConvertResponseFrom<TMessageFromExchange, TResponse> =
     Box<dyn Fn(TMessageFromExchange) -> EGResult<TResponse> + Send + Sync>;
 
 pub type TryConvertRef<From, To> = fn(&From) -> EGResult<To>;
