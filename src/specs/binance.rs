@@ -1,6 +1,6 @@
 use crate::{
     authenticator::{AuthenticateLeg, Authenticator, AuthenticatorImpl, IncrementsLeg},
-    authenticator_creator::AuthenticatorCreator,
+    authenticator_creator::AuthenticatorCreatorTrait,
     converter::Converter,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
@@ -40,31 +40,35 @@ use secrecy::SecretString;
 use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
-pub struct BinanceHttpAuthenticatorCreator<TTransport>
+pub struct BinanceHttpAuthenticatorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = HttpMessageDto>,
 {
     pub(crate) transport_creator: TransportCreator<TTransport, HttpMessageDto>,
     pub(crate) request_timeout: Duration,
+    pub(crate) converter:
+        Converter<TRequest, BinanceHttpUnsignedRequest, BinanceHttpResponse, TResponse>,
 }
-pub struct BinanceWebsocketAuthenticatorCreator<TTransport>
+pub struct BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = WebsocketMessageDto>,
 {
     pub(crate) transport_creator: TransportCreator<TTransport, WebsocketMessageDto>,
-    pub(crate) use_session: bool,
     pub(crate) request_timeout: Duration,
+    pub(crate) converter:
+        Converter<TRequest, BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse, TResponse>,
+    pub(crate) use_session: bool,
 }
 
 impl<TTransport, TRequest, TResponse>
-    AuthenticatorCreator<
+    AuthenticatorCreatorTrait<
         TRequest,
         BinanceHttpUnsignedRequest,
         ApiKeyCredentials,
         HttpMessageDto,
         BinanceHttpResponse,
         TResponse,
-    > for BinanceHttpAuthenticatorCreator<TTransport>
+    > for BinanceHttpAuthenticatorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = HttpMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
@@ -72,12 +76,12 @@ where
 {
     fn into_authenticator(
         self,
-        converter: Converter<TRequest, BinanceHttpUnsignedRequest, BinanceHttpResponse, TResponse>,
         listener: Listener<HttpMessageDto>,
     ) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>> {
         let BinanceHttpAuthenticatorCreator {
             transport_creator,
             request_timeout,
+            converter,
         } = self;
         let listener = Arc::new(listener);
         let transport = transport_creator.create_transport(listener.clone())?;
@@ -87,8 +91,8 @@ where
         Ok(Box::new(AuthenticatorImpl {
             exchange_converter: converter,
             dto_converter: Converter {
-                convert_req: Box::new(to_http_dto),
-                convert_res: Box::new(from_http_dto),
+                convert_request: Box::new(to_http_dto),
+                convert_response: Box::new(from_http_dto),
             },
             transport,
             wait_listener,
@@ -102,14 +106,14 @@ where
     }
 }
 impl<TTransport, TRequest, TResponse>
-    AuthenticatorCreator<
+    AuthenticatorCreatorTrait<
         TRequest,
         BinanceWebsocketUnsignedRequest,
         ApiKeyCredentials,
         WebsocketMessageDto,
         BinanceWebsocketResponse,
         TResponse,
-    > for BinanceWebsocketAuthenticatorCreator<TTransport>
+    > for BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = WebsocketMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
@@ -117,18 +121,13 @@ where
 {
     fn into_authenticator(
         self,
-        converter: Converter<
-            TRequest,
-            BinanceWebsocketUnsignedRequest,
-            BinanceWebsocketResponse,
-            TResponse,
-        >,
         listener: Listener<WebsocketMessageDto>,
     ) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>> {
         let BinanceWebsocketAuthenticatorCreator {
             transport_creator,
-            use_session,
             request_timeout,
+            converter,
+            use_session,
         } = self;
         let listener = Arc::new(listener);
         let transport = transport_creator.create_transport(listener.clone())?;
@@ -142,8 +141,8 @@ where
         Ok(Box::new(AuthenticatorImpl {
             exchange_converter: converter,
             dto_converter: Converter {
-                convert_req: Box::new(to_websocket_dto),
-                convert_res: Box::new(from_websocket_dto),
+                convert_request: Box::new(to_websocket_dto),
+                convert_response: Box::new(from_websocket_dto),
             },
             transport,
             wait_listener,
