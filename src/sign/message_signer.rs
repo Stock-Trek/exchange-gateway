@@ -8,7 +8,7 @@ use crate::{
     },
 };
 
-pub struct MessageSigner<TUnsignedMessage, TSignedMessage> {
+pub(crate) struct MessageSigner<TUnsignedMessage, TSignedMessage> {
     to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
     signer: DataSigner,
     byte_encoding: ByteEncoding,

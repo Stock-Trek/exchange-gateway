@@ -1,7 +1,8 @@
 use strum::Display;
 
+#[allow(unused)]
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ByteEncoding {
+pub(crate) enum ByteEncoding {
     Base16,
     Base32,
     Base58,

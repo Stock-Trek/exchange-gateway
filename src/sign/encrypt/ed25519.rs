@@ -1,7 +1,7 @@
 use crate::{error::EGResult, sign::encrypt::data_signer::DataSignerTrait};
 use ed25519_compact::SecretKey;
 
-pub struct Ed25519Signer {
+pub(crate) struct Ed25519Signer {
     secret_key: SecretKey,
 }
 

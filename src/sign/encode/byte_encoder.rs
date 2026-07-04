@@ -6,9 +6,9 @@ use crate::sign::encode::{
     byte_encoding::ByteEncoding,
 };
 
-pub type ByteEncoder = Box<dyn ByteEncoderTrait>;
+pub(crate) type ByteEncoder = Box<dyn ByteEncoderTrait>;
 
-pub trait ByteEncoderTrait: Send + Sync {
+pub(crate) trait ByteEncoderTrait: Send + Sync {
     fn encode(&self, bytes: &[u8]) -> String;
 }
 

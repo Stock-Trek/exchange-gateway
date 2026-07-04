@@ -8,7 +8,7 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub struct HmacSha256Signer {
+pub(crate) struct HmacSha256Signer {
     hmac_slice: SecretSlice<u8>,
 }
 

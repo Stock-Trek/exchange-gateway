@@ -1,7 +1,8 @@
 use crate::error::EGResult;
 use async_trait::async_trait;
+use std::sync::Arc;
 
-pub type Listener<TMessage> = Box<dyn ListenerTrait<TMessage>>;
+pub type Listener<TMessage> = Arc<dyn ListenerTrait<TMessage>>;
 
 #[async_trait]
 pub trait ListenerTrait<TMessage>: Send + Sync {

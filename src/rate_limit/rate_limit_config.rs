@@ -2,7 +2,7 @@ use crate::rate_limit::rate_limiter_state::RateLimiterState;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
-pub struct RateLimitConfig {
+pub(crate) struct RateLimitConfig {
     pub interval_nanos: u128,
     pub capacity_per_interval: u32,
 }
@@ -16,6 +16,7 @@ impl Default for RateLimitConfig {
     }
 }
 
+#[allow(unused)]
 impl RateLimitConfig {
     pub fn new() -> Self {
         Self::default()
@@ -29,7 +30,7 @@ impl RateLimitConfig {
         self.capacity_per_interval = capacity_per_interval;
         self
     }
-    pub(crate) fn to_state(&self) -> RateLimiterState {
+    pub fn to_state(&self) -> RateLimiterState {
         RateLimiterState::new(self.interval_nanos, self.capacity_per_interval)
     }
 }

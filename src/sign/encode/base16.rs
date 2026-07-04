@@ -1,7 +1,7 @@
 use crate::sign::encode::byte_encoder::ByteEncoderTrait;
 
-pub struct Base16EncoderLower;
-pub struct Base16EncoderUpper;
+pub(crate) struct Base16EncoderLower;
+pub(crate) struct Base16EncoderUpper;
 
 impl ByteEncoderTrait for Base16EncoderLower {
     fn encode(&self, bytes: &[u8]) -> String {

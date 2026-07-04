@@ -1,8 +1,7 @@
 pub mod authenticator;
 pub mod authenticator_creator;
+pub mod authenticators;
 pub mod connector;
-pub mod connectors;
-pub mod converter;
 pub mod credentials;
 pub mod error;
 pub mod functions;
@@ -15,19 +14,16 @@ pub mod transports;
 pub mod prelude {
     pub use crate::{
         authenticator::Authenticator,
-        authenticator_creator::AuthenticatorCreator,
+        authenticators::Authenticators,
         connector::Connector,
-        connectors::Connectors,
         error::{EGError, EGResult},
         functions::{TryConvertRequestTo, TryConvertResponseFrom},
         transports::{
-            http_transport::{
-                HttpClient, HttpClientTrait, HttpMessageDto, HttpTransport, HttpTransportCreator,
-            },
+            http_transport::{HttpClient, HttpClientTrait, HttpMessageDto, HttpTransportCreator},
             transport::TransportTrait,
             transport_creator::{TransportCreator, TransportCreatorTrait},
             websocket_transport::{
-                WebsocketClient, WebsocketClientTrait, WebsocketMessageDto, WebsocketTransport,
+                WebsocketClient, WebsocketClientTrait, WebsocketMessageDto,
                 WebsocketTransportCreator,
             },
         },

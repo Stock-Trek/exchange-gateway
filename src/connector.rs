@@ -1,6 +1,6 @@
 use crate::{
-    converter::Converter,
     error::EGResult,
+    functions::TryConvertRequestTo,
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::TransportTrait,
@@ -8,58 +8,36 @@ use crate::{
 use async_trait::async_trait;
 use chrono::Duration;
 
-pub type Connector<TRequest, TResponse> = Box<dyn ConnectorTrait<TRequest, TResponse>>;
+pub type Connector<TRequest> = Box<dyn ConnectorTrait<TRequest>>;
 
 #[async_trait]
-pub trait ConnectorTrait<TRequest, TResponse> {
+pub trait ConnectorTrait<TRequest> {
     async fn send(&self, request: TRequest) -> EGResult<()>;
 }
 
-pub struct ConnectorImpl<
-    TRequest,
-    TUnsignedMessage,
-    TMessageToExchange,
-    TTransport,
-    TMessageFromExchange,
-    TResponse,
-> where
+pub(crate) struct ConnectorImpl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport>
+where
     TTransport: TransportTrait,
 {
     #[allow(unused)]
-    pub(crate) rate_limits: RateLimits,
+    pub rate_limits: RateLimits,
     #[allow(unused)]
-    pub(crate) request_weights: RequestWeights,
-    pub(crate) exchange_converter:
-        Converter<TRequest, TUnsignedMessage, TMessageFromExchange, TResponse>,
-    pub(crate) signer: Signer<TUnsignedMessage, TMessageToExchange>,
-    pub(crate) dto_converter: Converter<
-        TMessageToExchange,
-        TTransport::MessageDto,
-        TTransport::MessageDto,
-        TMessageFromExchange,
-    >,
-    pub(crate) transport: TTransport,
-    pub(crate) timeout: Duration,
+    pub request_weights: RequestWeights,
+    pub request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessage>,
+    pub signer: Signer<TUnsignedMessage, TMessageToExchange>,
+    pub message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
+    pub transport: TTransport,
+    pub timeout: Duration,
 }
 
 #[async_trait]
-impl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport, TMessageFromExchange, TResponse>
-    ConnectorTrait<TRequest, TResponse>
-    for ConnectorImpl<
-        TRequest,
-        TUnsignedMessage,
-        TMessageToExchange,
-        TTransport,
-        TMessageFromExchange,
-        TResponse,
-    >
+impl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport> ConnectorTrait<TRequest>
+    for ConnectorImpl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport>
 where
     TRequest: Send,
     TUnsignedMessage: Send,
     TMessageToExchange: Send,
     TTransport: TransportTrait,
-    TMessageFromExchange: Send,
-    TResponse: Send,
 {
     async fn send(&self, request: TRequest) -> EGResult<()> {
         // TODO add rate limits back in
@@ -72,9 +50,9 @@ where
         //         "Rate limited".to_string(),
         //     ));
         // }
-        let unsigned = (self.exchange_converter.convert_req(&request))?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = self.signer.sign(unsigned)?;
-        let message_dto = self.dto_converter.convert_req(&message_to)?;
+        let message_dto = (self.message_out_to_dto)(&message_to)?;
         self.transport.send(message_dto, self.timeout).await
     }
 }

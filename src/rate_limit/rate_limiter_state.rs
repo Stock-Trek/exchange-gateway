@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+#[allow(unused)]
 #[derive(Debug)]
 pub(crate) struct RateLimiterState {
     interval_nanos: u128,
@@ -10,7 +11,7 @@ pub(crate) struct RateLimiterState {
 }
 
 impl RateLimiterState {
-    pub(crate) fn new(interval_nanos: u128, capacity_per_interval: u32) -> Self {
+    pub fn new(interval_nanos: u128, capacity_per_interval: u32) -> Self {
         assert!(interval_nanos > 0, "interval_nanos cannot be zero");
         assert!(
             capacity_per_interval > 0,
@@ -25,7 +26,7 @@ impl RateLimiterState {
         }
     }
     #[must_use]
-    pub(crate) fn did_consume(&mut self, cost: u32) -> bool {
+    pub fn did_consume(&mut self, cost: u32) -> bool {
         if self.did_quick_consume(cost) {
             true
         } else {
@@ -33,7 +34,7 @@ impl RateLimiterState {
             self.did_quick_consume(cost)
         }
     }
-    pub(crate) fn refund(&mut self, cost: u32) {
+    pub fn refund(&mut self, cost: u32) {
         self.current_capacity += cost;
     }
 

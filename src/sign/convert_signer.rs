@@ -1,6 +1,6 @@
 use crate::{error::EGResult, functions::TryConvertValue, sign::signer::SignerTrait};
 
-pub struct ConvertSigner<TUnsignedMessage, TSignedMessage> {
+pub(crate) struct ConvertSigner<TUnsignedMessage, TSignedMessage> {
     converter: TryConvertValue<TUnsignedMessage, TSignedMessage>,
 }
 

@@ -1,24 +1,6 @@
-use crate::{authenticator::Authenticator, error::EGResult, listeners::listener::Listener};
+use crate::{authenticator::Authenticator, error::EGResult};
 
-pub type AuthenticatorCreator<
-    TRequest,
-    TUnsignedMessageToExchange,
-    TCredentials,
-    TMessageDto,
-    TMessageFromExchange,
-    TResponse,
-> = Box<
-    dyn AuthenticatorCreatorTrait<
-            TRequest,
-            TUnsignedMessageToExchange,
-            TCredentials,
-            TMessageDto,
-            TMessageFromExchange,
-            TResponse,
-        >,
->;
-
-pub trait AuthenticatorCreatorTrait<
+pub(crate) trait AuthenticatorCreatorTrait<
     TRequest,
     TUnsignedMessageToExchange,
     TCredentials,
@@ -27,8 +9,5 @@ pub trait AuthenticatorCreatorTrait<
     TResponse,
 >
 {
-    fn into_authenticator(
-        self,
-        listener: Listener<TMessageDto>,
-    ) -> EGResult<Authenticator<TRequest, TCredentials, TResponse>>;
+    fn into_authenticator(self) -> EGResult<Authenticator<TRequest, TCredentials, TResponse>>;
 }

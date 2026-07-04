@@ -5,7 +5,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::Duration;
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 pub struct HttpTransportCreator {
     pub create_client: Box<dyn Fn() -> HttpClient>,
@@ -23,7 +23,7 @@ pub trait HttpClientTrait: Send + Sync {
 }
 
 impl TransportCreatorTrait<HttpTransport, HttpMessageDto> for HttpTransportCreator {
-    fn create_transport(&self, listener: Arc<Listener<HttpMessageDto>>) -> EGResult<HttpTransport> {
+    fn create_transport(&self, listener: Listener<HttpMessageDto>) -> EGResult<HttpTransport> {
         Ok(HttpTransport {
             client: (self.create_client)(),
             listener,
@@ -37,9 +37,9 @@ pub struct HttpMessageDto {
     pub body_json: String,
 }
 
-pub struct HttpTransport {
+pub(crate) struct HttpTransport {
     client: HttpClient,
-    listener: Arc<Listener<HttpMessageDto>>,
+    listener: Listener<HttpMessageDto>,
 }
 
 #[async_trait]

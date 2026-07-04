@@ -1,6 +1,6 @@
 use crate::{
-    authenticator_creator::AuthenticatorCreator,
-    converter::Converter,
+    authenticator::Authenticator,
+    authenticator_creator::AuthenticatorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
     functions::{TryConvertRequestTo, TryConvertResponseFrom},
@@ -16,40 +16,28 @@ use exchange_types::binance::{
     websocket::{BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest},
 };
 
-pub struct Connectors;
+pub struct Authenticators;
 
-impl Connectors {
+impl Authenticators {
     pub fn binance_http<TTransport, TRequest, TResponse>(
         &self,
         transport_creator: TransportCreator<TTransport, HttpMessageDto>,
         request_timeout: Duration,
         convert_request: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
-    ) -> EGResult<
-        AuthenticatorCreator<
-            TRequest,
-            BinanceHttpUnsignedRequest,
-            ApiKeyCredentials,
-            HttpMessageDto,
-            BinanceHttpResponse,
-            TResponse,
-        >,
-    >
+    ) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>>
     where
         TTransport: TransportTrait<MessageDto = HttpMessageDto> + 'static,
         TRequest: Send + Sync + 'static,
         TResponse: Send + Sync + 'static,
     {
-        let converter = Converter {
-            convert_request,
-            convert_response,
-        };
-        let creator = BinanceHttpAuthenticatorCreator {
+        BinanceHttpAuthenticatorCreator {
             request_timeout,
             transport_creator,
-            converter,
-        };
-        Ok(Box::new(creator))
+            to_response: convert_response,
+            to_unsigned: convert_request,
+        }
+        .into_authenticator()
     }
     pub fn binance_websocket<TTransport, TRequest, TResponse>(
         &self,
@@ -58,31 +46,19 @@ impl Connectors {
         convert_request: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
         use_session: bool,
-    ) -> EGResult<
-        AuthenticatorCreator<
-            TRequest,
-            BinanceWebsocketUnsignedRequest,
-            ApiKeyCredentials,
-            WebsocketMessageDto,
-            BinanceWebsocketResponse,
-            TResponse,
-        >,
-    >
+    ) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>>
     where
         TTransport: TransportTrait<MessageDto = WebsocketMessageDto> + 'static,
         TRequest: Send + Sync + 'static,
         TResponse: Send + Sync + 'static,
     {
-        let converter = Converter {
-            convert_request,
-            convert_response,
-        };
-        let creator = BinanceWebsocketAuthenticatorCreator {
+        BinanceWebsocketAuthenticatorCreator {
             request_timeout,
             transport_creator,
-            converter,
+            to_response: convert_response,
+            to_unsigned: convert_request,
             use_session,
-        };
-        Ok(Box::new(creator))
+        }
+        .into_authenticator()
     }
 }

@@ -9,8 +9,9 @@ use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use std::sync::Arc;
 use strum::Display;
 
+#[allow(unused)]
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SigningAlgorithm {
+pub(crate) enum SigningAlgorithm {
     EcdsaP256,
     EcdsaP384,
     Ed25519,

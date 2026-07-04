@@ -1,21 +1,27 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::TryConvertResponseFrom,
     listeners::listener::{Listener, ListenerTrait},
 };
 use async_trait::async_trait;
+use std::sync::RwLock;
 
-pub struct ConvertListener<TFrom, TTo> {
+pub(crate) struct ConvertListener<TFrom, TTo> {
     converter: TryConvertResponseFrom<TFrom, TTo>,
-    listener: Listener<TTo>,
+    delegate_lock: RwLock<Listener<TTo>>,
 }
 
 impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
-    pub fn new(converter: TryConvertResponseFrom<TFrom, TTo>, listener: Listener<TTo>) -> Self {
+    pub fn new(converter: TryConvertResponseFrom<TFrom, TTo>, delegate: Listener<TTo>) -> Self {
         Self {
             converter,
-            listener,
+            delegate_lock: RwLock::new(delegate),
         }
+    }
+    pub fn set_delegate(&self, delegate: Listener<TTo>) -> EGResult<()> {
+        let mut guard = self.delegate_lock.write().map_err(|_| EGError::Poison)?;
+        *guard = delegate;
+        Ok(())
     }
 }
 
@@ -26,6 +32,11 @@ where
 {
     async fn on_message(&self, message: TFrom) -> EGResult<()> {
         let converted = (self.converter)(message)?;
-        self.listener.on_message(converted).await
+        let delegate = self
+            .delegate_lock
+            .read()
+            .map_err(|_| EGError::Poison)?
+            .clone();
+        delegate.on_message(converted).await
     }
 }

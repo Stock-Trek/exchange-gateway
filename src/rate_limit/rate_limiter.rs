@@ -1,8 +1,9 @@
 use crate::rate_limit::{rate_limit_config::RateLimitConfig, rate_limiter_state::RateLimiterState};
 use std::sync::{Arc, Mutex};
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
-pub struct RateLimiter {
+pub(crate) struct RateLimiter {
     state: Arc<Mutex<RateLimiterState>>,
 }
 
@@ -12,6 +13,7 @@ impl Default for RateLimiter {
     }
 }
 
+#[allow(unused)]
 impl RateLimiter {
     pub fn new(rate_limit: RateLimitConfig) -> Self {
         Self {

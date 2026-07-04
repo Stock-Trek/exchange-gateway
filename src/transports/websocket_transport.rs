@@ -5,10 +5,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::Duration;
-use std::sync::Arc;
 
 pub struct WebsocketTransportCreator {
-    pub create_client: Box<dyn Fn(Arc<Listener<WebsocketMessageDto>>) -> WebsocketClient>,
+    pub create_client: Box<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClient>,
 }
 
 pub type WebsocketClient = Box<dyn WebsocketClientTrait>;
@@ -22,7 +21,7 @@ pub trait WebsocketClientTrait: Send + Sync {
 impl TransportCreatorTrait<WebsocketTransport, WebsocketMessageDto> for WebsocketTransportCreator {
     fn create_transport(
         &self,
-        listener: Arc<Listener<WebsocketMessageDto>>,
+        listener: Listener<WebsocketMessageDto>,
     ) -> EGResult<WebsocketTransport> {
         let client = (self.create_client)(listener);
         client.start_listening()?;
@@ -35,7 +34,7 @@ pub struct WebsocketMessageDto {
     pub body_json: String,
 }
 
-pub struct WebsocketTransport {
+pub(crate) struct WebsocketTransport {
     client: WebsocketClient,
 }
 

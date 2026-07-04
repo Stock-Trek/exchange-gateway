@@ -1,7 +1,7 @@
 use crate::{error::EGResult, sign::encrypt::data_signer::DataSignerTrait};
 use p384::ecdsa::{Signature, SigningKey, signature::Signer};
 
-pub struct EcdsaP384Signer {
+pub(crate) struct EcdsaP384Signer {
     signing_key: SigningKey,
 }
 

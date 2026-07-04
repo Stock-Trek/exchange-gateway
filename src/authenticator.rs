@@ -1,14 +1,16 @@
 use crate::{
     connector::{Connector, ConnectorImpl},
-    converter::Converter,
     error::EGResult,
-    functions::{CreateAuthMessage, CreateSignerFrom},
-    listeners::hybrid_listener::{HybridListener, ListenMode},
+    functions::{CreateAuthMessage, CreateSignerFrom, TryConvertRequestTo, TryConvertResponseFrom},
+    listeners::{
+        convert_listener::ConvertListener, listener::Listener, queue_listener::QueueListener,
+    },
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
 use chrono::Duration;
+use std::sync::Arc;
 
 pub type Authenticator<TRequest, TCredentials, TResponse> =
     Box<dyn AuthenticatorTrait<TRequest, TCredentials, TResponse>>;
@@ -19,10 +21,11 @@ pub trait AuthenticatorTrait<TRequest, TCredentials, TResponse> {
     async fn authenticate(
         self,
         credentials: TCredentials,
-    ) -> EGResult<Connector<TRequest, TResponse>>;
+        listener: Listener<TResponse>,
+    ) -> EGResult<Connector<TRequest>>;
 }
 
-pub struct AuthenticatorImpl<
+pub(crate) struct AuthenticatorImpl<
     TRequest,
     TUnsignedMessageToExchange,
     TCredentials,
@@ -33,24 +36,20 @@ pub struct AuthenticatorImpl<
 > where
     TTransport: TransportTrait,
 {
-    pub(crate) exchange_converter:
-        Converter<TRequest, TUnsignedMessageToExchange, TMessageFromExchange, TResponse>,
-    pub(crate) dto_converter: Converter<
-        TMessageToExchange,
-        TTransport::MessageDto,
-        TTransport::MessageDto,
-        TMessageFromExchange,
-    >,
-    pub(crate) transport: TTransport,
-    pub(crate) wait_listener: HybridListener<TTransport::MessageDto>,
-    pub(crate) increments_leg: IncrementsLeg<TMessageToExchange>,
-    pub(crate) create_signer_from_credentials:
+    pub request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
+    pub message_from_to_response: TryConvertResponseFrom<TMessageFromExchange, TResponse>,
+    pub message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
+    pub transport: TTransport,
+    pub transport_listener: Arc<ConvertListener<TTransport::MessageDto, TMessageFromExchange>>,
+    pub queue_listener: Arc<QueueListener<TMessageFromExchange>>,
+    pub increments_leg: IncrementsLeg<TMessageToExchange>,
+    pub create_signer_from_credentials:
         CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) authenticate_legs:
+    pub authenticate_legs:
         Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
-    pub(crate) connector_timeout: Duration,
-    pub(crate) request_weights: RequestWeights,
-    pub(crate) rate_limits: RateLimits,
+    pub timeout: Duration,
+    pub request_weights: RequestWeights,
+    pub rate_limits: RateLimits,
 }
 
 #[async_trait]
@@ -82,55 +81,66 @@ where
     TResponse: Send + Sync + 'static,
 {
     async fn increments(&self) -> EGResult<TResponse> {
-        self.wait_listener.mode(ListenMode::OnDemand)?;
-        let request_dto = self
-            .dto_converter
-            .convert_req(&self.increments_leg.message)?;
+        let request_dto = (self.message_out_to_dto)(&self.increments_leg.message)?;
         self.transport
             .send(request_dto, self.increments_leg.timeout)
             .await?;
-        let message_dto = self.wait_listener.wait_for_message().await?;
-        let message_from = self.dto_converter.convert_res(message_dto)?;
-        let response = self.exchange_converter.convert_res(message_from)?;
+        let message_from = self.queue_listener.wait_for_message().await?;
+        let response = (self.message_from_to_response)(message_from)?;
         Ok(response)
     }
     async fn authenticate(
         self,
         credentials: TCredentials,
-    ) -> EGResult<Connector<TRequest, TResponse>> {
-        self.wait_listener.mode(ListenMode::OnDemand)?;
+        listener: Listener<TResponse>,
+    ) -> EGResult<Connector<TRequest>> {
         let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
             let auth_message = (leg.create_auth_message)();
             let signed_auth_message = signer.sign(auth_message)?;
-            let auth_message_dto = self.dto_converter.convert_req(&signed_auth_message)?;
+            let auth_message_dto = (self.message_out_to_dto)(&signed_auth_message)?;
             self.transport.send(auth_message_dto, leg.timeout).await?;
-            let message_dto = self.wait_listener.wait_for_message().await?;
-            let message_from = self.dto_converter.convert_res(message_dto)?;
+            let message_from = self.queue_listener.wait_for_message().await?;
             signer = (leg.create_signer_from)(message_from)?;
         }
-        self.wait_listener.mode(ListenMode::EventDriven)?;
+        let AuthenticatorImpl {
+            request_to_unsigned,
+            message_from_to_response,
+            message_out_to_dto,
+            transport,
+            transport_listener,
+            timeout,
+            request_weights,
+            rate_limits,
+            ..
+        } = self;
+        let delegate_listener = ConvertListener::new(message_from_to_response, Arc::from(listener));
+        transport_listener.set_delegate(Arc::new(delegate_listener))?;
         let connector = ConnectorImpl {
-            rate_limits: self.rate_limits,
-            request_weights: self.request_weights,
-            exchange_converter: self.exchange_converter,
+            rate_limits,
+            request_weights,
+            request_to_unsigned,
             signer,
-            dto_converter: self.dto_converter,
-            transport: self.transport,
-            timeout: self.connector_timeout,
+            message_out_to_dto,
+            transport,
+            timeout,
         };
         Ok(Box::new(connector))
     }
 }
 
-pub struct IncrementsLeg<TMessageToExchange> {
-    pub(crate) message: TMessageToExchange,
-    pub(crate) timeout: Duration,
+pub(crate) struct IncrementsLeg<TMessageToExchange> {
+    pub message: TMessageToExchange,
+    pub timeout: Duration,
 }
 
-pub struct AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange> {
-    pub(crate) create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
-    pub(crate) timeout: Duration,
-    pub(crate) create_signer_from:
+pub(crate) struct AuthenticateLeg<
+    TUnsignedMessageToExchange,
+    TMessageToExchange,
+    TMessageFromExchange,
+> {
+    pub create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
+    pub timeout: Duration,
+    pub create_signer_from:
         CreateSignerFrom<TMessageFromExchange, TUnsignedMessageToExchange, TMessageToExchange>,
 }
