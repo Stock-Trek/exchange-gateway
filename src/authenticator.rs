@@ -114,7 +114,7 @@ where
             rate_limits,
             ..
         } = self;
-        let delegate_listener = ConvertListener::new(message_from_to_response, Arc::from(listener));
+        let delegate_listener = ConvertListener::new(message_from_to_response, listener);
         transport_listener.set_delegate(Arc::new(delegate_listener))?;
         let connector = ConnectorImpl {
             rate_limits,
