@@ -55,7 +55,6 @@ impl Connectors {
         request_timeout: Duration,
         convert_request: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
-        use_session: bool,
     ) -> EGResult<
         Connector<
             TRequest,
@@ -75,7 +74,6 @@ impl Connectors {
             transport_creator,
             to_response: convert_response,
             to_unsigned: convert_request,
-            use_session,
         }
         .into_connector()
     }

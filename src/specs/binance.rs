@@ -52,7 +52,6 @@ where
     pub request_timeout: Duration,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
-    pub use_session: bool,
 }
 
 impl<TTransport, TRequest, TResponse>
@@ -141,7 +140,6 @@ where
             request_timeout,
             to_unsigned,
             to_response,
-            use_session,
         } = self;
         let queue_listener = Arc::new(QueueListener::new());
         let transport_listener = Arc::new(ConvertListener::new(
@@ -149,11 +147,7 @@ where
             queue_listener.clone(),
         ));
         let transport = transport_creator.create_transport(transport_listener.clone())?;
-        let authenticate_legs = if use_session {
-            vec![authenticate_websocket_leg()]
-        } else {
-            vec![]
-        };
+        let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Box::new(ConnectorImpl {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
