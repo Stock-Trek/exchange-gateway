@@ -128,8 +128,7 @@ where
         let request_dto = (self.message_out_to_dto)(&message_to)?;
         self.transport.send(request_dto, self.timeout).await?;
         let message_from = self.queue_listener.wait_for_message().await?;
-        let response = (self.message_from_to_response)(message_from)?;
-        Ok(response)
+        (self.message_from_to_response)(message_from)
     }
     async fn into_session(
         self,
