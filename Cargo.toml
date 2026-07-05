@@ -1,6 +1,6 @@
 [package]
 name = "exchange-gateway"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 
 [dependencies]
@@ -10,7 +10,7 @@ bs58 = "0.5.1"
 chrono = "0.4.44"
 data-encoding = "2.11.0"
 ed25519-compact = "2.3.0"
-exchange-types = { version = "0.1.5", registry = "shipyard" }
+exchange-types = { version = "0.1.6", registry = "shipyard" }
 hmac = "0.12"
 p256 = "0.13"
 p384 = "0.13"

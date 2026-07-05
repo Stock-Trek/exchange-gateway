@@ -6,7 +6,6 @@ use crate::{
     },
 };
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
-use std::sync::Arc;
 use strum::Display;
 
 #[allow(unused)]
@@ -26,13 +25,13 @@ impl SigningAlgorithm {
                 let key_bytes = key.expose_secret().as_bytes();
                 let signing_key = p256::ecdsa::SigningKey::from_slice(key_bytes)
                     .map_err(|e| EGError::Custom(format!("ECDSA P-256 key error: {e}")))?;
-                Ok(Arc::new(EcdsaP256Signer::new(signing_key)))
+                Ok(Box::new(EcdsaP256Signer::new(signing_key)))
             }
             Self::EcdsaP384 => {
                 let key_bytes = key.expose_secret().as_bytes();
                 let signing_key = p384::ecdsa::SigningKey::from_slice(key_bytes)
                     .map_err(|e| EGError::Custom(format!("ECDSA P-384 key error: {e}")))?;
-                Ok(Arc::new(EcdsaP384Signer::new(signing_key)))
+                Ok(Box::new(EcdsaP384Signer::new(signing_key)))
             }
             Self::Ed25519 => {
                 let key_bytes = key.expose_secret().as_bytes();
@@ -40,17 +39,17 @@ impl SigningAlgorithm {
                     ed25519_compact::SecretKey::from_slice(key_bytes).map_err(|_| {
                         EGError::Custom("Ed25519 key must be exactly 32 bytes".to_string())
                     })?;
-                Ok(Arc::new(Ed25519Signer::new(signing_key)))
+                Ok(Box::new(Ed25519Signer::new(signing_key)))
             }
             Self::HmacSha256 => {
                 let key_vec = key.expose_secret().as_bytes().to_vec();
                 let hmac_slice = SecretSlice::from(key_vec);
-                Ok(Arc::new(HmacSha256Signer::new(hmac_slice)))
+                Ok(Box::new(HmacSha256Signer::new(hmac_slice)))
             }
             Self::HmacSha512 => {
                 let key_vec = key.expose_secret().as_bytes().to_vec();
                 let hmac_slice = SecretSlice::from(key_vec);
-                Ok(Arc::new(HmacSha512Signer::new(hmac_slice)))
+                Ok(Box::new(HmacSha512Signer::new(hmac_slice)))
             }
         }
     }

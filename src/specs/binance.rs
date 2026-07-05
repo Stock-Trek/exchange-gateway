@@ -1,6 +1,6 @@
 use crate::{
-    authenticator::{AuthenticateLeg, Authenticator, AuthenticatorImpl, IncrementsLeg},
-    authenticator_creator::AuthenticatorCreatorTrait,
+    connector::{AuthenticateLeg, Connector, ConnectorImpl},
+    connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom},
@@ -23,7 +23,6 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use exchange_types::binance::{
-    exchange_info::BinanceExchangeInfoParams,
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
     signed::{BinanceParams, BinanceSignature, BinanceUnsignedParams},
@@ -36,7 +35,7 @@ use secrecy::SecretString;
 use std::{collections::HashMap, sync::Arc};
 use uuid::Uuid;
 
-pub(crate) struct BinanceHttpAuthenticatorCreator<TTransport, TRequest, TResponse>
+pub(crate) struct BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = HttpMessageDto>,
 {
@@ -45,7 +44,7 @@ where
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
 }
-pub(crate) struct BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse>
+pub(crate) struct BinanceWebsocketConnectorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = WebsocketMessageDto>,
 {
@@ -57,21 +56,32 @@ where
 }
 
 impl<TTransport, TRequest, TResponse>
-    AuthenticatorCreatorTrait<
+    ConnectorCreatorTrait<
         TRequest,
         BinanceHttpUnsignedRequest,
         ApiKeyCredentials,
+        BinanceHttpRequest,
         HttpMessageDto,
         BinanceHttpResponse,
         TResponse,
-    > for BinanceHttpAuthenticatorCreator<TTransport, TRequest, TResponse>
+    > for BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = HttpMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
-    fn into_authenticator(self) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>> {
-        let BinanceHttpAuthenticatorCreator {
+    fn into_connector(
+        self,
+    ) -> EGResult<
+        Connector<
+            TRequest,
+            BinanceHttpUnsignedRequest,
+            ApiKeyCredentials,
+            BinanceHttpRequest,
+            TResponse,
+        >,
+    > {
+        let BinanceHttpConnectorCreator {
             transport_creator,
             request_timeout,
             to_unsigned,
@@ -83,16 +93,15 @@ where
             queue_listener.clone(),
         ));
         let transport = transport_creator.create_transport(transport_listener.clone())?;
-        let increments_leg = increments_http_leg();
         let authenticate_legs = vec![];
-        Ok(Box::new(AuthenticatorImpl {
+        Ok(Box::new(ConnectorImpl {
             request_to_unsigned: to_unsigned,
+            null_signer: Box::new(ConvertSigner::new(http_converter)),
             message_from_to_response: to_response,
             message_out_to_dto: Box::new(to_http_dto),
             transport,
             transport_listener,
             queue_listener,
-            increments_leg,
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs,
             timeout: request_timeout,
@@ -102,21 +111,32 @@ where
     }
 }
 impl<TTransport, TRequest, TResponse>
-    AuthenticatorCreatorTrait<
+    ConnectorCreatorTrait<
         TRequest,
         BinanceWebsocketUnsignedRequest,
         ApiKeyCredentials,
+        BinanceWebsocketRequest,
         WebsocketMessageDto,
         BinanceWebsocketResponse,
         TResponse,
-    > for BinanceWebsocketAuthenticatorCreator<TTransport, TRequest, TResponse>
+    > for BinanceWebsocketConnectorCreator<TTransport, TRequest, TResponse>
 where
     TTransport: TransportTrait<MessageDto = WebsocketMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
-    fn into_authenticator(self) -> EGResult<Authenticator<TRequest, ApiKeyCredentials, TResponse>> {
-        let BinanceWebsocketAuthenticatorCreator {
+    fn into_connector(
+        self,
+    ) -> EGResult<
+        Connector<
+            TRequest,
+            BinanceWebsocketUnsignedRequest,
+            ApiKeyCredentials,
+            BinanceWebsocketRequest,
+            TResponse,
+        >,
+    > {
+        let BinanceWebsocketConnectorCreator {
             transport_creator,
             request_timeout,
             to_unsigned,
@@ -129,59 +149,25 @@ where
             queue_listener.clone(),
         ));
         let transport = transport_creator.create_transport(transport_listener.clone())?;
-        let increments_leg = increments_websocket_leg();
         let authenticate_legs = if use_session {
             vec![authenticate_websocket_leg()]
         } else {
             vec![]
         };
-        Ok(Box::new(AuthenticatorImpl {
+        Ok(Box::new(ConnectorImpl {
             request_to_unsigned: to_unsigned,
+            null_signer: Box::new(ConvertSigner::new(websocket_converter)),
             message_from_to_response: to_response,
             message_out_to_dto: Box::new(to_websocket_dto),
             transport,
             transport_listener,
             queue_listener,
-            increments_leg,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
             timeout: request_timeout,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         }))
-    }
-}
-
-fn increments_http_leg() -> IncrementsLeg<BinanceHttpRequest> {
-    let message = increments_http_request();
-    let timeout = Duration::seconds(30);
-    IncrementsLeg { message, timeout }
-}
-fn increments_websocket_leg() -> IncrementsLeg<BinanceWebsocketRequest> {
-    let message = increments_websocket_request();
-    let timeout = Duration::seconds(30);
-    IncrementsLeg { message, timeout }
-}
-fn increments_http_request() -> BinanceHttpRequest {
-    increments_params()
-}
-fn increments_websocket_request() -> BinanceWebsocketRequest {
-    let id = id();
-    BinanceWebsocketRequest {
-        metadata: BinanceWebsocketMetadata {
-            id,
-            method: BinanceWebsocketMethodName::ExchangeInfo,
-        },
-        params: increments_params(),
-    }
-}
-fn increments_params() -> BinanceParams {
-    BinanceParams {
-        signature: None,
-        params: BinanceUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
-            permissions: vec!["SPOT".to_string()],
-            symbolStatus: "TRADING".to_string(),
-        }),
     }
 }
 
@@ -212,7 +198,7 @@ fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
 fn create_signer_from_message(
     _message: BinanceWebsocketResponse,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
-    Ok(Box::new(ConvertSigner::new(converter)))
+    Ok(Box::new(ConvertSigner::new(websocket_converter)))
 }
 
 fn to_http_dto(message: &BinanceHttpRequest) -> EGResult<HttpMessageDto> {
@@ -282,7 +268,16 @@ fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
         .map_err(|_e| EGError::Custom("Cannot create signer".to_string()))
 }
 
-fn converter(unsigned: BinanceWebsocketUnsignedRequest) -> EGResult<BinanceWebsocketRequest> {
+fn http_converter(unsigned: BinanceHttpUnsignedRequest) -> EGResult<BinanceHttpRequest> {
+    let request = BinanceHttpRequest {
+        signature: None,
+        params: unsigned,
+    };
+    Ok(request)
+}
+fn websocket_converter(
+    unsigned: BinanceWebsocketUnsignedRequest,
+) -> EGResult<BinanceWebsocketRequest> {
     let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
     let params = BinanceParams {
         signature: None,

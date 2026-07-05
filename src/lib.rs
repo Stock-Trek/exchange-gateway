@@ -1,7 +1,7 @@
-pub mod authenticator;
-pub mod authenticator_creator;
-pub mod authenticators;
 pub mod connector;
+pub mod connector_creator;
+pub mod connector_session;
+pub mod connectors;
 pub mod credentials;
 pub mod error;
 pub mod functions;
@@ -13,9 +13,9 @@ pub mod transports;
 
 pub mod prelude {
     pub use crate::{
-        authenticator::Authenticator,
-        authenticators::Authenticators,
         connector::Connector,
+        connector_session::ConnectorSession,
+        connectors::Connectors,
         error::{EGError, EGResult},
         functions::{TryConvertRequestTo, TryConvertResponseFrom},
         transports::{
