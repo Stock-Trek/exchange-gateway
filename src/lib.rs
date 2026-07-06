@@ -20,7 +20,9 @@ pub mod prelude {
         functions::{TryConvertRequestTo, TryConvertResponseFrom},
         transports::{
             http_transport::{HttpClient, HttpClientTrait, HttpMessageDto, HttpTransportCreator},
-            transport::TransportTrait,
+            transport::{
+                HttpTransport, Transport, TransportMessageDto, TransportTrait, WebsocketTransport,
+            },
             transport_creator::{TransportCreator, TransportCreatorTrait},
             websocket_transport::{
                 WebsocketClient, WebsocketClientTrait, WebsocketMessageDto,
