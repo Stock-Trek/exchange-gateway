@@ -1,4 +1,7 @@
-use crate::{connector::Connector, error::EGResult, transports::transport::TransportTrait};
+use crate::{
+    connector::Connector, error::EGResult, listeners::listener::Listener,
+    transports::transport::TransportTrait,
+};
 
 pub(crate) trait ConnectorCreatorTrait<
     TRequest,
@@ -13,6 +16,7 @@ pub(crate) trait ConnectorCreatorTrait<
 {
     fn into_connector(
         self,
+        listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
             TRequest,

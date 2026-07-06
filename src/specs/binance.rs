@@ -4,7 +4,9 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom},
-    listeners::{convert_listener::ConvertListener, queue_listener::QueueListener},
+    listeners::{
+        convert_listener::ConvertListener, listener::Listener, queue_listener::QueueListener,
+    },
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
         rate_limits::RateLimits, request_weights::RequestWeights,
@@ -71,6 +73,7 @@ where
 {
     fn into_connector(
         self,
+        listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
             TRequest,
@@ -106,6 +109,7 @@ where
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs,
             timeout: request_timeout,
+            listener,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
@@ -128,6 +132,7 @@ where
 {
     fn into_connector(
         self,
+        listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
             TRequest,
@@ -163,6 +168,7 @@ where
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
             timeout: request_timeout,
+            listener,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })

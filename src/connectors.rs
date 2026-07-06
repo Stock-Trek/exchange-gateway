@@ -4,6 +4,7 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
     functions::{TryConvertRequestTo, TryConvertResponseFrom},
+    listeners::listener::Listener,
     specs::binance::{BinanceHttpConnectorCreator, BinanceWebsocketConnectorCreator},
     transports::{
         http_transport::HttpMessageDto, transport::TransportTrait,
@@ -27,6 +28,7 @@ impl Connectors {
         request_timeout: Duration,
         convert_request: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
+        listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
             TRequest,
@@ -49,7 +51,7 @@ impl Connectors {
             to_response: convert_response,
             to_unsigned: convert_request,
         }
-        .into_connector()
+        .into_connector(listener)
     }
     pub fn binance_websocket<TTransport, TRequest, TResponse>(
         &self,
@@ -57,6 +59,7 @@ impl Connectors {
         request_timeout: Duration,
         convert_request: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
+        listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
             TRequest,
@@ -79,6 +82,6 @@ impl Connectors {
             to_response: convert_response,
             to_unsigned: convert_request,
         }
-        .into_connector()
+        .into_connector(listener)
     }
 }

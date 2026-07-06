@@ -36,6 +36,7 @@ pub struct Connector<
     pub(crate) authenticate_legs:
         Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
     pub(crate) timeout: Duration,
+    pub(crate) listener: Listener<TResponse>,
     pub(crate) request_weights: RequestWeights,
     pub(crate) rate_limits: RateLimits,
 }
@@ -91,7 +92,6 @@ where
     pub async fn into_session(
         self,
         credentials: TCredentials,
-        listener: Listener<TResponse>,
     ) -> EGResult<
         ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>,
     > {
@@ -114,6 +114,7 @@ where
             timeout,
             request_weights,
             rate_limits,
+            listener,
             ..
         } = self;
         let delegate_listener = ConvertListener::new(message_from_to_response, listener);
