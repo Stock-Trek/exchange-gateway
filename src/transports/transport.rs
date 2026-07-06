@@ -1,8 +1,13 @@
-use crate::error::EGResult;
-use crate::transports::http_transport::{HttpMessageDto, HttpTransport};
-use crate::transports::websocket_transport::{WebsocketMessageDto, WebsocketTransport};
+use crate::{
+    error::EGResult,
+    functions::FilterMessage,
+    transports::{
+        http_transport::{HttpMessageDto, HttpTransport},
+        websocket_transport::{WebsocketMessageDto, WebsocketTransport},
+    },
+};
 use async_trait::async_trait;
-use chrono::Duration;
+use std::time::Duration;
 
 #[async_trait]
 pub trait TransportTrait: Send + Sync {
@@ -10,15 +15,14 @@ pub trait TransportTrait: Send + Sync {
 
     async fn send(&self, message_dto: Self::MessageDto, timeout: Duration) -> EGResult<()>;
 
-    async fn send_and_wait<TResponse, F>(
+    async fn send_and_wait<TFiltered>(
         &self,
         message_dto: Self::MessageDto,
         timeout: Duration,
-        filter: F,
-    ) -> EGResult<TResponse>
+        filter: &FilterMessage<Self::MessageDto, TFiltered>,
+    ) -> EGResult<TFiltered>
     where
-        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
-        TResponse: Send + Sync;
+        TFiltered: Send + Sync;
 }
 
 pub enum Transport {
@@ -44,28 +48,25 @@ impl TransportTrait for Transport {
         }
     }
 
-    async fn send_and_wait<TResponse, F>(
+    async fn send_and_wait<TFiltered>(
         &self,
         message_dto: Self::MessageDto,
         timeout: Duration,
-        filter: F,
-    ) -> EGResult<TResponse>
+        filter: &FilterMessage<Self::MessageDto, TFiltered>,
+    ) -> EGResult<TFiltered>
     where
-        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
-        TResponse: Send + Sync,
+        TFiltered: Send + Sync,
     {
         match (self, message_dto) {
             (Transport::Http(t), TransportMessageDto::Http(dto)) => {
-                TransportTrait::send_and_wait(t, dto, timeout, move |resp| {
-                    filter(&TransportMessageDto::Http(resp.clone()))
-                })
-                .await
+                let filter_response: FilterMessage<HttpMessageDto, TFiltered> =
+                    move |resp| filter(&TransportMessageDto::Http(resp));
+                TransportTrait::send_and_wait(t, dto, timeout, &filter_response).await
             }
             (Transport::Websocket(t), TransportMessageDto::Websocket(dto)) => {
-                TransportTrait::send_and_wait(t, dto, timeout, move |resp| {
-                    filter(&TransportMessageDto::Websocket(resp.clone()))
-                })
-                .await
+                let filter_response: FilterMessage<WebsocketMessageDto, TFiltered> =
+                    move |resp| filter(&TransportMessageDto::Websocket(resp));
+                TransportTrait::send_and_wait(t, dto, timeout, &filter_response).await
             }
             _ => Err(crate::error::EGError::Custom(
                 "Transport / DTO type mismatch".into(),

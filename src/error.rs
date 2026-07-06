@@ -4,6 +4,8 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     ListenModeMustBeOnDemand,
     Poison,
+    OneShotAlreadyUsed,
+    ReceiveTimeout(std::sync::mpsc::RecvTimeoutError),
     Send,
     Io(std::io::Error),
     Parse(std::num::ParseIntError),
@@ -15,6 +17,8 @@ impl std::fmt::Display for EGError {
         match self {
             EGError::ListenModeMustBeOnDemand => write!(f, "ListenMode requires OnDemand"),
             EGError::Poison => write!(f, "Poison error"),
+            EGError::OneShotAlreadyUsed => write!(f, "OneShot interceptor already used"),
+            EGError::ReceiveTimeout(e) => write!(f, "Receive timeout error: {}", e),
             EGError::Send => write!(f, "Send error"),
             EGError::Io(e) => write!(f, "IO error: {}", e),
             EGError::Parse(e) => write!(f, "Parse error: {}", e),
@@ -24,6 +28,12 @@ impl std::fmt::Display for EGError {
 }
 
 impl std::error::Error for EGError {}
+
+impl From<std::sync::mpsc::RecvTimeoutError> for EGError {
+    fn from(e: std::sync::mpsc::RecvTimeoutError) -> Self {
+        EGError::ReceiveTimeout(e)
+    }
+}
 
 impl From<std::io::Error> for EGError {
     fn from(e: std::io::Error) -> Self {

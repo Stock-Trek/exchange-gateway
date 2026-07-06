@@ -3,10 +3,8 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom},
-    listeners::{
-        convert_listener::ConvertListener, listener::Listener, queue_listener::QueueListener,
-    },
+    functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom, double_converter},
+    listeners::{convert_listener::ConvertListener, listener::Listener},
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
         rate_limits::RateLimits, request_weights::RequestWeights,
@@ -23,7 +21,6 @@ use crate::{
         transport_creator::TransportCreator, websocket_transport::WebsocketMessageDto,
     },
 };
-use chrono::{Duration, Utc};
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
@@ -34,7 +31,11 @@ use exchange_types::binance::{
     },
 };
 use secrecy::SecretString;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
 pub(crate) struct BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
@@ -42,7 +43,6 @@ where
     TTransport: TransportTrait<MessageDto = HttpMessageDto>,
 {
     pub transport_creator: TransportCreator<TTransport, HttpMessageDto>,
-    pub request_timeout: Duration,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
 }
@@ -51,7 +51,6 @@ where
     TTransport: TransportTrait<MessageDto = WebsocketMessageDto>,
 {
     pub transport_creator: TransportCreator<TTransport, WebsocketMessageDto>,
-    pub request_timeout: Duration,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
 }
@@ -87,29 +86,21 @@ where
     > {
         let BinanceHttpConnectorCreator {
             transport_creator,
-            request_timeout,
             to_unsigned,
             to_response,
         } = self;
-        let queue_listener = Arc::new(QueueListener::new());
-        let transport_listener = Arc::new(ConvertListener::new(
-            Box::new(from_http_dto),
-            queue_listener.clone(),
-        ));
-        let transport = transport_creator.create_transport(transport_listener.clone())?;
+        let response_converter = double_converter(Box::new(from_http_dto), to_response);
+        let listener = Arc::new(ConvertListener::new(response_converter, listener));
+        let transport = transport_creator.create_transport(listener.clone())?;
         let authenticate_legs = vec![];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(http_converter)),
-            message_from_to_response: to_response,
             message_out_to_dto: Box::new(to_http_dto),
             transport,
-            transport_listener,
-            queue_listener,
+            listener,
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs,
-            timeout: request_timeout,
-            listener,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
@@ -146,29 +137,21 @@ where
     > {
         let BinanceWebsocketConnectorCreator {
             transport_creator,
-            request_timeout,
             to_unsigned,
             to_response,
         } = self;
-        let queue_listener = Arc::new(QueueListener::new());
-        let transport_listener = Arc::new(ConvertListener::new(
-            Box::new(from_websocket_dto),
-            queue_listener.clone(),
-        ));
-        let transport = transport_creator.create_transport(transport_listener.clone())?;
+        let response_converter = double_converter(Box::new(from_websocket_dto), to_response);
+        let listener = Arc::new(ConvertListener::new(response_converter, listener));
+        let transport = transport_creator.create_transport(listener.clone())?;
         let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
-            message_from_to_response: to_response,
             message_out_to_dto: Box::new(to_websocket_dto),
             transport,
-            transport_listener,
-            queue_listener,
+            listener,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
-            timeout: request_timeout,
-            listener,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
@@ -180,16 +163,22 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
 > {
-    let timeout = Duration::seconds(20);
+    let timeout = Duration::from_secs(20);
     AuthenticateLeg {
         create_auth_message,
         create_signer_from: create_signer_from_message,
+        filter_response: Box::new(|m| Some(m.clone())),
         timeout,
     }
 }
 fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
     let id = id();
-    let timestamp = Utc::now().timestamp();
+    let timestamp: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Negative time since epoch")
+        .as_millis()
+        .try_into()
+        .expect("Epoch too large");
     let params = BinanceLogonParams { timestamp };
     BinanceWebsocketUnsignedRequest {
         metadata: BinanceWebsocketMetadata {
@@ -292,11 +281,10 @@ fn websocket_converter(
 
 // TODO ensure this is correct
 fn rate_limits() -> RateLimits {
-    let one_minute_nanos = Duration::minutes(1).num_nanoseconds().unwrap();
     RateLimits {
         send_order_request: MultiRateLimiter::new(vec![RateLimitConfig {
             capacity_per_interval: 1200,
-            interval_nanos: one_minute_nanos as u128,
+            interval_nanos: Duration::from_mins(1).as_nanos(),
         }]),
     }
 }
