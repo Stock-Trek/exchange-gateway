@@ -24,10 +24,8 @@ pub trait HttpClientTrait: Send + Sync {
 
 impl TransportCreatorTrait<HttpTransport, HttpMessageDto> for HttpTransportCreator {
     fn create_transport(&self, listener: Listener<HttpMessageDto>) -> EGResult<HttpTransport> {
-        Ok(HttpTransport {
-            client: (self.create_client)(),
-            listener,
-        })
+        let client = (self.create_client)();
+        Ok(HttpTransport { client, listener })
     }
 }
 
@@ -37,7 +35,7 @@ pub struct HttpMessageDto {
     pub body_json: String,
 }
 
-pub(crate) struct HttpTransport {
+pub struct HttpTransport {
     client: HttpClient,
     listener: Listener<HttpMessageDto>,
 }
@@ -45,9 +43,47 @@ pub(crate) struct HttpTransport {
 #[async_trait]
 impl TransportTrait for HttpTransport {
     type MessageDto = HttpMessageDto;
+
     async fn send(&self, message_dto: Self::MessageDto, timeout: Duration) -> EGResult<()> {
+        self.send_inner(message_dto, timeout).await
+    }
+
+    async fn send_and_wait<TResponse, F>(
+        &self,
+        message_dto: Self::MessageDto,
+        timeout: Duration,
+        filter: F,
+    ) -> EGResult<TResponse>
+    where
+        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
+        TResponse: Send + Sync,
+    {
+        self.send_and_wait_inner(message_dto, timeout, filter).await
+    }
+}
+
+impl HttpTransport {
+    pub(crate) async fn send_inner(
+        &self,
+        message_dto: HttpMessageDto,
+        timeout: Duration,
+    ) -> EGResult<()> {
         let future = self.client.send_message(message_dto, timeout);
         let response = future.await?;
         self.listener.on_message(response).await
+    }
+    pub(crate) async fn send_and_wait_inner<TResponse, F>(
+        &self,
+        dto: HttpMessageDto,
+        timeout: Duration,
+        filter: F,
+    ) -> EGResult<TResponse>
+    where
+        F: Fn(&HttpMessageDto) -> Option<TResponse> + Send + Sync,
+    {
+        let response = self.client.send_message(dto, timeout).await?;
+        filter(&response).ok_or_else(|| {
+            crate::error::EGError::Custom("filter returned None for HTTP response".into())
+        })
     }
 }
