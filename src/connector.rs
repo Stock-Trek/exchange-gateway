@@ -2,7 +2,7 @@ use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
     functions::{CreateAuthMessage, CreateSignerFrom, FilterMessage, TryConvertRequestTo},
-    listeners::exchange_listener::ExchangeListener,
+    listeners::convert_listener::ConvertListener,
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::TransportTrait,
@@ -26,7 +26,7 @@ pub struct Connector<
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
     pub(crate) transport: TTransport,
-    pub(crate) listener: Arc<ExchangeListener<TTransport::MessageDto, TResponse>>,
+    pub(crate) listener: Arc<ConvertListener<TTransport::MessageDto, TResponse>>,
     pub(crate) create_signer_from_credentials:
         CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) authenticate_legs:

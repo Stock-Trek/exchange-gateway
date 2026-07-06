@@ -4,7 +4,7 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom, double_converter},
-    listeners::{exchange_listener::ExchangeListener, listener::Listener},
+    listeners::{convert_listener::ConvertListener, listener::Listener},
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
         rate_limits::RateLimits, request_weights::RequestWeights,
@@ -90,7 +90,7 @@ where
             to_response,
         } = self;
         let response_converter = double_converter(Box::new(from_http_dto), to_response);
-        let listener = Arc::new(ExchangeListener::new(response_converter, listener));
+        let listener = Arc::new(ConvertListener::new(response_converter, listener));
         let transport = transport_creator.create_transport(listener.clone())?;
         let authenticate_legs = vec![];
         Ok(Connector {
@@ -141,7 +141,7 @@ where
             to_response,
         } = self;
         let response_converter = double_converter(Box::new(from_websocket_dto), to_response);
-        let listener = Arc::new(ExchangeListener::new(response_converter, listener));
+        let listener = Arc::new(ConvertListener::new(response_converter, listener));
         let transport = transport_creator.create_transport(listener.clone())?;
         let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Connector {

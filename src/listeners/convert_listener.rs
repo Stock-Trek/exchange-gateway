@@ -5,12 +5,12 @@ use crate::{
 };
 use async_trait::async_trait;
 
-pub(crate) struct ExchangeListener<TFrom, TTo> {
+pub(crate) struct ConvertListener<TFrom, TTo> {
     converter: TryConvertResponseFrom<TFrom, TTo>,
     delegate: Listener<TTo>,
 }
 
-impl<TFrom, TTo> ExchangeListener<TFrom, TTo> {
+impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
     pub fn new(converter: TryConvertResponseFrom<TFrom, TTo>, delegate: Listener<TTo>) -> Self {
         Self {
             converter,
@@ -20,7 +20,7 @@ impl<TFrom, TTo> ExchangeListener<TFrom, TTo> {
 }
 
 #[async_trait]
-impl<TFrom, TTo> ListenerTrait<TFrom> for ExchangeListener<TFrom, TTo>
+impl<TFrom, TTo> ListenerTrait<TFrom> for ConvertListener<TFrom, TTo>
 where
     TFrom: Send,
     TTo: Send,
