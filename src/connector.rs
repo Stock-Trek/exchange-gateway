@@ -1,14 +1,15 @@
 use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
-    functions::{CreateAuthMessage, CreateSignerFrom, TryConvertRequestTo},
-    listeners::exchange_listener::ExchangeListener,
+    functions::{CreateAuthMessage, CreateSignerFrom, FilterMessage, TryConvertRequestTo},
+    listeners::{
+        exchange_listener::ExchangeListener, one_shot_interceptor::OneShotInterceptorImpl,
+    },
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::TransportTrait,
 };
-use chrono::Duration;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 pub struct Connector<
     TRequest,
@@ -72,17 +73,35 @@ where
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
-    ) -> EGResult<TResponse> {
+    ) -> EGResult<()> {
         let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signer {
             Some(signer) => signer.sign(unsigned),
             None => self.null_signer.sign(unsigned),
         }?;
         let request_dto = (self.message_out_to_dto)(&message_to)?;
-        self.listener.set_delegate(delegate)
+        self.transport.send(request_dto, self.timeout).await
+    }
+    pub async fn request_and_wait<TWaitedResponse>(
+        &self,
+        request: TRequest,
+        signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
+        filter_response: FilterMessage<TResponse, TWaitedResponse>,
+        timeout: Duration,
+    ) -> EGResult<TWaitedResponse>
+    where
+        TWaitedResponse: Send + 'static,
+    {
+        let unsigned = (self.request_to_unsigned)(&request)?;
+        let message_to = match signer {
+            Some(signer) => signer.sign(unsigned),
+            None => self.null_signer.sign(unsigned),
+        }?;
+        let request_dto = (self.message_out_to_dto)(&message_to)?;
+        let interceptor = Arc::new(OneShotInterceptorImpl::new(filter_response));
+        self.listener.add_interceptor(interceptor.clone());
         self.transport.send(request_dto, self.timeout).await?;
-        let message_from = self.queue_listener.wait_for_message().await?;
-        (self.message_from_to_response)(message_from)
+        interceptor.wait(timeout)
     }
     pub async fn into_session(
         self,
@@ -95,9 +114,15 @@ where
             let auth_message = (leg.create_auth_message)();
             let signed_auth_message = signer.sign(auth_message)?;
             let auth_message_dto = (self.message_out_to_dto)(&signed_auth_message)?;
+
+            let interceptor = Arc::new(OneShotInterceptorImpl::new(filter_response));
+            self.listener.add_interceptor(interceptor.clone());
+
             self.transport.send(auth_message_dto, leg.timeout).await?;
-            let message_from = self.queue_listener.wait_for_message().await?;
-            signer = (leg.create_signer_from)(message_from)?;
+
+            let authentication_response = interceptor.wait(timeout)?;
+
+            signer = (leg.create_signer_from)(authentication_response)?;
         }
         let Connector {
             rate_limits,

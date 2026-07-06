@@ -21,7 +21,6 @@ use crate::{
         transport_creator::TransportCreator, websocket_transport::WebsocketMessageDto,
     },
 };
-use chrono::{Duration, Utc};
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
@@ -32,7 +31,11 @@ use exchange_types::binance::{
     },
 };
 use secrecy::SecretString;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use uuid::Uuid;
 
 pub(crate) struct BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
@@ -166,7 +169,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
 > {
-    let timeout = Duration::seconds(20);
+    let timeout = Duration::from_secs(20);
     AuthenticateLeg {
         create_auth_message,
         create_signer_from: create_signer_from_message,
@@ -175,7 +178,12 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
 }
 fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
     let id = id();
-    let timestamp = Utc::now().timestamp();
+    let timestamp: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Negative time since epoch")
+        .as_millis()
+        .try_into()
+        .expect("Epoch too large");
     let params = BinanceLogonParams { timestamp };
     BinanceWebsocketUnsignedRequest {
         metadata: BinanceWebsocketMetadata {

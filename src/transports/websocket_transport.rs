@@ -4,7 +4,7 @@ use crate::{
     transports::{transport::TransportTrait, transport_creator::TransportCreatorTrait},
 };
 use async_trait::async_trait;
-use chrono::Duration;
+use std::time::Duration;
 
 pub struct WebsocketTransportCreator {
     pub create_client: Box<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClient>,

@@ -4,8 +4,7 @@ use crate::{
     transports::{transport::TransportTrait, transport_creator::TransportCreatorTrait},
 };
 use async_trait::async_trait;
-use chrono::Duration;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 pub struct HttpTransportCreator {
     pub create_client: Box<dyn Fn() -> HttpClient>,

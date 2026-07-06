@@ -2,8 +2,8 @@ use crate::{
     error::{EGError, EGResult},
     functions::TryConvertResponseFrom,
     listeners::{
-        interceptor::Interceptor,
         listener::{Listener, ListenerTrait},
+        one_shot_interceptor::OneShotInterceptor,
     },
 };
 use async_trait::async_trait;
@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 
 pub(crate) struct ExchangeListener<TFrom, TTo> {
     converter: TryConvertResponseFrom<TFrom, TTo>,
-    interceptors: Arc<RwLock<Vec<Interceptor<TTo>>>>,
+    interceptors: Arc<RwLock<Vec<OneShotInterceptor<TTo>>>>,
     delegate: Listener<TTo>,
 }
 
@@ -23,7 +23,7 @@ impl<TFrom, TTo> ExchangeListener<TFrom, TTo> {
             delegate,
         }
     }
-    pub fn add_interceptor(&self, interceptor: Interceptor<TTo>) -> EGResult<()> {
+    pub fn add_interceptor(&self, interceptor: OneShotInterceptor<TTo>) -> EGResult<()> {
         let mut guard = self.interceptors.write().map_err(|_| EGError::Poison)?;
         (*guard).push(interceptor);
         Ok(())
@@ -44,7 +44,7 @@ where
         };
         let mut accepted_interceptor = None;
         for interceptor in interceptors {
-            if interceptor.intercept(&converted).await {
+            if interceptor.intercept(&converted) {
                 accepted_interceptor = Some(interceptor);
                 break;
             }

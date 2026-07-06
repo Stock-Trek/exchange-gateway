@@ -5,7 +5,7 @@ use crate::{
     sign::signer::Signer,
     transports::transport::TransportTrait,
 };
-use chrono::Duration;
+use std::time::Duration;
 
 pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
 where

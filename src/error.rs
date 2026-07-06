@@ -4,8 +4,9 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     ListenModeMustBeOnDemand,
     Poison,
-    ReceiveError(tokio::sync::oneshot::error::RecvError),
-    Timeout(std::time::Duration),
+    OneShotAlreadyUsed,
+    ReceiveTimeout(std::sync::mpsc::RecvTimeoutError),
+    Send,
     Io(std::io::Error),
     Parse(std::num::ParseIntError),
     Custom(String),
@@ -16,8 +17,9 @@ impl std::fmt::Display for EGError {
         match self {
             EGError::ListenModeMustBeOnDemand => write!(f, "ListenMode requires OnDemand"),
             EGError::Poison => write!(f, "Poison error"),
-            EGError::ReceiveError(e) => write!(f, "Receive error: {}", e),
-            EGError::Timeout(timeout) => write!(f, "Timeout: {:?}", timeout),
+            EGError::OneShotAlreadyUsed => write!(f, "OneShot interceptor already used"),
+            EGError::ReceiveTimeout(e) => write!(f, "Receive timeout error: {}", e),
+            EGError::Send => write!(f, "Send error"),
             EGError::Io(e) => write!(f, "IO error: {}", e),
             EGError::Parse(e) => write!(f, "Parse error: {}", e),
             EGError::Custom(s) => write!(f, "{}", s),
@@ -27,9 +29,9 @@ impl std::fmt::Display for EGError {
 
 impl std::error::Error for EGError {}
 
-impl From<tokio::sync::oneshot::error::RecvError> for EGError {
-    fn from(e: tokio::sync::oneshot::error::RecvError) -> Self {
-        EGError::ReceiveError(e)
+impl From<std::sync::mpsc::RecvTimeoutError> for EGError {
+    fn from(e: std::sync::mpsc::RecvTimeoutError) -> Self {
+        EGError::ReceiveTimeout(e)
     }
 }
 

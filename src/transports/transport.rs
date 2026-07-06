@@ -2,7 +2,7 @@ use crate::error::EGResult;
 use crate::transports::http_transport::{HttpMessageDto, HttpTransport};
 use crate::transports::websocket_transport::{WebsocketMessageDto, WebsocketTransport};
 use async_trait::async_trait;
-use chrono::Duration;
+use std::time::Duration;
 
 #[async_trait]
 pub trait TransportTrait: Send + Sync {

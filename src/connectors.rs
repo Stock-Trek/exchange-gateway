@@ -11,13 +11,13 @@ use crate::{
         transport_creator::TransportCreator, websocket_transport::WebsocketMessageDto,
     },
 };
-use chrono::Duration;
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     websocket::{
         BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
 };
+use std::time::Duration;
 
 pub struct Connectors;
 
