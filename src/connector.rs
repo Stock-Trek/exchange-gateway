@@ -9,52 +9,10 @@ use crate::{
     sign::signer::Signer,
     transports::transport::TransportTrait,
 };
-use async_trait::async_trait;
 use chrono::Duration;
 use std::sync::Arc;
 
-pub type Connector<
-    TRequest,
-    TUnsignedMessageToExchange,
-    TCredentials,
-    TMessageToExchange,
-    TResponse,
-> = Box<
-    dyn ConnectorTrait<
-            TRequest,
-            TUnsignedMessageToExchange,
-            TCredentials,
-            TMessageToExchange,
-            TResponse,
-        >,
->;
-
-#[async_trait]
-pub trait ConnectorTrait<
-    TRequest,
-    TUnsignedMessageToExchange,
-    TCredentials,
-    TMessageToExchange,
-    TResponse,
->
-{
-    fn signer(
-        &self,
-        credentials: TCredentials,
-    ) -> EGResult<Signer<TUnsignedMessageToExchange, TMessageToExchange>>;
-    async fn request(
-        &self,
-        request: TRequest,
-        signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
-    ) -> EGResult<TResponse>;
-    async fn into_session(
-        self,
-        credentials: TCredentials,
-        listener: Listener<TResponse>,
-    ) -> EGResult<ConnectorSession<TRequest>>;
-}
-
-pub(crate) struct ConnectorImpl<
+pub struct Connector<
     TRequest,
     TUnsignedMessageToExchange,
     TCredentials,
@@ -65,23 +23,23 @@ pub(crate) struct ConnectorImpl<
 > where
     TTransport: TransportTrait,
 {
-    pub request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
-    pub null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub message_from_to_response: TryConvertResponseFrom<TMessageFromExchange, TResponse>,
-    pub message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
-    pub transport: TTransport,
-    pub transport_listener: Arc<ConvertListener<TTransport::MessageDto, TMessageFromExchange>>,
-    pub queue_listener: Arc<QueueListener<TMessageFromExchange>>,
-    pub create_signer_from_credentials:
+    pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
+    pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    pub(crate) message_from_to_response: TryConvertResponseFrom<TMessageFromExchange, TResponse>,
+    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
+    pub(crate) transport: TTransport,
+    pub(crate) transport_listener:
+        Arc<ConvertListener<TTransport::MessageDto, TMessageFromExchange>>,
+    pub(crate) queue_listener: Arc<QueueListener<TMessageFromExchange>>,
+    pub(crate) create_signer_from_credentials:
         CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
-    pub authenticate_legs:
+    pub(crate) authenticate_legs:
         Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
-    pub timeout: Duration,
-    pub request_weights: RequestWeights,
-    pub rate_limits: RateLimits,
+    pub(crate) timeout: Duration,
+    pub(crate) request_weights: RequestWeights,
+    pub(crate) rate_limits: RateLimits,
 }
 
-#[async_trait]
 impl<
     TRequest,
     TUnsignedMessageToExchange,
@@ -90,8 +48,8 @@ impl<
     TTransport,
     TMessageFromExchange,
     TResponse,
-> ConnectorTrait<TRequest, TUnsignedMessageToExchange, TCredentials, TMessageToExchange, TResponse>
-    for ConnectorImpl<
+>
+    Connector<
         TRequest,
         TUnsignedMessageToExchange,
         TCredentials,
@@ -109,13 +67,13 @@ where
     TMessageFromExchange: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
-    fn signer(
+    pub fn signer(
         &self,
         credentials: TCredentials,
     ) -> EGResult<Signer<TUnsignedMessageToExchange, TMessageToExchange>> {
         (self.create_signer_from_credentials)(credentials)
     }
-    async fn request(
+    pub async fn request(
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
@@ -130,7 +88,7 @@ where
         let message_from = self.queue_listener.wait_for_message().await?;
         (self.message_from_to_response)(message_from)
     }
-    async fn into_session(
+    pub async fn into_session(
         self,
         credentials: TCredentials,
         listener: Listener<TResponse>,
@@ -144,7 +102,7 @@ where
             let message_from = self.queue_listener.wait_for_message().await?;
             signer = (leg.create_signer_from)(message_from)?;
         }
-        let ConnectorImpl {
+        let Connector {
             request_to_unsigned,
             null_signer,
             message_from_to_response,

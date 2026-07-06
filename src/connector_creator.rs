@@ -1,14 +1,15 @@
-use crate::{connector::Connector, error::EGResult};
+use crate::{connector::Connector, error::EGResult, transports::transport::TransportTrait};
 
 pub(crate) trait ConnectorCreatorTrait<
     TRequest,
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
-    TMessageDto,
+    TTransport,
     TMessageFromExchange,
     TResponse,
->
+> where
+    TTransport: TransportTrait,
 {
     fn into_connector(
         self,
@@ -18,6 +19,8 @@ pub(crate) trait ConnectorCreatorTrait<
             TUnsignedMessageToExchange,
             TCredentials,
             TMessageToExchange,
+            TTransport,
+            TMessageFromExchange,
             TResponse,
         >,
     >;

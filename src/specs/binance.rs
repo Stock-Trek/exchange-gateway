@@ -1,5 +1,5 @@
 use crate::{
-    connector::{AuthenticateLeg, Connector, ConnectorImpl},
+    connector::{AuthenticateLeg, Connector},
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
@@ -60,7 +60,7 @@ impl<TTransport, TRequest, TResponse>
         BinanceHttpUnsignedRequest,
         ApiKeyCredentials,
         BinanceHttpRequest,
-        HttpMessageDto,
+        TTransport,
         BinanceHttpResponse,
         TResponse,
     > for BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
@@ -77,6 +77,8 @@ where
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
+            TTransport,
+            BinanceHttpResponse,
             TResponse,
         >,
     > {
@@ -93,7 +95,7 @@ where
         ));
         let transport = transport_creator.create_transport(transport_listener.clone())?;
         let authenticate_legs = vec![];
-        Ok(Box::new(ConnectorImpl {
+        Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(http_converter)),
             message_from_to_response: to_response,
@@ -106,7 +108,7 @@ where
             timeout: request_timeout,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
-        }))
+        })
     }
 }
 impl<TTransport, TRequest, TResponse>
@@ -115,7 +117,7 @@ impl<TTransport, TRequest, TResponse>
         BinanceWebsocketUnsignedRequest,
         ApiKeyCredentials,
         BinanceWebsocketRequest,
-        WebsocketMessageDto,
+        TTransport,
         BinanceWebsocketResponse,
         TResponse,
     > for BinanceWebsocketConnectorCreator<TTransport, TRequest, TResponse>
@@ -132,6 +134,8 @@ where
             BinanceWebsocketUnsignedRequest,
             ApiKeyCredentials,
             BinanceWebsocketRequest,
+            TTransport,
+            BinanceWebsocketResponse,
             TResponse,
         >,
     > {
@@ -148,7 +152,7 @@ where
         ));
         let transport = transport_creator.create_transport(transport_listener.clone())?;
         let authenticate_legs = vec![authenticate_websocket_leg()];
-        Ok(Box::new(ConnectorImpl {
+        Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
             message_from_to_response: to_response,
@@ -161,7 +165,7 @@ where
             timeout: request_timeout,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
-        }))
+        })
     }
 }
 

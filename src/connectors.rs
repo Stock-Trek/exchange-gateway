@@ -33,6 +33,8 @@ impl Connectors {
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
+            TTransport,
+            BinanceHttpResponse,
             TResponse,
         >,
     >
@@ -61,6 +63,8 @@ impl Connectors {
             BinanceWebsocketUnsignedRequest,
             ApiKeyCredentials,
             BinanceWebsocketRequest,
+            TTransport,
+            BinanceWebsocketResponse,
             TResponse,
         >,
     >
