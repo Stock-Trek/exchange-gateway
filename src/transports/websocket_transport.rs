@@ -38,18 +38,40 @@ pub(crate) struct WebsocketTransport {
     client: WebsocketClient,
 }
 
+#[async_trait]
 impl TransportTrait for WebsocketTransport {
     type MessageDto = WebsocketMessageDto;
+
+    async fn send(&self, message_dto: Self::MessageDto, timeout: Duration) -> EGResult<()> {
+        self.send_inner(message_dto, timeout).await
+    }
+
+    async fn send_and_wait<TResponse, F>(
+        &self,
+        message_dto: Self::MessageDto,
+        timeout: Duration,
+        filter: F,
+    ) -> EGResult<TResponse>
+    where
+        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
+        TResponse: Send + Sync,
+    {
+        self.send_and_wait_inner(message_dto, timeout, filter).await
+    }
 }
 
 impl WebsocketTransport {
     pub fn new(client: crate::transports::websocket_transport::WebsocketClient) -> Self {
         Self { client }
     }
-    pub async fn send(&self, message: WebsocketMessageDto, timeout: Duration) -> EGResult<()> {
+    pub(crate) async fn send_inner(
+        &self,
+        message: WebsocketMessageDto,
+        timeout: Duration,
+    ) -> EGResult<()> {
         self.client.send_message(message, timeout).await
     }
-    pub async fn send_and_wait<TResponse, F>(
+    pub(crate) async fn send_and_wait_inner<TResponse, F>(
         &self,
         dto: WebsocketMessageDto,
         timeout: Duration,

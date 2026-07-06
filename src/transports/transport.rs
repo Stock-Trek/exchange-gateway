@@ -7,6 +7,18 @@ use chrono::Duration;
 #[async_trait]
 pub trait TransportTrait: Send + Sync {
     type MessageDto: Send + Sync;
+
+    async fn send(&self, message_dto: Self::MessageDto, timeout: Duration) -> EGResult<()>;
+
+    async fn send_and_wait<TResponse, F>(
+        &self,
+        message_dto: Self::MessageDto,
+        timeout: Duration,
+        filter: F,
+    ) -> EGResult<TResponse>
+    where
+        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
+        TResponse: Send + Sync;
 }
 
 pub enum Transport {
@@ -14,37 +26,43 @@ pub enum Transport {
     Websocket(WebsocketTransport),
 }
 
-impl Transport {
-    pub async fn send(&self, message_dto: TransportMessageDto, timeout: Duration) -> EGResult<()> {
+#[async_trait]
+impl TransportTrait for Transport {
+    type MessageDto = TransportMessageDto;
+
+    async fn send(&self, message_dto: Self::MessageDto, timeout: Duration) -> EGResult<()> {
         match (self, message_dto) {
-            (Transport::Http(t), TransportMessageDto::Http(dto)) => t.send(dto, timeout).await,
+            (Transport::Http(t), TransportMessageDto::Http(dto)) => {
+                TransportTrait::send(t, dto, timeout).await
+            }
             (Transport::Websocket(t), TransportMessageDto::Websocket(dto)) => {
-                t.send(dto, timeout).await
+                TransportTrait::send(t, dto, timeout).await
             }
             _ => Err(crate::error::EGError::Custom(
                 "Transport / DTO type mismatch".into(),
             )),
         }
     }
-    pub async fn send_and_wait<TResponse, F>(
+
+    async fn send_and_wait<TResponse, F>(
         &self,
-        message_dto: TransportMessageDto,
+        message_dto: Self::MessageDto,
         timeout: Duration,
         filter: F,
     ) -> EGResult<TResponse>
     where
-        F: Fn(&TransportMessageDto) -> Option<TResponse> + Send + Sync,
+        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
         TResponse: Send + Sync,
     {
         match (self, message_dto) {
             (Transport::Http(t), TransportMessageDto::Http(dto)) => {
-                t.send_and_wait(dto, timeout, move |resp| {
+                TransportTrait::send_and_wait(t, dto, timeout, move |resp| {
                     filter(&TransportMessageDto::Http(resp.clone()))
                 })
                 .await
             }
             (Transport::Websocket(t), TransportMessageDto::Websocket(dto)) => {
-                t.send_and_wait(dto, timeout, move |resp| {
+                TransportTrait::send_and_wait(t, dto, timeout, move |resp| {
                     filter(&TransportMessageDto::Websocket(resp.clone()))
                 })
                 .await
