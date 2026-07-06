@@ -20,7 +20,6 @@ where
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
     pub(crate) transport: TTransport,
-    pub(crate) timeout: Duration,
 }
 
 impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
@@ -31,7 +30,12 @@ where
     TMessageToExchange: Send,
     TTransport: TransportTrait,
 {
-    pub async fn request(&self, request: TRequest, signed: bool) -> EGResult<()> {
+    pub async fn request(
+        &self,
+        request: TRequest,
+        signed: bool,
+        timeout: Duration,
+    ) -> EGResult<()> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
@@ -48,6 +52,6 @@ where
             false => self.null_signer.sign(unsigned),
         }?;
         let message_dto = (self.message_out_to_dto)(&message_to)?;
-        self.transport.send(message_dto, self.timeout).await
+        self.transport.send(message_dto, timeout).await
     }
 }

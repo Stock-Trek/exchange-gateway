@@ -1,5 +1,6 @@
 use crate::{
     error::EGResult,
+    functions::FilterMessage,
     listeners::listener::Listener,
     transports::{transport::TransportTrait, transport_creator::TransportCreatorTrait},
 };
@@ -47,15 +48,14 @@ impl TransportTrait for HttpTransport {
         self.send_inner(message_dto, timeout).await
     }
 
-    async fn send_and_wait<TResponse, F>(
+    async fn send_and_wait<TFiltered>(
         &self,
         message_dto: Self::MessageDto,
         timeout: Duration,
-        filter: F,
-    ) -> EGResult<TResponse>
+        filter: &FilterMessage<Self::MessageDto, TFiltered>,
+    ) -> EGResult<TFiltered>
     where
-        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
-        TResponse: Send + Sync,
+        TFiltered: Send + Sync,
     {
         self.send_and_wait_inner(message_dto, timeout, filter).await
     }
@@ -71,14 +71,14 @@ impl HttpTransport {
         let response = future.await?;
         self.listener.on_message(response).await
     }
-    pub(crate) async fn send_and_wait_inner<TResponse, F>(
+    pub(crate) async fn send_and_wait_inner<TFiltered>(
         &self,
         dto: HttpMessageDto,
         timeout: Duration,
-        filter: F,
-    ) -> EGResult<TResponse>
+        filter: &FilterMessage<HttpMessageDto, TFiltered>,
+    ) -> EGResult<TFiltered>
     where
-        F: Fn(&HttpMessageDto) -> Option<TResponse> + Send + Sync,
+        TFiltered: Send + Sync,
     {
         let response = self.client.send_message(dto, timeout).await?;
         filter(&response).ok_or_else(|| {

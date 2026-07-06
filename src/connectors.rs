@@ -17,7 +17,6 @@ use exchange_types::binance::{
         BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
 };
-use std::time::Duration;
 
 pub struct Connectors;
 
@@ -25,7 +24,6 @@ impl Connectors {
     pub fn binance_http<TTransport, TRequest, TResponse>(
         &self,
         transport_creator: TransportCreator<TTransport, HttpMessageDto>,
-        request_timeout: Duration,
         convert_request: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
         listener: Listener<TResponse>,
@@ -46,7 +44,6 @@ impl Connectors {
         TResponse: Send + Sync + 'static,
     {
         BinanceHttpConnectorCreator {
-            request_timeout,
             transport_creator,
             to_response: convert_response,
             to_unsigned: convert_request,
@@ -56,7 +53,6 @@ impl Connectors {
     pub fn binance_websocket<TTransport, TRequest, TResponse>(
         &self,
         transport_creator: TransportCreator<TTransport, WebsocketMessageDto>,
-        request_timeout: Duration,
         convert_request: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
         listener: Listener<TResponse>,
@@ -77,7 +73,6 @@ impl Connectors {
         TResponse: Send + Sync + 'static,
     {
         BinanceWebsocketConnectorCreator {
-            request_timeout,
             transport_creator,
             to_response: convert_response,
             to_unsigned: convert_request,

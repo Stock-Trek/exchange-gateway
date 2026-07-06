@@ -1,5 +1,6 @@
 use crate::{
     error::EGResult,
+    functions::FilterMessage,
     listeners::listener::Listener,
     transports::{transport::TransportTrait, transport_creator::TransportCreatorTrait},
 };
@@ -46,15 +47,14 @@ impl TransportTrait for WebsocketTransport {
         self.send_inner(message_dto, timeout).await
     }
 
-    async fn send_and_wait<TResponse, F>(
+    async fn send_and_wait<TFiltered>(
         &self,
         message_dto: Self::MessageDto,
         timeout: Duration,
-        filter: F,
-    ) -> EGResult<TResponse>
+        filter: &FilterMessage<WebsocketMessageDto, TFiltered>,
+    ) -> EGResult<TFiltered>
     where
-        F: Fn(&Self::MessageDto) -> Option<TResponse> + Send + Sync,
-        TResponse: Send + Sync,
+        TFiltered: Send + Sync,
     {
         self.send_and_wait_inner(message_dto, timeout, filter).await
     }
@@ -68,14 +68,14 @@ impl WebsocketTransport {
     ) -> EGResult<()> {
         self.client.send_message(message, timeout).await
     }
-    pub(crate) async fn send_and_wait_inner<TResponse, F>(
+    pub(crate) async fn send_and_wait_inner<TFiltered>(
         &self,
         dto: WebsocketMessageDto,
         timeout: Duration,
-        #[allow(unused)] filter: F,
-    ) -> EGResult<TResponse>
+        #[allow(unused)] filter: &FilterMessage<WebsocketMessageDto, TFiltered>,
+    ) -> EGResult<TFiltered>
     where
-        F: Fn(&WebsocketMessageDto) -> Option<TResponse> + Send + Sync,
+        TFiltered: Send + Sync,
     {
         self.client.send_message(dto, timeout).await?;
         Err(crate::error::EGError::Custom(

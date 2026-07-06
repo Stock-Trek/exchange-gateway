@@ -43,7 +43,6 @@ where
     TTransport: TransportTrait<MessageDto = HttpMessageDto>,
 {
     pub transport_creator: TransportCreator<TTransport, HttpMessageDto>,
-    pub request_timeout: Duration,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
 }
@@ -52,7 +51,6 @@ where
     TTransport: TransportTrait<MessageDto = WebsocketMessageDto>,
 {
     pub transport_creator: TransportCreator<TTransport, WebsocketMessageDto>,
-    pub request_timeout: Duration,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
 }
@@ -88,7 +86,6 @@ where
     > {
         let BinanceHttpConnectorCreator {
             transport_creator,
-            request_timeout,
             to_unsigned,
             to_response,
         } = self;
@@ -104,7 +101,6 @@ where
             listener,
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs,
-            timeout: request_timeout,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
@@ -141,14 +137,13 @@ where
     > {
         let BinanceWebsocketConnectorCreator {
             transport_creator,
-            request_timeout,
             to_unsigned,
             to_response,
         } = self;
         let response_converter = double_converter(Box::new(from_websocket_dto), to_response);
         let listener = Arc::new(ExchangeListener::new(response_converter, listener));
         let transport = transport_creator.create_transport(listener.clone())?;
-        let authenticate_legs = vec![];
+        let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
@@ -157,7 +152,6 @@ where
             listener,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
-            timeout: request_timeout,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
@@ -173,6 +167,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     AuthenticateLeg {
         create_auth_message,
         create_signer_from: create_signer_from_message,
+        filter_response: Box::new(|m| Some(m.clone())),
         timeout,
     }
 }
@@ -286,11 +281,10 @@ fn websocket_converter(
 
 // TODO ensure this is correct
 fn rate_limits() -> RateLimits {
-    let one_minute_nanos = Duration::minutes(1).num_nanoseconds().unwrap();
     RateLimits {
         send_order_request: MultiRateLimiter::new(vec![RateLimitConfig {
             capacity_per_interval: 1200,
-            interval_nanos: one_minute_nanos as u128,
+            interval_nanos: Duration::from_mins(1).as_nanos(),
         }]),
     }
 }

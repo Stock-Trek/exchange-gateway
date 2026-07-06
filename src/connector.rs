@@ -2,9 +2,7 @@ use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
     functions::{CreateAuthMessage, CreateSignerFrom, FilterMessage, TryConvertRequestTo},
-    listeners::{
-        exchange_listener::ExchangeListener, one_shot_interceptor::OneShotInterceptorImpl,
-    },
+    listeners::exchange_listener::ExchangeListener,
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::TransportTrait,
@@ -33,7 +31,6 @@ pub struct Connector<
         CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) authenticate_legs:
         Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
-    pub(crate) timeout: Duration,
 }
 
 impl<
@@ -73,6 +70,7 @@ where
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
+        timeout: Duration,
     ) -> EGResult<()> {
         let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signer {
@@ -80,17 +78,18 @@ where
             None => self.null_signer.sign(unsigned),
         }?;
         let request_dto = (self.message_out_to_dto)(&message_to)?;
-        self.transport.send(request_dto, self.timeout).await
+        self.transport.send(request_dto, timeout).await
     }
     pub async fn request_and_wait<TWaitedResponse>(
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
-        filter_response: FilterMessage<TResponse, TWaitedResponse>,
+        filter_response: &FilterMessage<TResponse, TWaitedResponse>,
         timeout: Duration,
     ) -> EGResult<TWaitedResponse>
     where
-        TWaitedResponse: Send + 'static,
+        TTransport: TransportTrait<MessageDto = TResponse> + Send + Sync,
+        TWaitedResponse: Send + Sync + 'static,
     {
         let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signer {
@@ -98,30 +97,28 @@ where
             None => self.null_signer.sign(unsigned),
         }?;
         let request_dto = (self.message_out_to_dto)(&message_to)?;
-        let interceptor = Arc::new(OneShotInterceptorImpl::new(filter_response));
-        self.listener.add_interceptor(interceptor.clone());
-        self.transport.send(request_dto, self.timeout).await?;
-        interceptor.wait(timeout)
+        self.transport
+            .send_and_wait(request_dto, timeout, filter_response)
+            .await
     }
     pub async fn into_session(
         self,
         credentials: TCredentials,
     ) -> EGResult<
         ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>,
-    > {
+    >
+    where
+        TTransport: TransportTrait<MessageDto = TMessageFromExchange> + Send + Sync,
+    {
         let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
             let auth_message = (leg.create_auth_message)();
             let signed_auth_message = signer.sign(auth_message)?;
             let auth_message_dto = (self.message_out_to_dto)(&signed_auth_message)?;
-
-            let interceptor = Arc::new(OneShotInterceptorImpl::new(filter_response));
-            self.listener.add_interceptor(interceptor.clone());
-
-            self.transport.send(auth_message_dto, leg.timeout).await?;
-
-            let authentication_response = interceptor.wait(timeout)?;
-
+            let authentication_response = self
+                .transport
+                .send_and_wait(auth_message_dto, leg.timeout, &leg.filter_response)
+                .await?;
             signer = (leg.create_signer_from)(authentication_response)?;
         }
         let Connector {
@@ -131,7 +128,6 @@ where
             null_signer,
             message_out_to_dto,
             transport,
-            timeout,
             ..
         } = self;
         let connector_session = ConnectorSession {
@@ -142,7 +138,6 @@ where
             signer,
             message_out_to_dto,
             transport,
-            timeout,
         };
         Ok(connector_session)
     }
@@ -155,6 +150,7 @@ pub(crate) struct AuthenticateLeg<
 > {
     pub create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
     pub timeout: Duration,
+    pub filter_response: FilterMessage<TMessageFromExchange, TMessageFromExchange>,
     pub create_signer_from:
         CreateSignerFrom<TMessageFromExchange, TUnsignedMessageToExchange, TMessageToExchange>,
 }
