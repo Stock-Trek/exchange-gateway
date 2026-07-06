@@ -1,4 +1,8 @@
-use crate::{error::EGResult, listeners::listener::Listener};
+use crate::{
+    error::EGResult,
+    listeners::listener::Listener,
+    transports::{transport::TransportTrait, transport_creator::TransportCreatorTrait},
+};
 use async_trait::async_trait;
 use chrono::Duration;
 use std::collections::HashMap;
@@ -18,6 +22,13 @@ pub trait HttpClientTrait: Send + Sync {
     ) -> EGResult<HttpMessageDto>;
 }
 
+impl TransportCreatorTrait<HttpTransport, HttpMessageDto> for HttpTransportCreator {
+    fn create_transport(&self, listener: Listener<HttpMessageDto>) -> EGResult<HttpTransport> {
+        let client = (self.create_client)();
+        Ok(HttpTransport { client, listener })
+    }
+}
+
 #[derive(Clone)]
 pub struct HttpMessageDto {
     pub headers: HashMap<String, String>,
@@ -27,6 +38,10 @@ pub struct HttpMessageDto {
 pub(crate) struct HttpTransport {
     client: HttpClient,
     listener: Listener<HttpMessageDto>,
+}
+
+impl TransportTrait for HttpTransport {
+    type MessageDto = HttpMessageDto;
 }
 
 impl HttpTransport {

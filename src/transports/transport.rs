@@ -7,7 +7,6 @@ use chrono::Duration;
 #[async_trait]
 pub trait TransportTrait: Send + Sync {
     type MessageDto: Send + Sync;
-    async fn send(&self, message_dto: Self::MessageDto, timeout: Duration) -> EGResult<()>;
 }
 
 pub enum Transport {
