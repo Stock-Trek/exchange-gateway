@@ -34,7 +34,7 @@ pub struct WebsocketMessageDto {
     pub body_json: String,
 }
 
-pub(crate) struct WebsocketTransport {
+pub struct WebsocketTransport {
     client: WebsocketClient,
 }
 
@@ -61,9 +61,6 @@ impl TransportTrait for WebsocketTransport {
 }
 
 impl WebsocketTransport {
-    pub fn new(client: crate::transports::websocket_transport::WebsocketClient) -> Self {
-        Self { client }
-    }
     pub(crate) async fn send_inner(
         &self,
         message: WebsocketMessageDto,
@@ -75,7 +72,7 @@ impl WebsocketTransport {
         &self,
         dto: WebsocketMessageDto,
         timeout: Duration,
-        filter: F,
+        #[allow(unused)] filter: F,
     ) -> EGResult<TResponse>
     where
         F: Fn(&WebsocketMessageDto) -> Option<TResponse> + Send + Sync,

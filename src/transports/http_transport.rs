@@ -35,7 +35,7 @@ pub struct HttpMessageDto {
     pub body_json: String,
 }
 
-pub(crate) struct HttpTransport {
+pub struct HttpTransport {
     client: HttpClient,
     listener: Listener<HttpMessageDto>,
 }
@@ -63,12 +63,6 @@ impl TransportTrait for HttpTransport {
 }
 
 impl HttpTransport {
-    pub fn new(
-        client: crate::transports::http_transport::HttpClient,
-        listener: Listener<HttpMessageDto>,
-    ) -> Self {
-        Self { client, listener }
-    }
     pub(crate) async fn send_inner(
         &self,
         message_dto: HttpMessageDto,
