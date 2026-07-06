@@ -1,5 +1,5 @@
 use crate::{
-    connector_session::{ConnectorSession, ConnectorSessionImpl},
+    connector_session::ConnectorSession,
     error::EGResult,
     functions::{CreateAuthMessage, CreateSignerFrom, TryConvertRequestTo, TryConvertResponseFrom},
     listeners::{
@@ -92,7 +92,9 @@ where
         self,
         credentials: TCredentials,
         listener: Listener<TResponse>,
-    ) -> EGResult<ConnectorSession<TRequest>> {
+    ) -> EGResult<
+        ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>,
+    > {
         let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
             let auth_message = (leg.create_auth_message)();
@@ -116,7 +118,7 @@ where
         } = self;
         let delegate_listener = ConvertListener::new(message_from_to_response, listener);
         transport_listener.set_delegate(Arc::new(delegate_listener))?;
-        let connector_session = ConnectorSessionImpl {
+        let connector_session = ConnectorSession {
             rate_limits,
             request_weights,
             request_to_unsigned,
@@ -126,7 +128,7 @@ where
             transport,
             timeout,
         };
-        Ok(Box::new(connector_session))
+        Ok(connector_session)
     }
 }
 

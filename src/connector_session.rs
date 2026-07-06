@@ -5,42 +5,33 @@ use crate::{
     sign::signer::Signer,
     transports::transport::TransportTrait,
 };
-use async_trait::async_trait;
 use chrono::Duration;
 
-pub type ConnectorSession<TRequest> = Box<dyn ConnectorSessionTrait<TRequest>>;
-
-#[async_trait]
-pub trait ConnectorSessionTrait<TRequest> {
-    async fn request(&self, request: TRequest, signed: bool) -> EGResult<()>;
-}
-
-pub(crate) struct ConnectorSessionImpl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport>
+pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
 where
     TTransport: TransportTrait,
 {
     #[allow(unused)]
-    pub rate_limits: RateLimits,
+    pub(crate) rate_limits: RateLimits,
     #[allow(unused)]
-    pub request_weights: RequestWeights,
-    pub request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessage>,
-    pub null_signer: Signer<TUnsignedMessage, TMessageToExchange>,
-    pub signer: Signer<TUnsignedMessage, TMessageToExchange>,
-    pub message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
-    pub transport: TTransport,
-    pub timeout: Duration,
+    pub(crate) request_weights: RequestWeights,
+    pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
+    pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
+    pub(crate) transport: TTransport,
+    pub(crate) timeout: Duration,
 }
 
-#[async_trait]
-impl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport> ConnectorSessionTrait<TRequest>
-    for ConnectorSessionImpl<TRequest, TUnsignedMessage, TMessageToExchange, TTransport>
+impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
+    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
 where
     TRequest: Send,
-    TUnsignedMessage: Send,
+    TUnsignedMessageToExchange: Send,
     TMessageToExchange: Send,
     TTransport: TransportTrait,
 {
-    async fn request(&self, request: TRequest, signed: bool) -> EGResult<()> {
+    pub async fn request(&self, request: TRequest, signed: bool) -> EGResult<()> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
