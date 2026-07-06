@@ -22,6 +22,7 @@ serde_urlencoded = "0.7.1"
 serde_with = "3.21.0"
 sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }
+tokio = { version = "1.52.3", features = ["sync", "time"] }
 uuid = { version = "1.23.3", features = ["v4"] }
 
 [lints.clippy]

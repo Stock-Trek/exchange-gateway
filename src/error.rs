@@ -4,7 +4,8 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     ListenModeMustBeOnDemand,
     Poison,
-    Send,
+    ReceiveError(tokio::sync::oneshot::error::RecvError),
+    Timeout(std::time::Duration),
     Io(std::io::Error),
     Parse(std::num::ParseIntError),
     Custom(String),
@@ -15,7 +16,8 @@ impl std::fmt::Display for EGError {
         match self {
             EGError::ListenModeMustBeOnDemand => write!(f, "ListenMode requires OnDemand"),
             EGError::Poison => write!(f, "Poison error"),
-            EGError::Send => write!(f, "Send error"),
+            EGError::ReceiveError(e) => write!(f, "Receive error: {}", e),
+            EGError::Timeout(timeout) => write!(f, "Timeout: {:?}", timeout),
             EGError::Io(e) => write!(f, "IO error: {}", e),
             EGError::Parse(e) => write!(f, "Parse error: {}", e),
             EGError::Custom(s) => write!(f, "{}", s),
@@ -24,6 +26,12 @@ impl std::fmt::Display for EGError {
 }
 
 impl std::error::Error for EGError {}
+
+impl From<tokio::sync::oneshot::error::RecvError> for EGError {
+    fn from(e: tokio::sync::oneshot::error::RecvError) -> Self {
+        EGError::ReceiveError(e)
+    }
+}
 
 impl From<std::io::Error> for EGError {
     fn from(e: std::io::Error) -> Self {

@@ -3,10 +3,8 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom},
-    listeners::{
-        convert_listener::ConvertListener, listener::Listener, queue_listener::QueueListener,
-    },
+    functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom, double_converter},
+    listeners::{exchange_listener::ExchangeListener, listener::Listener},
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
         rate_limits::RateLimits, request_weights::RequestWeights,
@@ -91,25 +89,19 @@ where
             to_unsigned,
             to_response,
         } = self;
-        let queue_listener = Arc::new(QueueListener::new());
-        let transport_listener = Arc::new(ConvertListener::new(
-            Box::new(from_http_dto),
-            queue_listener.clone(),
-        ));
-        let transport = transport_creator.create_transport(transport_listener.clone())?;
+        let response_converter = double_converter(Box::new(from_http_dto), to_response);
+        let listener = Arc::new(ExchangeListener::new(response_converter, listener));
+        let transport = transport_creator.create_transport(listener.clone())?;
         let authenticate_legs = vec![];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(http_converter)),
-            message_from_to_response: to_response,
             message_out_to_dto: Box::new(to_http_dto),
             transport,
-            transport_listener,
-            queue_listener,
+            listener,
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs,
             timeout: request_timeout,
-            listener,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
@@ -150,25 +142,19 @@ where
             to_unsigned,
             to_response,
         } = self;
-        let queue_listener = Arc::new(QueueListener::new());
-        let transport_listener = Arc::new(ConvertListener::new(
-            Box::new(from_websocket_dto),
-            queue_listener.clone(),
-        ));
-        let transport = transport_creator.create_transport(transport_listener.clone())?;
-        let authenticate_legs = vec![authenticate_websocket_leg()];
+        let response_converter = double_converter(Box::new(from_websocket_dto), to_response);
+        let listener = Arc::new(ExchangeListener::new(response_converter, listener));
+        let transport = transport_creator.create_transport(listener.clone())?;
+        let authenticate_legs = vec![];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
-            message_from_to_response: to_response,
             message_out_to_dto: Box::new(to_websocket_dto),
             transport,
-            transport_listener,
-            queue_listener,
+            listener,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
             timeout: request_timeout,
-            listener,
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })

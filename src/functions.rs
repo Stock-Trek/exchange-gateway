@@ -14,3 +14,21 @@ pub(crate) type SignatureAppender<TUnsignedMessage, TSignedMessage> =
 
 pub(crate) type TryConvertRef<From, To> = fn(&From) -> EGResult<To>;
 pub(crate) type TryConvertValue<From, To> = fn(From) -> EGResult<To>;
+
+pub fn double_converter<TFrom, TVia, TTo>(
+    from_via: TryConvertResponseFrom<TFrom, TVia>,
+    via_to: TryConvertResponseFrom<TVia, TTo>,
+) -> TryConvertResponseFrom<TFrom, TTo>
+where
+    TFrom: 'static,
+    TVia: 'static,
+    TTo: 'static,
+{
+    Box::new(move |from| {
+        let via = from_via(from)?;
+        via_to(via)
+    })
+}
+
+pub type FilterMessage<TMessage, TFiltered> =
+    Box<dyn Fn(&TMessage) -> Option<TFiltered> + Send + Sync>;
