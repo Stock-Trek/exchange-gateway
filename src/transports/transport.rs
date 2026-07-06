@@ -59,14 +59,22 @@ impl TransportTrait for Transport {
     {
         match (self, message_dto) {
             (Transport::Http(t), TransportMessageDto::Http(dto)) => {
-                let filter_response: FilterMessage<HttpMessageDto, TFiltered> =
-                    move |resp| filter(&TransportMessageDto::Http(resp));
-                TransportTrait::send_and_wait(t, dto, timeout, &filter_response).await
+                let identity: FilterMessage<HttpMessageDto, HttpMessageDto> =
+                    Box::new(|resp| Some(resp.clone()));
+                let response = t.send_and_wait_inner(dto, timeout, &identity).await?;
+                filter(&TransportMessageDto::Http(response)).ok_or_else(|| {
+                    crate::error::EGError::Custom("filter returned None for HTTP response".into())
+                })
             }
             (Transport::Websocket(t), TransportMessageDto::Websocket(dto)) => {
-                let filter_response: FilterMessage<WebsocketMessageDto, TFiltered> =
-                    move |resp| filter(&TransportMessageDto::Websocket(resp));
-                TransportTrait::send_and_wait(t, dto, timeout, &filter_response).await
+                let identity: FilterMessage<WebsocketMessageDto, WebsocketMessageDto> =
+                    Box::new(|resp| Some(resp.clone()));
+                let response = t.send_and_wait_inner(dto, timeout, &identity).await?;
+                filter(&TransportMessageDto::Websocket(response)).ok_or_else(|| {
+                    crate::error::EGError::Custom(
+                        "filter returned None for Websocket response".into(),
+                    )
+                })
             }
             _ => Err(crate::error::EGError::Custom(
                 "Transport / DTO type mismatch".into(),
