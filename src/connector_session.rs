@@ -1,14 +1,19 @@
 use crate::{
     error::EGResult,
-    functions::TryConvertRequestTo,
+    functions::{FilterMessage, TryConvertRequestTo},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::{Transport, TransportMessageDto},
 };
 use std::time::Duration;
 
-pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>
-where
+pub struct ConnectorSession<
+    TRequest,
+    TUnsignedMessageToExchange,
+    TMessageToExchange,
+    TMessageFromExchange,
+    TResponse,
+> where
     TResponse: Send,
 {
     #[allow(unused)]
@@ -19,15 +24,18 @@ where
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-    pub(crate) transport: Transport<TMessageToExchange, TResponse>,
+    pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
 }
 
-impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>
-    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>
+impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange, TResponse>
+    ConnectorSession<
+        TRequest,
+        TUnsignedMessageToExchange,
+        TMessageToExchange,
+        TMessageFromExchange,
+        TResponse,
+    >
 where
-    TRequest: Send,
-    TUnsignedMessageToExchange: Send,
-    TMessageToExchange: Send,
     TResponse: Send,
 {
     pub async fn fire_and_forget(
@@ -36,6 +44,35 @@ where
         signed: bool,
         timeout: Duration,
     ) -> EGResult<()> {
+        self.check_rate_limits()?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
+        let message_to = match signed {
+            true => self.signer.sign(unsigned),
+            false => self.null_signer.sign(unsigned),
+        }?;
+        self.transport.fire_and_forget(message_to, timeout).await
+    }
+    pub async fn send_and_wait_for_response<TWaitedResponse>(
+        &self,
+        request: TRequest,
+        signed: bool,
+        timeout: Duration,
+        filter_response: &FilterMessage<TResponse, TWaitedResponse>,
+    ) -> EGResult<TWaitedResponse>
+    where
+        TWaitedResponse: Send + Sync,
+    {
+        self.check_rate_limits()?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
+        let message_to = match signed {
+            true => self.signer.sign(unsigned),
+            false => self.null_signer.sign(unsigned),
+        }?;
+        self.transport
+            .send_and_wait_for_response(message_to, timeout, filter_response)
+            .await
+    }
+    fn check_rate_limits(&self) -> EGResult<()> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
@@ -46,11 +83,6 @@ where
         //         "Rate limited".to_string(),
         //     ));
         // }
-        let unsigned = (self.request_to_unsigned)(&request)?;
-        let message_to = match signed {
-            true => self.signer.sign(unsigned),
-            false => self.null_signer.sign(unsigned),
-        }?;
-        self.transport.fire_and_forget(message_to, timeout).await
+        Ok(())
     }
 }

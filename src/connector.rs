@@ -13,6 +13,7 @@ pub struct Connector<
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
+    TMessageFromExchange,
     TResponse,
 > where
     TResponse: Send,
@@ -22,20 +23,35 @@ pub struct Connector<
     pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-    pub(crate) transport: Transport<TMessageToExchange, TResponse>,
+    pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
         CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) authenticate_legs:
-        Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TResponse>>,
+        Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
 }
 
-impl<TRequest, TUnsignedMessageToExchange, TCredentials, TMessageToExchange, TResponse>
-    Connector<TRequest, TUnsignedMessageToExchange, TCredentials, TMessageToExchange, TResponse>
+impl<
+    TRequest,
+    TUnsignedMessageToExchange,
+    TCredentials,
+    TMessageToExchange,
+    TMessageFromExchange,
+    TResponse,
+>
+    Connector<
+        TRequest,
+        TUnsignedMessageToExchange,
+        TCredentials,
+        TMessageToExchange,
+        TMessageFromExchange,
+        TResponse,
+    >
 where
     TRequest: Send + Sync + 'static,
     TUnsignedMessageToExchange: Send + Sync + 'static,
     TCredentials: Send + Sync + 'static,
     TMessageToExchange: Send + Sync + 'static,
+    TMessageFromExchange: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
     pub fn signer(
@@ -73,14 +89,20 @@ where
             None => self.null_signer.sign(unsigned),
         }?;
         self.transport
-            .send_and_wait(message_to, timeout, filter_response)
+            .send_and_wait_for_response(message_to, timeout, filter_response)
             .await
     }
     pub async fn into_session(
         self,
         credentials: TCredentials,
     ) -> EGResult<
-        ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>,
+        ConnectorSession<
+            TRequest,
+            TUnsignedMessageToExchange,
+            TMessageToExchange,
+            TMessageFromExchange,
+            TResponse,
+        >,
     > {
         let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
@@ -88,7 +110,11 @@ where
             let signed_auth_message = signer.sign(auth_message)?;
             let authentication_response = self
                 .transport
-                .send_and_wait(signed_auth_message, leg.timeout, &leg.filter_response)
+                .send_and_wait_for_message_from(
+                    signed_auth_message,
+                    leg.timeout,
+                    &leg.filter_response,
+                )
                 .await?;
             signer = (leg.create_signer_from)(authentication_response)?;
         }
@@ -114,10 +140,14 @@ where
     }
 }
 
-pub(crate) struct AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TResponse> {
+pub(crate) struct AuthenticateLeg<
+    TUnsignedMessageToExchange,
+    TMessageToExchange,
+    TMessageFromExchange,
+> {
     pub create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
     pub timeout: Duration,
-    pub filter_response: FilterMessage<TResponse, TResponse>,
+    pub filter_response: FilterMessage<TMessageFromExchange, TMessageFromExchange>,
     pub create_signer_from:
-        CreateSignerFrom<TResponse, TUnsignedMessageToExchange, TMessageToExchange>,
+        CreateSignerFrom<TMessageFromExchange, TUnsignedMessageToExchange, TMessageToExchange>,
 }

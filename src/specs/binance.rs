@@ -3,10 +3,7 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{
-        SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom, double_converter,
-        triple_converter,
-    },
+    functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom, double_converter},
     listeners::{convert_listener::ConvertListener, listener::Listener},
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
@@ -76,6 +73,7 @@ where
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
+            BinanceHttpResponse,
             TResponse,
         >,
     > {
@@ -87,15 +85,14 @@ where
         let client = (client_creator)();
         let transport_client = TransportClient::Http(client);
         let request_to_dto = Box::new(to_http_dto);
-        let dto_to_response = triple_converter(
-            Box::new(filter_http_dto),
-            Box::new(from_http_dto),
-            to_response,
-        );
-        let transport = Transport::<BinanceHttpRequest, TResponse>::new(
+        let dto_to_message_from =
+            double_converter(Box::new(filter_http_dto), Box::new(from_http_dto));
+        let message_from_to_response = to_response;
+        let transport = Transport::<BinanceHttpRequest, BinanceHttpResponse, TResponse>::new(
             transport_client,
             request_to_dto,
-            dto_to_response,
+            dto_to_message_from,
+            message_from_to_response,
             listener,
         );
         Ok(Connector::<
@@ -103,6 +100,7 @@ where
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
+            BinanceHttpResponse,
             TResponse,
         > {
             request_to_unsigned: to_unsigned,
@@ -138,6 +136,7 @@ where
             BinanceWebsocketUnsignedRequest,
             ApiKeyCredentials,
             BinanceWebsocketRequest,
+            BinanceWebsocketResponse,
             TResponse,
         >,
     > {
@@ -151,17 +150,16 @@ where
         let client = (client_creator)(convert_listener);
         let transport_client = TransportClient::Websocket(client);
         let request_to_dto = Box::new(to_websocket_dto);
-        let dto_to_response = triple_converter(
-            Box::new(filter_websocket_dto),
-            Box::new(from_websocket_dto),
-            to_response,
-        );
-        let transport = Transport::<BinanceWebsocketRequest, TResponse>::new(
-            transport_client,
-            request_to_dto,
-            dto_to_response,
-            listener,
-        );
+        let dto_to_message_from =
+            double_converter(Box::new(filter_websocket_dto), Box::new(from_websocket_dto));
+        let transport =
+            Transport::<BinanceWebsocketRequest, BinanceWebsocketResponse, TResponse>::new(
+                transport_client,
+                request_to_dto,
+                dto_to_message_from,
+                to_response,
+                listener,
+            );
         let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Connector {
             request_to_unsigned: to_unsigned,

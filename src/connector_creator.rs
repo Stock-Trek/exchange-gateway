@@ -19,6 +19,7 @@ pub(crate) trait ConnectorCreatorTrait<
             TUnsignedMessageToExchange,
             TCredentials,
             TMessageToExchange,
+            TMessageFromExchange,
             TResponse,
         >,
     >;
