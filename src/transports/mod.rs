@@ -1,3 +1,3 @@
-pub mod http_client;
+pub mod http;
 pub mod transport;
-pub mod websocket_client;
+pub mod websocket;

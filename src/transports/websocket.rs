@@ -1,6 +1,8 @@
-use crate::error::EGResult;
+use crate::{error::EGResult, listeners::listener::Listener};
 use async_trait::async_trait;
 use std::time::Duration;
+
+pub type CreateWebsocketClient = fn(Listener<WebsocketMessageDto>) -> WebsocketClient;
 
 pub type WebsocketClient = Box<dyn WebsocketClientTrait>;
 

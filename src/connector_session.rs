@@ -7,7 +7,10 @@ use crate::{
 };
 use std::time::Duration;
 
-pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange> {
+pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>
+where
+    TResponse: Send,
+{
     #[allow(unused)]
     pub(crate) rate_limits: RateLimits,
     #[allow(unused)]
@@ -16,17 +19,18 @@ pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExch
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-    pub(crate) transport: Transport,
+    pub(crate) transport: Transport<TMessageToExchange, TResponse>,
 }
 
-impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange>
-    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange>
+impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>
+    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>
 where
     TRequest: Send,
     TUnsignedMessageToExchange: Send,
     TMessageToExchange: Send,
+    TResponse: Send,
 {
-    pub async fn request(
+    pub async fn fire_and_forget(
         &self,
         request: TRequest,
         signed: bool,
@@ -47,7 +51,6 @@ where
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),
         }?;
-        let message_dto = (self.message_out_to_dto)(&message_to)?;
-        self.transport.send(message_dto, timeout).await
+        self.transport.fire_and_forget(message_to, timeout).await
     }
 }

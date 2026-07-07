@@ -1,6 +1,4 @@
-use crate::{error::EGResult, listeners::listener::Listener, sign::signer::Signer};
-
-pub type CreateClient<TClient, TMessageDto> = fn(Listener<TMessageDto>) -> TClient;
+use crate::{error::EGResult, sign::signer::Signer};
 
 pub type TryConvertRequestTo<TRequest, TMessageToExchange> =
     Box<dyn Fn(&TRequest) -> EGResult<TMessageToExchange> + Send + Sync>;
@@ -29,6 +27,23 @@ where
     Box::new(move |from| {
         let via = from_via(from)?;
         via_to(via)
+    })
+}
+pub fn triple_converter<TFrom, TVia0, TVia1, TTo>(
+    from_via_0: TryConvertResponseFrom<TFrom, TVia0>,
+    via_0_via_1: TryConvertResponseFrom<TVia0, TVia1>,
+    via1_to: TryConvertResponseFrom<TVia1, TTo>,
+) -> TryConvertResponseFrom<TFrom, TTo>
+where
+    TFrom: 'static,
+    TVia0: 'static,
+    TVia1: 'static,
+    TTo: 'static,
+{
+    Box::new(move |from| {
+        let via0 = from_via_0(from)?;
+        let via1 = via_0_via_1(via0)?;
+        via1_to(via1)
     })
 }
 

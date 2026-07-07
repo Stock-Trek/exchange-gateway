@@ -19,9 +19,8 @@ pub mod prelude {
         error::{EGError, EGResult},
         functions::{TryConvertRequestTo, TryConvertResponseFrom},
         transports::{
-            http_client::{HttpClient, HttpClientTrait, HttpMessageDto},
-            transport::TransportMessageDto,
-            websocket_client::{WebsocketClient, WebsocketClientTrait, WebsocketMessageDto},
+            http::{HttpClient, HttpClientTrait, HttpMessageDto},
+            websocket::{WebsocketClient, WebsocketClientTrait, WebsocketMessageDto},
         },
     };
 }

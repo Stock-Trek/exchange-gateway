@@ -7,7 +7,8 @@ pub(crate) trait ConnectorCreatorTrait<
     TMessageToExchange,
     TMessageFromExchange,
     TResponse,
->
+> where
+    TResponse: Send,
 {
     fn into_connector(
         self,
@@ -18,7 +19,6 @@ pub(crate) trait ConnectorCreatorTrait<
             TUnsignedMessageToExchange,
             TCredentials,
             TMessageToExchange,
-            TMessageFromExchange,
             TResponse,
         >,
     >;

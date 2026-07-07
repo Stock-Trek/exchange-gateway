@@ -1,19 +1,26 @@
 use crate::{
     error::{EGError, EGResult},
     functions::{FilterMessage, TryConvertRequestTo, TryConvertResponseFrom},
-    listeners::listener::Listener,
+    listeners::{listener::Listener, one_shot_listener::OneShotListener},
     transports::{
-        http_client::{HttpClient, HttpMessageDto},
-        websocket_client::{WebsocketClient, WebsocketMessageDto},
+        http::{HttpClient, HttpMessageDto},
+        websocket::{WebsocketClient, WebsocketMessageDto},
     },
 };
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-pub(crate) struct Transport<TMessageToExchange, TMessageFromExchange> {
-    pub client: TransportClient,
-    pub request_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-    pub dto_to_response: TryConvertResponseFrom<TransportMessageDto, TMessageFromExchange>,
-    pub listener: Listener<TransportMessageDto>,
+pub(crate) struct Transport<TMessageToExchange, TResponse>
+where
+    TResponse: Send,
+{
+    transport_client: TransportClient,
+    request_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
+    dto_to_response: TryConvertResponseFrom<TransportMessageDto, TResponse>,
+    listener: Listener<TResponse>,
+    one_shot_listeners: Mutex<Vec<Arc<OneShotListener<TResponse>>>>,
 }
 
 pub(crate) enum TransportClient {
@@ -22,20 +29,54 @@ pub(crate) enum TransportClient {
 }
 
 #[derive(Clone)]
-pub enum TransportMessageDto {
+pub(crate) enum TransportMessageDto {
     Http(HttpMessageDto),
     Websocket(WebsocketMessageDto),
 }
 
-impl<TMessageToExchange, TMessageFromExchange> Transport<TMessageToExchange, TMessageFromExchange> {
-    pub async fn send(&self, message_to: TMessageToExchange, timeout: Duration) -> EGResult<()> {
+pub fn filter_http_dto(dto: TransportMessageDto) -> EGResult<HttpMessageDto> {
+    match dto {
+        TransportMessageDto::Http(http_message_dto) => Ok(http_message_dto),
+        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse),
+    }
+}
+pub fn filter_websocket_dto(dto: TransportMessageDto) -> EGResult<WebsocketMessageDto> {
+    match dto {
+        TransportMessageDto::Websocket(websocket_message_dto) => Ok(websocket_message_dto),
+        TransportMessageDto::Http(_) => Err(EGError::BadResponse),
+    }
+}
+
+impl<TMessageToExchange, TResponse> Transport<TMessageToExchange, TResponse>
+where
+    TResponse: Send,
+{
+    pub fn new(
+        transport_client: TransportClient,
+        request_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
+        dto_to_response: TryConvertResponseFrom<TransportMessageDto, TResponse>,
+        listener: Listener<TResponse>,
+    ) -> Self {
+        Self {
+            transport_client,
+            request_to_dto,
+            dto_to_response,
+            listener,
+            one_shot_listeners: Mutex::new(Vec::new()),
+        }
+    }
+    pub async fn fire_and_forget(
+        &self,
+        message_to: TMessageToExchange,
+        timeout: Duration,
+    ) -> EGResult<()> {
         let dto = (self.request_to_dto)(&message_to)?;
-        match (self.client, dto) {
+        match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
-                let future = client.send_message(dto, timeout);
-                let http_message_dto = future.await?;
+                let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                self.listener.on_message(dto).await
+                let response = (self.dto_to_response)(dto)?;
+                self.listener.on_message(response).await
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
@@ -49,29 +90,21 @@ impl<TMessageToExchange, TMessageFromExchange> Transport<TMessageToExchange, TMe
         &self,
         message_to: TMessageToExchange,
         timeout: Duration,
-        filter: &FilterMessage<TMessageFromExchange, TFiltered>,
+        filter: &FilterMessage<TResponse, TFiltered>,
     ) -> EGResult<TFiltered>
     where
         TFiltered: Send + Sync,
     {
         let dto = (self.request_to_dto)(&message_to)?;
-        match (self.client, dto) {
+        match (self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_response)(dto)?;
-                filter(&message_from).ok_or_else(|| EGError::BadResponse)
+                let response = (self.dto_to_response)(dto)?;
+                filter(&response).ok_or_else(|| EGError::BadResponse)
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
-                // let identity: FilterMessage<WebsocketMessageDto, WebsocketMessageDto> =
-                //     Box::new(|resp| Some(resp.clone()));
-                // let response = t.send_and_wait_inner(dto, timeout, &identity).await?;
-                // filter(&TransportMessageDto::Websocket(response)).ok_or_else(|| {
-                //     crate::error::EGError::Custom(
-                //         "filter returned None for Websocket response".into(),
-                //     )
-                // })
             }
             _ => Err(crate::error::EGError::Custom(
                 "Transport / DTO type mismatch".into(),

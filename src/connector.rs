@@ -13,43 +13,29 @@ pub struct Connector<
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
-    TMessageFromExchange,
     TResponse,
-> {
+> where
+    TResponse: Send,
+{
     pub(crate) rate_limits: RateLimits,
     pub(crate) request_weights: RequestWeights,
     pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-    pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange>,
+    pub(crate) transport: Transport<TMessageToExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
         CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) authenticate_legs:
-        Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
+        Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TResponse>>,
 }
 
-impl<
-    TRequest,
-    TUnsignedMessageToExchange,
-    TCredentials,
-    TMessageToExchange,
-    TMessageFromExchange,
-    TResponse,
->
-    Connector<
-        TRequest,
-        TUnsignedMessageToExchange,
-        TCredentials,
-        TMessageToExchange,
-        TMessageFromExchange,
-        TResponse,
-    >
+impl<TRequest, TUnsignedMessageToExchange, TCredentials, TMessageToExchange, TResponse>
+    Connector<TRequest, TUnsignedMessageToExchange, TCredentials, TMessageToExchange, TResponse>
 where
     TRequest: Send + Sync + 'static,
     TUnsignedMessageToExchange: Send + Sync + 'static,
     TCredentials: Send + Sync + 'static,
     TMessageToExchange: Send + Sync + 'static,
-    TMessageFromExchange: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
     pub fn signer(
@@ -58,7 +44,7 @@ where
     ) -> EGResult<Signer<TUnsignedMessageToExchange, TMessageToExchange>> {
         (self.create_signer_from_credentials)(credentials)
     }
-    pub async fn request(
+    pub async fn fire_and_forget(
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
@@ -69,9 +55,9 @@ where
             Some(signer) => signer.sign(unsigned),
             None => self.null_signer.sign(unsigned),
         }?;
-        self.transport.send(message_to, timeout).await
+        self.transport.fire_and_forget(message_to, timeout).await
     }
-    pub async fn request_and_wait<TWaitedResponse>(
+    pub async fn send_and_wait<TWaitedResponse>(
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
@@ -93,15 +79,16 @@ where
     pub async fn into_session(
         self,
         credentials: TCredentials,
-    ) -> EGResult<ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange>> {
+    ) -> EGResult<
+        ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TResponse>,
+    > {
         let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
             let auth_message = (leg.create_auth_message)();
             let signed_auth_message = signer.sign(auth_message)?;
-            let auth_message_dto = (self.message_out_to_dto)(&signed_auth_message)?;
             let authentication_response = self
                 .transport
-                .send_and_wait(auth_message_dto, leg.timeout, &leg.filter_response)
+                .send_and_wait(signed_auth_message, leg.timeout, &leg.filter_response)
                 .await?;
             signer = (leg.create_signer_from)(authentication_response)?;
         }
@@ -127,14 +114,10 @@ where
     }
 }
 
-pub(crate) struct AuthenticateLeg<
-    TUnsignedMessageToExchange,
-    TMessageToExchange,
-    TMessageFromExchange,
-> {
+pub(crate) struct AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TResponse> {
     pub create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
     pub timeout: Duration,
-    pub filter_response: FilterMessage<TMessageFromExchange, TMessageFromExchange>,
+    pub filter_response: FilterMessage<TResponse, TResponse>,
     pub create_signer_from:
-        CreateSignerFrom<TMessageFromExchange, TUnsignedMessageToExchange, TMessageToExchange>,
+        CreateSignerFrom<TResponse, TUnsignedMessageToExchange, TMessageToExchange>,
 }

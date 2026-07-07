@@ -3,13 +3,10 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
-    functions::{CreateClient, TryConvertRequestTo, TryConvertResponseFrom},
+    functions::{TryConvertRequestTo, TryConvertResponseFrom},
     listeners::listener::Listener,
     specs::binance::{BinanceHttpConnectorCreator, BinanceWebsocketConnectorCreator},
-    transports::{
-        http_client::{HttpClient, HttpMessageDto},
-        websocket_client::{WebsocketClient, WebsocketMessageDto},
-    },
+    transports::{http::CreateHttpClient, websocket::CreateWebsocketClient},
 };
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
@@ -23,7 +20,7 @@ pub struct Connectors;
 impl Connectors {
     pub fn binance_http<TTransport, TRequest, TResponse>(
         &self,
-        client_creator: CreateClient<HttpClient, HttpMessageDto>,
+        client_creator: CreateHttpClient,
         convert_request: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
         listener: Listener<TResponse>,
@@ -33,7 +30,6 @@ impl Connectors {
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
-            BinanceHttpResponse,
             TResponse,
         >,
     >
@@ -50,7 +46,7 @@ impl Connectors {
     }
     pub fn binance_websocket<TRequest, TResponse>(
         &self,
-        client_creator: CreateClient<WebsocketClient, WebsocketMessageDto>,
+        client_creator: CreateWebsocketClient,
         convert_request: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
         listener: Listener<TResponse>,
@@ -60,7 +56,6 @@ impl Connectors {
             BinanceWebsocketUnsignedRequest,
             ApiKeyCredentials,
             BinanceWebsocketRequest,
-            BinanceWebsocketResponse,
             TResponse,
         >,
     >
