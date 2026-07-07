@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::TryConvertResponseFrom,
+    functions::{ResponseConverter, ResponsePredicate, TryConvertResponseFrom},
     listeners::listener::{Listener, ListenerTrait},
     transports::websocket::WebsocketMessageDto,
 };
@@ -36,21 +36,20 @@ where
         }
     }
 
-    pub async fn wait_for_response<TPredicate>(&self, filter: TPredicate) -> EGResult<TResponse>
-    where
-        TPredicate: Fn(&TResponse) -> bool + Send + Sync + 'static,
-    {
-        self.wait_for_converted_response(filter, |msg| msg).await
+    pub async fn wait_for_response(
+        &self,
+        filter: ResponsePredicate<TResponse>,
+    ) -> EGResult<TResponse> {
+        self.wait_for_converted_response(filter, Box::new(|msg| msg))
+            .await
     }
 
-    pub async fn wait_for_converted_response<TPredicate, TConverter, TConvertedResponse>(
+    pub async fn wait_for_converted_response<TConvertedResponse>(
         &self,
-        filter: TPredicate,
-        map: TConverter,
+        filter: ResponsePredicate<TResponse>,
+        map: ResponseConverter<TResponse, TConvertedResponse>,
     ) -> EGResult<TConvertedResponse>
     where
-        TPredicate: Fn(&TResponse) -> bool + Send + Sync + 'static,
-        TConverter: FnOnce(TResponse) -> TConvertedResponse + Send + 'static,
         TConvertedResponse: Send + 'static,
     {
         let waiter_state = Arc::new(Mutex::new(WaiterState {
@@ -108,13 +107,11 @@ where
     fn handle(self: Arc<Self>, response: TResponse) -> bool;
 }
 
-impl<TResponse, TConvertedResponse, TPredicate, TConverter> MessageHandler<TResponse>
-    for WaitEntry<TResponse, TConvertedResponse, TPredicate, TConverter>
+impl<TResponse, TConvertedResponse> MessageHandler<TResponse>
+    for WaitEntry<TResponse, TConvertedResponse>
 where
     TResponse: Send + Sync,
     TConvertedResponse: Send,
-    TPredicate: Fn(&TResponse) -> bool + Send + Sync,
-    TConverter: FnOnce(TResponse) -> TConvertedResponse + Send,
 {
     fn handle(self: Arc<Self>, response: TResponse) -> bool {
         if (self.filter)(&response) {
@@ -137,15 +134,13 @@ where
     }
 }
 
-struct WaitEntry<TResponse, TConvertedResponse, TPredicate, TConverter>
+struct WaitEntry<TResponse, TConvertedResponse>
 where
     TResponse: Send,
     TConvertedResponse: Send,
-    TPredicate: Fn(&TResponse) -> bool + Send,
-    TConverter: FnOnce(TResponse) -> TConvertedResponse + Send,
 {
-    filter: TPredicate,
-    converter: Mutex<Option<TConverter>>,
+    filter: ResponsePredicate<TResponse>,
+    converter: Mutex<Option<ResponseConverter<TResponse, TConvertedResponse>>>,
     state: Arc<Mutex<WaiterState<TConvertedResponse>>>,
     _phantom_response: PhantomData<TResponse>,
 }
