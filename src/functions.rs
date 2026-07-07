@@ -30,9 +30,8 @@ where
     })
 }
 
-pub type ResponsePredicate<TResponse> = Box<dyn Fn(&TResponse) -> bool + Send + Sync>;
 pub type ResponseConverter<TResponse, TConvertedResponse> =
-    Box<dyn Fn(TResponse) -> TConvertedResponse + Send>;
+    Box<dyn Fn(TResponse) -> EGResult<TConvertedResponse> + Send>;
 
 pub type FilterMessage<TMessage, TFiltered> =
     Box<dyn Fn(&TMessage) -> Option<TFiltered> + Send + Sync>;

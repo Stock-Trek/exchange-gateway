@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::{ResponseConverter, ResponsePredicate, TryConvertResponseFrom},
+    functions::{ResponseConverter, TryConvertResponseFrom},
     listeners::listener::{Listener, ListenerTrait},
     transports::websocket::WebsocketMessageDto,
 };
@@ -36,18 +36,14 @@ where
         }
     }
 
-    pub async fn wait_for_response(
-        &self,
-        filter: ResponsePredicate<TResponse>,
-    ) -> EGResult<TResponse> {
-        self.wait_for_converted_response(filter, Box::new(|msg| msg))
+    pub async fn wait_for_response(&self) -> EGResult<TResponse> {
+        self.wait_for_converted_response(Box::new(|msg| Ok(msg)))
             .await
     }
 
     pub async fn wait_for_converted_response<TConvertedResponse>(
         &self,
-        filter: ResponsePredicate<TResponse>,
-        map: ResponseConverter<TResponse, TConvertedResponse>,
+        converter: ResponseConverter<TResponse, TConvertedResponse>,
     ) -> EGResult<TConvertedResponse>
     where
         TConvertedResponse: Send + 'static,
@@ -57,8 +53,7 @@ where
             waker: None,
         }));
         let entry = Arc::new(WaitEntry {
-            filter,
-            converter: Mutex::new(Some(map)),
+            converter: Mutex::new(Some(converter)),
             state: waiter_state.clone(),
             _phantom_response: PhantomData,
         });
@@ -114,22 +109,22 @@ where
     TConvertedResponse: Send,
 {
     fn handle(self: Arc<Self>, response: TResponse) -> bool {
-        if (self.filter)(&response) {
-            let converter = self
-                .converter
-                .lock()
-                .unwrap()
-                .take()
-                .expect("converter already taken");
-            let converted_response = converter(response);
-            let mut state = self.state.lock().unwrap();
-            state.converted_response = Some(converted_response);
-            if let Some(waker) = state.waker.take() {
-                waker.wake();
+        let converter = self
+            .converter
+            .lock()
+            .unwrap()
+            .take()
+            .expect("converter already taken");
+        match converter(response) {
+            Err(_) => false,
+            Ok(converted_response) => {
+                let mut state = self.state.lock().unwrap();
+                state.converted_response = Some(converted_response);
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
+                }
+                true
             }
-            true
-        } else {
-            false
         }
     }
 }
@@ -139,7 +134,6 @@ where
     TResponse: Send,
     TConvertedResponse: Send,
 {
-    filter: ResponsePredicate<TResponse>,
     converter: Mutex<Option<ResponseConverter<TResponse, TConvertedResponse>>>,
     state: Arc<Mutex<WaiterState<TConvertedResponse>>>,
     _phantom_response: PhantomData<TResponse>,
