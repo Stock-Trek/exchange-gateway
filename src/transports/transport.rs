@@ -81,9 +81,7 @@ where
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
             }
-            _ => Err(crate::error::EGError::Custom(
-                "Transport / DTO type mismatch".into(),
-            )),
+            _ => Err(crate::error::EGError::BadResponse),
         }
     }
     pub async fn send_and_wait<TFiltered>(
@@ -106,9 +104,7 @@ where
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
             }
-            _ => Err(crate::error::EGError::Custom(
-                "Transport / DTO type mismatch".into(),
-            )),
+            _ => Err(crate::error::EGError::BadResponse),
         }
     }
 }
