@@ -2,6 +2,7 @@ pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug)]
 pub enum EGError {
+    OneShotCalledTwice,
     ListenModeMustBeOnDemand,
     Poison,
     OneShotAlreadyUsed,
@@ -15,6 +16,7 @@ pub enum EGError {
 impl std::fmt::Display for EGError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            EGError::OneShotCalledTwice => write!(f, "OneShotListener cannot be called twice"),
             EGError::ListenModeMustBeOnDemand => write!(f, "ListenMode requires OnDemand"),
             EGError::Poison => write!(f, "Poison error"),
             EGError::OneShotAlreadyUsed => write!(f, "OneShot interceptor already used"),
