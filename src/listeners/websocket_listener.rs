@@ -53,7 +53,7 @@ where
             waker: None,
         }));
         let entry = Arc::new(WaitEntry {
-            converter: Mutex::new(Some(converter)),
+            converter,
             state: waiter_state.clone(),
             _phantom_response: PhantomData,
         });
@@ -109,13 +109,7 @@ where
     TConvertedResponse: Send,
 {
     fn handle(self: Arc<Self>, response: TResponse) -> bool {
-        let converter = self
-            .converter
-            .lock()
-            .unwrap()
-            .take()
-            .expect("converter already taken");
-        match converter(response) {
+        match (self.converter)(response) {
             Err(_) => false,
             Ok(converted_response) => {
                 let mut state = self.state.lock().unwrap();
@@ -134,7 +128,7 @@ where
     TResponse: Send,
     TConvertedResponse: Send,
 {
-    converter: Mutex<Option<ResponseConverter<TResponse, TConvertedResponse>>>,
+    converter: ResponseConverter<TResponse, TConvertedResponse>,
     state: Arc<Mutex<WaiterState<TConvertedResponse>>>,
     _phantom_response: PhantomData<TResponse>,
 }

@@ -31,7 +31,7 @@ where
 }
 
 pub type ResponseConverter<TResponse, TConvertedResponse> =
-    Box<dyn Fn(TResponse) -> EGResult<TConvertedResponse> + Send>;
+    Box<dyn Fn(TResponse) -> EGResult<TConvertedResponse> + Send + Sync>;
 
 pub type FilterMessage<TMessage, TFiltered> =
     Box<dyn Fn(&TMessage) -> Option<TFiltered> + Send + Sync>;
