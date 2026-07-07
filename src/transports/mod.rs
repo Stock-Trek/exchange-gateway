@@ -1,4 +1,3 @@
-pub mod http_transport;
+pub mod http_client;
 pub mod transport;
-pub mod transport_creator;
-pub mod websocket_transport;
+pub mod websocket_client;

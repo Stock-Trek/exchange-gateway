@@ -3,14 +3,11 @@ use crate::{
     functions::TryConvertRequestTo,
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
-    transports::transport::TransportTrait,
+    transports::transport::{Transport, TransportMessageDto},
 };
 use std::time::Duration;
 
-pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
-where
-    TTransport: TransportTrait,
-{
+pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange> {
     #[allow(unused)]
     pub(crate) rate_limits: RateLimits,
     #[allow(unused)]
@@ -18,17 +15,16 @@ where
     pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
-    pub(crate) transport: TTransport,
+    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
+    pub(crate) transport: Transport,
 }
 
-impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
-    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
+impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange>
+    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange>
 where
     TRequest: Send,
     TUnsignedMessageToExchange: Send,
     TMessageToExchange: Send,
-    TTransport: TransportTrait,
 {
     pub async fn request(
         &self,

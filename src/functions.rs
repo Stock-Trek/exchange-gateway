@@ -1,4 +1,6 @@
-use crate::{error::EGResult, sign::signer::Signer};
+use crate::{error::EGResult, listeners::listener::Listener, sign::signer::Signer};
+
+pub type CreateClient<TClient, TMessageDto> = fn(Listener<TMessageDto>) -> TClient;
 
 pub type TryConvertRequestTo<TRequest, TMessageToExchange> =
     Box<dyn Fn(&TRequest) -> EGResult<TMessageToExchange> + Send + Sync>;
