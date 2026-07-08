@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ResponseConverter, TryConvertRequestTo, TryConvertResponseFrom, double_converter},
+    functions::{ArcTryConvertRef, ArcTryConvertValue, double_converter},
     listeners::{
         convert_listener::ConvertListener, listener::Listener,
         websocket_listener::WebsocketListener,
@@ -18,9 +18,9 @@ where
     TResponse: Send,
 {
     transport_client: TransportClient,
-    request_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-    dto_to_message_from: TryConvertResponseFrom<TransportMessageDto, TMessageFromExchange>,
-    message_from_to_response: TryConvertResponseFrom<TMessageFromExchange, TResponse>,
+    request_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
+    dto_to_message_from: ArcTryConvertValue<TransportMessageDto, TMessageFromExchange>,
+    message_from_to_response: ArcTryConvertValue<TMessageFromExchange, TResponse>,
     listener: Listener<TResponse>,
     websocket_listener: WebsocketListener<TMessageFromExchange>,
 }
@@ -57,9 +57,9 @@ where
 {
     pub fn new(
         transport_client: TransportClient,
-        request_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
-        dto_to_message_from: TryConvertResponseFrom<TransportMessageDto, TMessageFromExchange>,
-        message_from_to_response: TryConvertResponseFrom<TMessageFromExchange, TResponse>,
+        request_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
+        dto_to_message_from: ArcTryConvertValue<TransportMessageDto, TMessageFromExchange>,
+        message_from_to_response: ArcTryConvertValue<TMessageFromExchange, TResponse>,
         listener: Listener<TResponse>,
     ) -> Self {
         let websocket_delegate: Listener<TMessageFromExchange> = Arc::new(ConvertListener::new(
@@ -101,7 +101,7 @@ where
         &self,
         message_to: TMessageToExchange,
         timeout: Duration,
-        converter: ResponseConverter<TMessageFromExchange, TFiltered>,
+        converter: ArcTryConvertValue<TMessageFromExchange, TFiltered>,
     ) -> EGResult<TFiltered>
     where
         TFiltered: Send + Sync + 'static,
@@ -127,7 +127,7 @@ where
         &self,
         message_to: TMessageToExchange,
         timeout: Duration,
-        converter: ResponseConverter<TResponse, TFiltered>,
+        converter: ArcTryConvertValue<TResponse, TFiltered>,
     ) -> EGResult<TFiltered>
     where
         TFiltered: Send + Sync + 'static,

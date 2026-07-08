@@ -1,17 +1,17 @@
 use crate::{
     error::EGResult,
-    functions::TryConvertResponseFrom,
+    functions::ArcTryConvertValue,
     listeners::listener::{Listener, ListenerTrait},
 };
 use async_trait::async_trait;
 
 pub(crate) struct ConvertListener<TFrom, TTo> {
-    converter: TryConvertResponseFrom<TFrom, TTo>,
+    converter: ArcTryConvertValue<TFrom, TTo>,
     delegate: Listener<TTo>,
 }
 
 impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
-    pub fn new(converter: TryConvertResponseFrom<TFrom, TTo>, delegate: Listener<TTo>) -> Self {
+    pub fn new(converter: ArcTryConvertValue<TFrom, TTo>, delegate: Listener<TTo>) -> Self {
         Self {
             converter,
             delegate,

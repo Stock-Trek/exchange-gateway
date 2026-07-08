@@ -1,7 +1,7 @@
 use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
-    functions::{CreateAuthMessage, CreateSignerFrom, TryConvertRequestTo, TryConvertResponseFrom},
+    functions::{ArcTryConvertRef, ArcTryConvertValue, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::{Transport, TransportMessageDto},
@@ -21,12 +21,12 @@ pub struct Connector<
 {
     pub(crate) rate_limits: RateLimits,
     pub(crate) request_weights: RequestWeights,
-    pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
+    pub(crate) request_to_unsigned: ArcTryConvertRef<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
+    pub(crate) message_out_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
-        CreateSignerFrom<TCredentials, TUnsignedMessageToExchange, TMessageToExchange>,
+        TryConvertValue<TCredentials, Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
     pub(crate) authenticate_legs:
         Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
 }
@@ -78,7 +78,7 @@ where
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
-        filter_response: TryConvertResponseFrom<TResponse, TWaitedResponse>,
+        filter_response: ArcTryConvertValue<TResponse, TWaitedResponse>,
         timeout: Duration,
     ) -> EGResult<TWaitedResponse>
     where
@@ -146,9 +146,11 @@ pub(crate) struct AuthenticateLeg<
     TMessageToExchange,
     TMessageFromExchange,
 > {
-    pub create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
+    pub create_auth_message: fn() -> TUnsignedMessageToExchange,
     pub timeout: Duration,
-    pub filter_response: TryConvertResponseFrom<TMessageFromExchange, TMessageFromExchange>,
-    pub create_signer_from:
-        CreateSignerFrom<TMessageFromExchange, TUnsignedMessageToExchange, TMessageToExchange>,
+    pub filter_response: ArcTryConvertValue<TMessageFromExchange, TMessageFromExchange>,
+    pub create_signer_from: TryConvertValue<
+        TMessageFromExchange,
+        Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    >,
 }

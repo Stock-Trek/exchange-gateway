@@ -3,7 +3,7 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
-    functions::{TryConvertRequestTo, TryConvertResponseFrom},
+    functions::{ArcTryConvertRef, ArcTryConvertValue},
     listeners::listener::Listener,
     specs::binance::{BinanceHttpConnectorCreator, BinanceWebsocketConnectorCreator},
     transports::{http::CreateHttpClient, websocket::CreateWebsocketClient},
@@ -21,8 +21,8 @@ impl Connectors {
     pub fn binance_http<TTransport, TRequest, TResponse>(
         &self,
         client_creator: CreateHttpClient,
-        convert_request: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
-        convert_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
+        convert_request: ArcTryConvertRef<TRequest, BinanceHttpUnsignedRequest>,
+        convert_response: ArcTryConvertValue<BinanceHttpResponse, TResponse>,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
@@ -48,8 +48,8 @@ impl Connectors {
     pub fn binance_websocket<TRequest, TResponse>(
         &self,
         client_creator: CreateWebsocketClient,
-        convert_request: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
-        convert_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
+        convert_request: ArcTryConvertRef<TRequest, BinanceWebsocketUnsignedRequest>,
+        convert_response: ArcTryConvertValue<BinanceWebsocketResponse, TResponse>,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<

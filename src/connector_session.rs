@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::{TryConvertRequestTo, TryConvertResponseFrom},
+    functions::{ArcTryConvertRef, ArcTryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::{Transport, TransportMessageDto},
@@ -21,11 +21,11 @@ pub struct ConnectorSession<
     pub(crate) rate_limits: RateLimits,
     #[allow(unused)]
     pub(crate) request_weights: RequestWeights,
-    pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
+    pub(crate) request_to_unsigned: ArcTryConvertRef<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     #[allow(unused)]
-    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
+    pub(crate) message_out_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
 }
 
@@ -60,7 +60,7 @@ where
         request: TRequest,
         signed: bool,
         timeout: Duration,
-        filter_response: TryConvertResponseFrom<TResponse, TWaitedResponse>,
+        filter_response: ArcTryConvertValue<TResponse, TWaitedResponse>,
     ) -> EGResult<TWaitedResponse>
     where
         TWaitedResponse: Send + Sync + 'static,

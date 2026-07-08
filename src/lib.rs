@@ -17,7 +17,7 @@ pub mod prelude {
         connector_session::ConnectorSession,
         connectors::Connectors,
         error::{EGError, EGResult},
-        functions::{TryConvertRequestTo, TryConvertResponseFrom},
+        functions::{ArcTryConvertRef, ArcTryConvertValue},
         transports::{
             http::{HttpClient, HttpClientTrait, HttpMessageDto},
             websocket::{WebsocketClient, WebsocketClientTrait, WebsocketMessageDto},

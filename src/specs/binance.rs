@@ -3,7 +3,7 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{SignatureAppender, TryConvertRequestTo, TryConvertResponseFrom, double_converter},
+    functions::{ArcCombineValues, ArcTryConvertRef, ArcTryConvertValue, double_converter},
     listeners::{convert_listener::ConvertListener, listener::Listener},
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
@@ -42,13 +42,13 @@ use std::{
 use uuid::Uuid;
 pub(crate) struct BinanceHttpConnectorCreator<TRequest, TResponse> {
     pub client_creator: CreateHttpClient,
-    pub to_unsigned: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
-    pub to_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
+    pub to_unsigned: ArcTryConvertRef<TRequest, BinanceHttpUnsignedRequest>,
+    pub to_response: ArcTryConvertValue<BinanceHttpResponse, TResponse>,
 }
 pub(crate) struct BinanceWebsocketConnectorCreator<TRequest, TResponse> {
     pub client_creator: CreateWebsocketClient,
-    pub to_unsigned: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
-    pub to_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
+    pub to_unsigned: ArcTryConvertRef<TRequest, BinanceWebsocketUnsignedRequest>,
+    pub to_response: ArcTryConvertValue<BinanceWebsocketResponse, TResponse>,
 }
 
 impl<TRequest, TResponse>
@@ -316,7 +316,7 @@ fn request_weights() -> RequestWeights {
 
 fn signature_appender_http(
     api_key: String,
-) -> SignatureAppender<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
+) -> ArcCombineValues<BinanceHttpUnsignedRequest, Option<String>, BinanceHttpRequest> {
     Arc::new(move |unsigned, signature| {
         let signature = signature.map(|signature| BinanceSignature {
             apiKey: api_key.to_string(),
@@ -330,7 +330,7 @@ fn signature_appender_http(
 }
 fn signature_appender_websocket(
     api_key: String,
-) -> SignatureAppender<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
+) -> ArcCombineValues<BinanceWebsocketUnsignedRequest, Option<String>, BinanceWebsocketRequest> {
     Arc::new(move |unsigned, signature| {
         let BinanceWebsocketUnsignedRequest {
             metadata,

@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::{ResponseConverter, TryConvertResponseFrom},
+    functions::ArcTryConvertValue,
     listeners::listener::{Listener, ListenerTrait},
     transports::transport::TransportMessageDto,
 };
@@ -16,7 +16,7 @@ pub(crate) struct WebsocketListener<TResponse>
 where
     TResponse: Send,
 {
-    converter: TryConvertResponseFrom<TransportMessageDto, TResponse>,
+    converter: ArcTryConvertValue<TransportMessageDto, TResponse>,
     delegate: Listener<TResponse>,
     handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<TResponse>>>>>,
 }
@@ -26,7 +26,7 @@ where
     TResponse: Send + Sync + 'static,
 {
     pub fn new(
-        converter: TryConvertResponseFrom<TransportMessageDto, TResponse>,
+        converter: ArcTryConvertValue<TransportMessageDto, TResponse>,
         delegate: Listener<TResponse>,
     ) -> Self {
         Self {
@@ -44,7 +44,7 @@ where
 
     pub async fn wait_for_converted_response<TConvertedResponse>(
         &self,
-        converter: ResponseConverter<TResponse, TConvertedResponse>,
+        converter: ArcTryConvertValue<TResponse, TConvertedResponse>,
     ) -> EGResult<TConvertedResponse>
     where
         TConvertedResponse: Send + 'static,
@@ -129,7 +129,7 @@ where
     TResponse: Send,
     TConvertedResponse: Send,
 {
-    converter: ResponseConverter<TResponse, TConvertedResponse>,
+    converter: ArcTryConvertValue<TResponse, TConvertedResponse>,
     state: Arc<Mutex<WaiterState<TConvertedResponse>>>,
     _phantom_response: PhantomData<TResponse>,
 }

@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::{SignatureAppender, TryConvertRef},
+    functions::{ArcCombineValues, TryConvertRef},
     sign::{
         encode::{byte_encoder::ByteEncoder, byte_encoding::ByteEncoding},
         encrypt::data_signer::DataSigner,
@@ -12,7 +12,7 @@ pub(crate) struct MessageSigner<TUnsignedMessage, TSignedMessage> {
     to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
     signer: DataSigner,
     byte_encoding: ByteEncoding,
-    signature_appender: SignatureAppender<TUnsignedMessage, TSignedMessage>,
+    signature_appender: ArcCombineValues<TUnsignedMessage, Option<String>, TSignedMessage>,
 }
 
 impl<TUnsignedMessage, TSignedMessage> MessageSigner<TUnsignedMessage, TSignedMessage>
@@ -24,7 +24,7 @@ where
         to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
         signer: DataSigner,
         byte_encoding: ByteEncoding,
-        signature_appender: SignatureAppender<TUnsignedMessage, TSignedMessage>,
+        signature_appender: ArcCombineValues<TUnsignedMessage, Option<String>, TSignedMessage>,
     ) -> Self {
         Self {
             to_bytes,
