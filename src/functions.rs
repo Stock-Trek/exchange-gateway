@@ -10,7 +10,7 @@ pub type ArcTryConvertValue<TFrom, TTo> = Arc<dyn Fn(TFrom) -> EGResult<TTo> + S
 pub(crate) type TryConvertRef<From, To> = fn(&From) -> EGResult<To>;
 pub(crate) type TryConvertValue<From, To> = fn(From) -> EGResult<To>;
 
-pub fn double_converter<TFrom, TVia, TTo>(
+pub(crate) fn double_converter<TFrom, TVia, TTo>(
     from_via: ArcTryConvertValue<TFrom, TVia>,
     via_to: ArcTryConvertValue<TVia, TTo>,
 ) -> ArcTryConvertValue<TFrom, TTo>
