@@ -4,7 +4,7 @@ use crate::{
     functions::{ArcTryConvertRef, ArcTryConvertValue, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
-    transports::transport::{Transport, TransportMessageDto},
+    transports::transport::Transport,
 };
 use std::time::Duration;
 
@@ -23,7 +23,6 @@ pub struct Connector<
     pub(crate) request_weights: RequestWeights,
     pub(crate) request_to_unsigned: ArcTryConvertRef<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) message_out_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
         TryConvertValue<TCredentials, Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
@@ -124,7 +123,6 @@ where
             request_weights,
             request_to_unsigned,
             null_signer,
-            message_out_to_dto,
             transport,
             ..
         } = self;
@@ -134,7 +132,6 @@ where
             request_to_unsigned,
             null_signer,
             signer,
-            message_out_to_dto,
             transport,
         };
         Ok(connector_session)
