@@ -1,15 +1,21 @@
 use crate::{
     error::EGResult,
-    functions::TryConvertRequestTo,
+    functions::{TryConvertRequestTo, TryConvertResponseFrom},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
-    transports::transport::TransportTrait,
+    transports::transport::{Transport, TransportMessageDto},
 };
 use std::time::Duration;
 
-pub struct ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
-where
-    TTransport: TransportTrait,
+pub struct ConnectorSession<
+    TRequest,
+    TUnsignedMessageToExchange,
+    TMessageToExchange,
+    TMessageFromExchange,
+    TResponse,
+> where
+    TMessageFromExchange: Send,
+    TResponse: Send,
 {
     #[allow(unused)]
     pub(crate) rate_limits: RateLimits,
@@ -18,24 +24,58 @@ where
     pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TTransport::MessageDto>,
-    pub(crate) transport: TTransport,
+    #[allow(unused)]
+    pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
+    pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
 }
 
-impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
-    ConnectorSession<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TTransport>
+impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange, TResponse>
+    ConnectorSession<
+        TRequest,
+        TUnsignedMessageToExchange,
+        TMessageToExchange,
+        TMessageFromExchange,
+        TResponse,
+    >
 where
-    TRequest: Send,
-    TUnsignedMessageToExchange: Send,
-    TMessageToExchange: Send,
-    TTransport: TransportTrait,
+    TMessageFromExchange: Send + Sync + 'static,
+    TResponse: Send + Sync + 'static,
 {
-    pub async fn request(
+    pub async fn fire_and_forget(
         &self,
         request: TRequest,
         signed: bool,
         timeout: Duration,
     ) -> EGResult<()> {
+        self.check_rate_limits()?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
+        let message_to = match signed {
+            true => self.signer.sign(unsigned),
+            false => self.null_signer.sign(unsigned),
+        }?;
+        self.transport.fire_and_forget(message_to, timeout).await
+    }
+    pub async fn send_and_wait_for_response<TWaitedResponse>(
+        &self,
+        request: TRequest,
+        signed: bool,
+        timeout: Duration,
+        filter_response: TryConvertResponseFrom<TResponse, TWaitedResponse>,
+    ) -> EGResult<TWaitedResponse>
+    where
+        TWaitedResponse: Send + Sync + 'static,
+    {
+        self.check_rate_limits()?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
+        let message_to = match signed {
+            true => self.signer.sign(unsigned),
+            false => self.null_signer.sign(unsigned),
+        }?;
+        self.transport
+            .send_and_wait_for_response(message_to, timeout, filter_response)
+            .await
+    }
+    fn check_rate_limits(&self) -> EGResult<()> {
         // TODO add rate limits back in
         // if !self
         //     .rate_limits
@@ -46,12 +86,6 @@ where
         //         "Rate limited".to_string(),
         //     ));
         // }
-        let unsigned = (self.request_to_unsigned)(&request)?;
-        let message_to = match signed {
-            true => self.signer.sign(unsigned),
-            false => self.null_signer.sign(unsigned),
-        }?;
-        let message_dto = (self.message_out_to_dto)(&message_to)?;
-        self.transport.send(message_dto, timeout).await
+        Ok(())
     }
 }

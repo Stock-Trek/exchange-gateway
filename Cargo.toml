@@ -7,7 +7,6 @@ edition = "2024"
 async-trait = "0.1.89"
 bimap = "0.6.3"
 bs58 = "0.5.1"
-chrono = "0.4.44"
 data-encoding = "2.11.0"
 ed25519-compact = "2.3.0"
 exchange-types = { version = "0.1.6", registry = "shipyard" }

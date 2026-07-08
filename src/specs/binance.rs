@@ -17,8 +17,11 @@ use crate::{
         signer::Signer,
     },
     transports::{
-        http_transport::HttpMessageDto, transport::TransportTrait,
-        transport_creator::TransportCreator, websocket_transport::WebsocketMessageDto,
+        http::{CreateHttpClient, HttpMessageDto},
+        transport::{
+            Transport, TransportClient, TransportMessageDto, filter_http_dto, filter_websocket_dto,
+        },
+        websocket::{CreateWebsocketClient, WebsocketMessageDto},
     },
 };
 use exchange_types::binance::{
@@ -37,36 +40,27 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
-
-pub(crate) struct BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
-where
-    TTransport: TransportTrait<MessageDto = HttpMessageDto>,
-{
-    pub transport_creator: TransportCreator<TTransport, HttpMessageDto>,
+pub(crate) struct BinanceHttpConnectorCreator<TRequest, TResponse> {
+    pub client_creator: CreateHttpClient,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceHttpUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceHttpResponse, TResponse>,
 }
-pub(crate) struct BinanceWebsocketConnectorCreator<TTransport, TRequest, TResponse>
-where
-    TTransport: TransportTrait<MessageDto = WebsocketMessageDto>,
-{
-    pub transport_creator: TransportCreator<TTransport, WebsocketMessageDto>,
+pub(crate) struct BinanceWebsocketConnectorCreator<TRequest, TResponse> {
+    pub client_creator: CreateWebsocketClient,
     pub to_unsigned: TryConvertRequestTo<TRequest, BinanceWebsocketUnsignedRequest>,
     pub to_response: TryConvertResponseFrom<BinanceWebsocketResponse, TResponse>,
 }
 
-impl<TTransport, TRequest, TResponse>
+impl<TRequest, TResponse>
     ConnectorCreatorTrait<
         TRequest,
         BinanceHttpUnsignedRequest,
         ApiKeyCredentials,
         BinanceHttpRequest,
-        TTransport,
         BinanceHttpResponse,
         TResponse,
-    > for BinanceHttpConnectorCreator<TTransport, TRequest, TResponse>
+    > for BinanceHttpConnectorCreator<TRequest, TResponse>
 where
-    TTransport: TransportTrait<MessageDto = HttpMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
@@ -79,45 +73,57 @@ where
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
-            TTransport,
             BinanceHttpResponse,
             TResponse,
         >,
     > {
         let BinanceHttpConnectorCreator {
-            transport_creator,
+            client_creator,
             to_unsigned,
             to_response,
         } = self;
-        let response_converter = double_converter(Box::new(from_http_dto), to_response);
-        let listener = Arc::new(ConvertListener::new(response_converter, listener));
-        let transport = transport_creator.create_transport(listener.clone())?;
-        let authenticate_legs = vec![];
-        Ok(Connector {
+        let client = (client_creator)();
+        let transport_client = TransportClient::Http(client);
+        let request_to_dto = Arc::new(to_http_dto);
+        let dto_to_message_from =
+            double_converter(Arc::new(filter_http_dto), Arc::new(from_http_dto));
+        let message_from_to_response = to_response;
+        let transport = Transport::<BinanceHttpRequest, BinanceHttpResponse, TResponse>::new(
+            transport_client,
+            request_to_dto,
+            dto_to_message_from,
+            message_from_to_response,
+            listener,
+        );
+        Ok(Connector::<
+            TRequest,
+            BinanceHttpUnsignedRequest,
+            ApiKeyCredentials,
+            BinanceHttpRequest,
+            BinanceHttpResponse,
+            TResponse,
+        > {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(http_converter)),
-            message_out_to_dto: Box::new(to_http_dto),
+            message_out_to_dto: Arc::new(to_http_dto),
             transport,
-            listener,
             create_signer_from_credentials: create_http_signer_from_credentials,
-            authenticate_legs,
+            authenticate_legs: Vec::new(),
             request_weights: request_weights(),
             rate_limits: rate_limits(),
         })
     }
 }
-impl<TTransport, TRequest, TResponse>
+impl<TRequest, TResponse>
     ConnectorCreatorTrait<
         TRequest,
         BinanceWebsocketUnsignedRequest,
         ApiKeyCredentials,
         BinanceWebsocketRequest,
-        TTransport,
         BinanceWebsocketResponse,
         TResponse,
-    > for BinanceWebsocketConnectorCreator<TTransport, TRequest, TResponse>
+    > for BinanceWebsocketConnectorCreator<TRequest, TResponse>
 where
-    TTransport: TransportTrait<MessageDto = WebsocketMessageDto> + 'static,
     TRequest: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
@@ -130,26 +136,36 @@ where
             BinanceWebsocketUnsignedRequest,
             ApiKeyCredentials,
             BinanceWebsocketRequest,
-            TTransport,
             BinanceWebsocketResponse,
             TResponse,
         >,
     > {
         let BinanceWebsocketConnectorCreator {
-            transport_creator,
+            client_creator,
             to_unsigned,
             to_response,
         } = self;
-        let response_converter = double_converter(Box::new(from_websocket_dto), to_response);
-        let listener = Arc::new(ConvertListener::new(response_converter, listener));
-        let transport = transport_creator.create_transport(listener.clone())?;
+        let converter = double_converter(Arc::new(from_websocket_dto), to_response.clone());
+        let convert_listener = Arc::new(ConvertListener::new(converter, listener.clone()));
+        let client = (client_creator)(convert_listener);
+        let transport_client = TransportClient::Websocket(client);
+        let request_to_dto = Arc::new(to_websocket_dto);
+        let dto_to_message_from =
+            double_converter(Arc::new(filter_websocket_dto), Arc::new(from_websocket_dto));
+        let transport =
+            Transport::<BinanceWebsocketRequest, BinanceWebsocketResponse, TResponse>::new(
+                transport_client,
+                request_to_dto,
+                dto_to_message_from,
+                to_response,
+                listener,
+            );
         let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
-            message_out_to_dto: Box::new(to_websocket_dto),
+            message_out_to_dto: Arc::new(to_websocket_dto),
             transport,
-            listener,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
             request_weights: request_weights(),
@@ -167,7 +183,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     AuthenticateLeg {
         create_auth_message,
         create_signer_from: create_signer_from_message,
-        filter_response: Box::new(|m| Some(m.clone())),
+        filter_response: Arc::new(Ok),
         timeout,
     }
 }
@@ -194,13 +210,13 @@ fn create_signer_from_message(
     Ok(Box::new(ConvertSigner::new(websocket_converter)))
 }
 
-fn to_http_dto(message: &BinanceHttpRequest) -> EGResult<HttpMessageDto> {
+fn to_http_dto(message: &BinanceHttpRequest) -> EGResult<TransportMessageDto> {
     let body_json =
         serde_json::to_string(&message).map_err(|_e| EGError::Custom("".to_string()))?;
-    Ok(HttpMessageDto {
+    Ok(TransportMessageDto::Http(HttpMessageDto {
         headers: HashMap::new(),
         body_json,
-    })
+    }))
 }
 fn from_http_dto(dto: HttpMessageDto) -> EGResult<BinanceHttpResponse> {
     let message: BinanceHttpResponse = serde_json::from_str(dto.body_json.as_str())
@@ -208,10 +224,12 @@ fn from_http_dto(dto: HttpMessageDto) -> EGResult<BinanceHttpResponse> {
     Ok(message)
 }
 
-fn to_websocket_dto(message: &BinanceWebsocketRequest) -> EGResult<WebsocketMessageDto> {
+fn to_websocket_dto(message: &BinanceWebsocketRequest) -> EGResult<TransportMessageDto> {
     let body_json =
         serde_json::to_string(&message).map_err(|_e| EGError::Custom("".to_string()))?;
-    Ok(WebsocketMessageDto { body_json })
+    Ok(TransportMessageDto::Websocket(WebsocketMessageDto {
+        body_json,
+    }))
 }
 fn from_websocket_dto(dto: WebsocketMessageDto) -> EGResult<BinanceWebsocketResponse> {
     let message: BinanceWebsocketResponse = serde_json::from_str(dto.body_json.as_str())
@@ -299,7 +317,7 @@ fn request_weights() -> RequestWeights {
 fn signature_appender_http(
     api_key: String,
 ) -> SignatureAppender<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
-    Box::new(move |unsigned, signature| {
+    Arc::new(move |unsigned, signature| {
         let signature = signature.map(|signature| BinanceSignature {
             apiKey: api_key.to_string(),
             signature,
@@ -313,7 +331,7 @@ fn signature_appender_http(
 fn signature_appender_websocket(
     api_key: String,
 ) -> SignatureAppender<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
-    Box::new(move |unsigned, signature| {
+    Arc::new(move |unsigned, signature| {
         let BinanceWebsocketUnsignedRequest {
             metadata,
             params: unsigned_params,
