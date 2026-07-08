@@ -183,7 +183,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     AuthenticateLeg {
         create_auth_message,
         create_signer_from: create_signer_from_message,
-        filter_response: Arc::new(|m| Ok(m)),
+        filter_response: Arc::new(Ok),
         timeout,
     }
 }
