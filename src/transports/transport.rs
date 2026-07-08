@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcTryConvertRef, ArcTryConvertValue, double_converter},
+    functions::{ArcTryConvertValue, double_converter},
     listeners::{
         convert_listener::ConvertListener, listener::Listener,
         websocket_listener::WebsocketListener,
@@ -18,7 +18,7 @@ where
     TResponse: Send,
 {
     transport_client: TransportClient,
-    request_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
+    request_to_dto: ArcTryConvertValue<TMessageToExchange, TransportMessageDto>,
     dto_to_message_from: ArcTryConvertValue<TransportMessageDto, TMessageFromExchange>,
     message_from_to_response: ArcTryConvertValue<TMessageFromExchange, TResponse>,
     listener: Listener<TResponse>,
@@ -57,7 +57,7 @@ where
 {
     pub fn new(
         transport_client: TransportClient,
-        request_to_dto: ArcTryConvertRef<TMessageToExchange, TransportMessageDto>,
+        request_to_dto: ArcTryConvertValue<TMessageToExchange, TransportMessageDto>,
         dto_to_message_from: ArcTryConvertValue<TransportMessageDto, TMessageFromExchange>,
         message_from_to_response: ArcTryConvertValue<TMessageFromExchange, TResponse>,
         listener: Listener<TResponse>,
@@ -82,7 +82,7 @@ where
         message_to: TMessageToExchange,
         timeout: Duration,
     ) -> EGResult<()> {
-        let dto = (self.request_to_dto)(&message_to)?;
+        let dto = (self.request_to_dto)(message_to)?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
@@ -106,7 +106,7 @@ where
     where
         TFiltered: Send + Sync + 'static,
     {
-        let dto = (self.request_to_dto)(&message_to)?;
+        let dto = (self.request_to_dto)(message_to)?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
@@ -132,7 +132,7 @@ where
     where
         TFiltered: Send + Sync + 'static,
     {
-        let dto = (self.request_to_dto)(&message_to)?;
+        let dto = (self.request_to_dto)(message_to)?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;

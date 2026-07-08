@@ -212,7 +212,7 @@ fn create_signer_from_message(
     Ok(Box::new(ConvertSigner::new(websocket_converter)))
 }
 
-fn to_http_dto(message: &BinanceHttpRequest) -> EGResult<TransportMessageDto> {
+fn to_http_dto(message: BinanceHttpRequest) -> EGResult<TransportMessageDto> {
     let body_json = serde_json::to_string(&message)
         .map_err(|e| EGError::SerdeJson(format!("Failed to serialize HTTP request: {e}")))?;
     Ok(TransportMessageDto::Http(HttpMessageDto {
@@ -226,7 +226,7 @@ fn from_http_dto(dto: HttpMessageDto) -> EGResult<BinanceHttpResponse> {
     Ok(message)
 }
 
-fn to_websocket_dto(message: &BinanceWebsocketRequest) -> EGResult<TransportMessageDto> {
+fn to_websocket_dto(message: BinanceWebsocketRequest) -> EGResult<TransportMessageDto> {
     let body_json = serde_json::to_string(&message)
         .map_err(|e| EGError::SerdeJson(format!("Failed to serialize websocket request: {e}")))?;
     Ok(TransportMessageDto::Websocket(WebsocketMessageDto {
