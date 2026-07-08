@@ -213,8 +213,8 @@ fn create_signer_from_message(
 }
 
 fn to_http_dto(message: &BinanceHttpRequest) -> EGResult<TransportMessageDto> {
-    let body_json =
-        serde_json::to_string(&message).map_err(|_e| EGError::Custom("".to_string()))?;
+    let body_json = serde_json::to_string(&message)
+        .map_err(|e| EGError::SerdeJson(format!("Failed to serialize HTTP request: {e}")))?;
     Ok(TransportMessageDto::Http(HttpMessageDto {
         headers: HashMap::new(),
         body_json,
@@ -222,20 +222,22 @@ fn to_http_dto(message: &BinanceHttpRequest) -> EGResult<TransportMessageDto> {
 }
 fn from_http_dto(dto: HttpMessageDto) -> EGResult<BinanceHttpResponse> {
     let message: BinanceHttpResponse = serde_json::from_str(dto.body_json.as_str())
-        .map_err(|_e| EGError::Custom("Failed to deserialize response".to_string()))?;
+        .map_err(|e| EGError::SerdeJson(format!("Failed to deserialize HTTP response: {e}")))?;
     Ok(message)
 }
 
 fn to_websocket_dto(message: &BinanceWebsocketRequest) -> EGResult<TransportMessageDto> {
-    let body_json =
-        serde_json::to_string(&message).map_err(|_e| EGError::Custom("".to_string()))?;
+    let body_json = serde_json::to_string(&message)
+        .map_err(|e| EGError::SerdeJson(format!("Failed to serialize websocket request: {e}")))?;
     Ok(TransportMessageDto::Websocket(WebsocketMessageDto {
         body_json,
     }))
 }
 fn from_websocket_dto(dto: WebsocketMessageDto) -> EGResult<BinanceWebsocketResponse> {
-    let message: BinanceWebsocketResponse = serde_json::from_str(dto.body_json.as_str())
-        .map_err(|_e| EGError::Custom("Failed to deserialize response".to_string()))?;
+    let message: BinanceWebsocketResponse =
+        serde_json::from_str(dto.body_json.as_str()).map_err(|e| {
+            EGError::SerdeJson(format!("Failed to deserialize websocket response: {e}"))
+        })?;
     Ok(message)
 }
 
@@ -273,12 +275,14 @@ fn websocket_unsigned_request_to_bytes(
     unsigned_params_to_bytes(&request.params)
 }
 fn unsigned_params_to_bytes(params: &BinanceUnsignedParams) -> EGResult<Vec<u8>> {
-    Ok(serde_urlencoded::to_string(params).unwrap().into_bytes())
+    Ok(serde_urlencoded::to_string(params)
+        .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
+        .into_bytes())
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::Ed25519
         .signer(secret)
-        .map_err(|_e| EGError::Custom("Cannot create signer".to_string()))
+        .map_err(|e| EGError::SignerCreation(format!("Cannot create signer: {e}")))
 }
 
 fn http_converter(unsigned: BinanceHttpUnsignedRequest) -> EGResult<BinanceHttpRequest> {
