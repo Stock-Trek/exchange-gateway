@@ -280,9 +280,7 @@ fn unsigned_params_to_bytes(params: &BinanceUnsignedParams) -> EGResult<Vec<u8>>
         .into_bytes())
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
-    SigningAlgorithm::Ed25519
-        .signer(secret)
-        .map_err(|e| EGError::SignerCreation(format!("Cannot create signer: {e}")))
+    SigningAlgorithm::Ed25519.signer(secret)
 }
 
 fn http_converter(unsigned: BinanceHttpUnsignedRequest) -> EGResult<BinanceHttpRequest> {
