@@ -2,7 +2,7 @@ use crate::{
     error::EGResult,
     functions::{ResponseConverter, TryConvertResponseFrom},
     listeners::listener::{Listener, ListenerTrait},
-    transports::websocket::WebsocketMessageDto,
+    transports::transport::TransportMessageDto,
 };
 use async_trait::async_trait;
 use std::{
@@ -12,11 +12,11 @@ use std::{
     task::{Poll, Waker},
 };
 
-pub struct WebsocketListener<TResponse>
+pub(crate) struct WebsocketListener<TResponse>
 where
     TResponse: Send,
 {
-    converter: TryConvertResponseFrom<WebsocketMessageDto, TResponse>,
+    converter: TryConvertResponseFrom<TransportMessageDto, TResponse>,
     delegate: Listener<TResponse>,
     handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<TResponse>>>>>,
 }
@@ -26,7 +26,7 @@ where
     TResponse: Send + Sync + 'static,
 {
     pub fn new(
-        converter: TryConvertResponseFrom<WebsocketMessageDto, TResponse>,
+        converter: TryConvertResponseFrom<TransportMessageDto, TResponse>,
         delegate: Listener<TResponse>,
     ) -> Self {
         Self {
@@ -36,8 +36,9 @@ where
         }
     }
 
+    #[allow(unused)]
     pub async fn wait_for_response(&self) -> EGResult<TResponse> {
-        self.wait_for_converted_response(Box::new(|msg| Ok(msg)))
+        self.wait_for_converted_response(Arc::new(|msg| Ok(msg)))
             .await
     }
 
@@ -75,11 +76,11 @@ where
 }
 
 #[async_trait]
-impl<TResponse> ListenerTrait<WebsocketMessageDto> for WebsocketListener<TResponse>
+impl<TResponse> ListenerTrait<TransportMessageDto> for WebsocketListener<TResponse>
 where
     TResponse: Clone + Send,
 {
-    async fn on_message(&self, message: WebsocketMessageDto) -> EGResult<()> {
+    async fn on_message(&self, message: TransportMessageDto) -> EGResult<()> {
         let response = (self.converter)(message)?;
         {
             let mut guard = self.handlers.lock().unwrap();

@@ -8,6 +8,7 @@ pub(crate) trait ConnectorCreatorTrait<
     TMessageFromExchange,
     TResponse,
 > where
+    TMessageFromExchange: Send,
     TResponse: Send,
 {
     fn into_connector(

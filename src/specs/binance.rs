@@ -84,9 +84,9 @@ where
         } = self;
         let client = (client_creator)();
         let transport_client = TransportClient::Http(client);
-        let request_to_dto = Box::new(to_http_dto);
+        let request_to_dto = Arc::new(to_http_dto);
         let dto_to_message_from =
-            double_converter(Box::new(filter_http_dto), Box::new(from_http_dto));
+            double_converter(Arc::new(filter_http_dto), Arc::new(from_http_dto));
         let message_from_to_response = to_response;
         let transport = Transport::<BinanceHttpRequest, BinanceHttpResponse, TResponse>::new(
             transport_client,
@@ -105,7 +105,7 @@ where
         > {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(http_converter)),
-            message_out_to_dto: Box::new(to_http_dto),
+            message_out_to_dto: Arc::new(to_http_dto),
             transport,
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs: Vec::new(),
@@ -145,13 +145,13 @@ where
             to_unsigned,
             to_response,
         } = self;
-        let converter = double_converter(Box::new(from_websocket_dto), to_response);
+        let converter = double_converter(Arc::new(from_websocket_dto), to_response.clone());
         let convert_listener = Arc::new(ConvertListener::new(converter, listener.clone()));
         let client = (client_creator)(convert_listener);
         let transport_client = TransportClient::Websocket(client);
-        let request_to_dto = Box::new(to_websocket_dto);
+        let request_to_dto = Arc::new(to_websocket_dto);
         let dto_to_message_from =
-            double_converter(Box::new(filter_websocket_dto), Box::new(from_websocket_dto));
+            double_converter(Arc::new(filter_websocket_dto), Arc::new(from_websocket_dto));
         let transport =
             Transport::<BinanceWebsocketRequest, BinanceWebsocketResponse, TResponse>::new(
                 transport_client,
@@ -164,7 +164,7 @@ where
         Ok(Connector {
             request_to_unsigned: to_unsigned,
             null_signer: Box::new(ConvertSigner::new(websocket_converter)),
-            message_out_to_dto: Box::new(to_websocket_dto),
+            message_out_to_dto: Arc::new(to_websocket_dto),
             transport,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,
@@ -183,7 +183,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     AuthenticateLeg {
         create_auth_message,
         create_signer_from: create_signer_from_message,
-        filter_response: Box::new(|m| Some(m.clone())),
+        filter_response: Arc::new(|m| Ok(m)),
         timeout,
     }
 }
@@ -317,7 +317,7 @@ fn request_weights() -> RequestWeights {
 fn signature_appender_http(
     api_key: String,
 ) -> SignatureAppender<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
-    Box::new(move |unsigned, signature| {
+    Arc::new(move |unsigned, signature| {
         let signature = signature.map(|signature| BinanceSignature {
             apiKey: api_key.to_string(),
             signature,
@@ -331,7 +331,7 @@ fn signature_appender_http(
 fn signature_appender_websocket(
     api_key: String,
 ) -> SignatureAppender<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
-    Box::new(move |unsigned, signature| {
+    Arc::new(move |unsigned, signature| {
         let BinanceWebsocketUnsignedRequest {
             metadata,
             params: unsigned_params,

@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::{FilterMessage, TryConvertRequestTo},
+    functions::{TryConvertRequestTo, TryConvertResponseFrom},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::{Transport, TransportMessageDto},
@@ -14,6 +14,7 @@ pub struct ConnectorSession<
     TMessageFromExchange,
     TResponse,
 > where
+    TMessageFromExchange: Send,
     TResponse: Send,
 {
     #[allow(unused)]
@@ -23,6 +24,7 @@ pub struct ConnectorSession<
     pub(crate) request_to_unsigned: TryConvertRequestTo<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    #[allow(unused)]
     pub(crate) message_out_to_dto: TryConvertRequestTo<TMessageToExchange, TransportMessageDto>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
 }
@@ -36,7 +38,8 @@ impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExcha
         TResponse,
     >
 where
-    TResponse: Send,
+    TMessageFromExchange: Send + Sync + 'static,
+    TResponse: Send + Sync + 'static,
 {
     pub async fn fire_and_forget(
         &self,
@@ -57,10 +60,10 @@ where
         request: TRequest,
         signed: bool,
         timeout: Duration,
-        filter_response: &FilterMessage<TResponse, TWaitedResponse>,
+        filter_response: TryConvertResponseFrom<TResponse, TWaitedResponse>,
     ) -> EGResult<TWaitedResponse>
     where
-        TWaitedResponse: Send + Sync,
+        TWaitedResponse: Send + Sync + 'static,
     {
         self.check_rate_limits()?;
         let unsigned = (self.request_to_unsigned)(&request)?;

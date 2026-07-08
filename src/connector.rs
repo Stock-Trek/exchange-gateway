@@ -1,7 +1,7 @@
 use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
-    functions::{CreateAuthMessage, CreateSignerFrom, FilterMessage, TryConvertRequestTo},
+    functions::{CreateAuthMessage, CreateSignerFrom, TryConvertRequestTo, TryConvertResponseFrom},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::{Transport, TransportMessageDto},
@@ -16,6 +16,7 @@ pub struct Connector<
     TMessageFromExchange,
     TResponse,
 > where
+    TMessageFromExchange: Send,
     TResponse: Send,
 {
     pub(crate) rate_limits: RateLimits,
@@ -77,7 +78,7 @@ where
         &self,
         request: TRequest,
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
-        filter_response: &FilterMessage<TResponse, TWaitedResponse>,
+        filter_response: TryConvertResponseFrom<TResponse, TWaitedResponse>,
         timeout: Duration,
     ) -> EGResult<TWaitedResponse>
     where
@@ -113,7 +114,7 @@ where
                 .send_and_wait_for_message_from(
                     signed_auth_message,
                     leg.timeout,
-                    &leg.filter_response,
+                    leg.filter_response.clone(),
                 )
                 .await?;
             signer = (leg.create_signer_from)(authentication_response)?;
@@ -147,7 +148,7 @@ pub(crate) struct AuthenticateLeg<
 > {
     pub create_auth_message: CreateAuthMessage<TUnsignedMessageToExchange>,
     pub timeout: Duration,
-    pub filter_response: FilterMessage<TMessageFromExchange, TMessageFromExchange>,
+    pub filter_response: TryConvertResponseFrom<TMessageFromExchange, TMessageFromExchange>,
     pub create_signer_from:
         CreateSignerFrom<TMessageFromExchange, TUnsignedMessageToExchange, TMessageToExchange>,
 }
