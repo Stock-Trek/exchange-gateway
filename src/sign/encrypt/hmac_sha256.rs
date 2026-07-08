@@ -21,7 +21,7 @@ impl HmacSha256Signer {
 impl DataSignerTrait for HmacSha256Signer {
     fn sign(&self, data: &[u8]) -> EGResult<Vec<u8>> {
         let mut mac = HmacSha256::new_from_slice(self.hmac_slice.expose_secret())
-            .map_err(|e| EGError::Custom(format!("HMAC-SHA256 key error: {e}")))?;
+            .map_err(|e| EGError::CryptoKey(format!("HMAC-SHA256 key error: {e}")))?;
         mac.update(data);
         Ok(mac.finalize().into_bytes().to_vec())
     }

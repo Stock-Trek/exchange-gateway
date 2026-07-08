@@ -21,7 +21,7 @@ impl HmacSha512Signer {
 impl DataSignerTrait for HmacSha512Signer {
     fn sign(&self, data: &[u8]) -> EGResult<Vec<u8>> {
         let mut mac = HmacSha512::new_from_slice(self.hmac_slice.expose_secret())
-            .map_err(|e| EGError::Custom(format!("HMAC-SHA512 key error: {e}")))?;
+            .map_err(|e| EGError::CryptoKey(format!("HMAC-SHA512 key error: {e}")))?;
         mac.update(data);
         Ok(mac.finalize().into_bytes().to_vec())
     }

@@ -24,20 +24,20 @@ impl SigningAlgorithm {
             Self::EcdsaP256 => {
                 let key_bytes = key.expose_secret().as_bytes();
                 let signing_key = p256::ecdsa::SigningKey::from_slice(key_bytes)
-                    .map_err(|e| EGError::Custom(format!("ECDSA P-256 key error: {e}")))?;
+                    .map_err(|e| EGError::CryptoKey(format!("ECDSA P-256 key error: {e}")))?;
                 Ok(Box::new(EcdsaP256Signer::new(signing_key)))
             }
             Self::EcdsaP384 => {
                 let key_bytes = key.expose_secret().as_bytes();
                 let signing_key = p384::ecdsa::SigningKey::from_slice(key_bytes)
-                    .map_err(|e| EGError::Custom(format!("ECDSA P-384 key error: {e}")))?;
+                    .map_err(|e| EGError::CryptoKey(format!("ECDSA P-384 key error: {e}")))?;
                 Ok(Box::new(EcdsaP384Signer::new(signing_key)))
             }
             Self::Ed25519 => {
                 let key_bytes = key.expose_secret().as_bytes();
                 let signing_key =
                     ed25519_compact::SecretKey::from_slice(key_bytes).map_err(|_| {
-                        EGError::Custom("Ed25519 key must be exactly 32 bytes".to_string())
+                        EGError::CryptoKey("Ed25519 key must be exactly 32 bytes".to_string())
                     })?;
                 Ok(Box::new(Ed25519Signer::new(signing_key)))
             }

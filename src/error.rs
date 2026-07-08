@@ -2,31 +2,27 @@ pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug)]
 pub enum EGError {
-    OneShotCalledTwice,
     BadResponse,
-    ListenModeMustBeOnDemand,
-    Poison,
-    OneShotAlreadyUsed,
     ReceiveTimeout(std::sync::mpsc::RecvTimeoutError),
-    Send,
     Io(std::io::Error),
     Parse(std::num::ParseIntError),
-    Custom(String),
+    SerdeJson(String),
+    SerdeUrlencoded(String),
+    CryptoKey(String),
+    SignerCreation(String),
 }
 
 impl std::fmt::Display for EGError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EGError::OneShotCalledTwice => write!(f, "OneShotListener cannot be called twice"),
             EGError::BadResponse => write!(f, "Transport produced bad response"),
-            EGError::ListenModeMustBeOnDemand => write!(f, "ListenMode requires OnDemand"),
-            EGError::Poison => write!(f, "Poison error"),
-            EGError::OneShotAlreadyUsed => write!(f, "OneShot interceptor already used"),
             EGError::ReceiveTimeout(e) => write!(f, "Receive timeout error: {}", e),
-            EGError::Send => write!(f, "Send error"),
             EGError::Io(e) => write!(f, "IO error: {}", e),
             EGError::Parse(e) => write!(f, "Parse error: {}", e),
-            EGError::Custom(s) => write!(f, "{}", s),
+            EGError::SerdeJson(e) => write!(f, "JSON error: {}", e),
+            EGError::SerdeUrlencoded(e) => write!(f, "URL encoding error: {}", e),
+            EGError::CryptoKey(e) => write!(f, "Crypto key error: {}", e),
+            EGError::SignerCreation(e) => write!(f, "Signer creation error: {}", e),
         }
     }
 }

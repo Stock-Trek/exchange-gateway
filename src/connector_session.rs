@@ -80,9 +80,7 @@ where
         //     .send_order_request
         //     .did_acquire(self.request_weights.send_order_request)
         // {
-        //     return Err(EGError::Custom(
-        //         "Rate limited".to_string(),
-        //     ));
+        //     return Err(EGError::BadResponse);
         // }
         Ok(())
     }
