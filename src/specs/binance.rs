@@ -3,7 +3,7 @@ use crate::{
     connector_creator::ConnectorCreatorTrait,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcTryConvertRef, ArcTryConvertValue, double_converter},
+    functions::{ArcCombineValues, ArcTryConvertValue, double_converter},
     listeners::{convert_listener::ConvertListener, listener::Listener},
     rate_limit::{
         multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
@@ -42,12 +42,12 @@ use std::{
 use uuid::Uuid;
 pub(crate) struct BinanceHttpConnectorCreator<TRequest, TResponse> {
     pub client_creator: CreateHttpClient,
-    pub to_unsigned: ArcTryConvertRef<TRequest, BinanceHttpUnsignedRequest>,
+    pub to_unsigned: ArcTryConvertValue<TRequest, BinanceHttpUnsignedRequest>,
     pub to_response: ArcTryConvertValue<BinanceHttpResponse, TResponse>,
 }
 pub(crate) struct BinanceWebsocketConnectorCreator<TRequest, TResponse> {
     pub client_creator: CreateWebsocketClient,
-    pub to_unsigned: ArcTryConvertRef<TRequest, BinanceWebsocketUnsignedRequest>,
+    pub to_unsigned: ArcTryConvertValue<TRequest, BinanceWebsocketUnsignedRequest>,
     pub to_response: ArcTryConvertValue<BinanceWebsocketResponse, TResponse>,
 }
 

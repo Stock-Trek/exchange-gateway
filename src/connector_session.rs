@@ -1,6 +1,6 @@
 use crate::{
     error::EGResult,
-    functions::{ArcTryConvertRef, ArcTryConvertValue},
+    functions::ArcTryConvertValue,
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::Transport,
@@ -21,7 +21,7 @@ pub struct ConnectorSession<
     pub(crate) rate_limits: RateLimits,
     #[allow(unused)]
     pub(crate) request_weights: RequestWeights,
-    pub(crate) request_to_unsigned: ArcTryConvertRef<TRequest, TUnsignedMessageToExchange>,
+    pub(crate) request_to_unsigned: ArcTryConvertValue<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
@@ -46,7 +46,7 @@ where
         timeout: Duration,
     ) -> EGResult<()> {
         self.check_rate_limits()?;
-        let unsigned = (self.request_to_unsigned)(&request)?;
+        let unsigned = (self.request_to_unsigned)(request)?;
         let message_to = match signed {
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),
@@ -64,7 +64,7 @@ where
         TWaitedResponse: Send + Sync + 'static,
     {
         self.check_rate_limits()?;
-        let unsigned = (self.request_to_unsigned)(&request)?;
+        let unsigned = (self.request_to_unsigned)(request)?;
         let message_to = match signed {
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),

@@ -16,7 +16,7 @@ pub mod prelude {
         connector::Connector,
         connector_session::ConnectorSession,
         connectors::Connectors,
-        functions::{ArcTryConvertRef, ArcTryConvertValue},
+        functions::ArcTryConvertValue,
         transports::{
             http::{HttpClient, HttpClientTrait, HttpMessageDto},
             websocket::{WebsocketClient, WebsocketClientTrait, WebsocketMessageDto},

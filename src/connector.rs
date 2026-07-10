@@ -1,7 +1,7 @@
 use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
-    functions::{ArcTryConvertRef, ArcTryConvertValue, TryConvertValue},
+    functions::{ArcTryConvertValue, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::Transport,
@@ -21,7 +21,7 @@ pub struct Connector<
 {
     pub(crate) rate_limits: RateLimits,
     pub(crate) request_weights: RequestWeights,
-    pub(crate) request_to_unsigned: ArcTryConvertRef<TRequest, TUnsignedMessageToExchange>,
+    pub(crate) request_to_unsigned: ArcTryConvertValue<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
@@ -66,7 +66,7 @@ where
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
         timeout: Duration,
     ) -> EGResult<()> {
-        let unsigned = (self.request_to_unsigned)(&request)?;
+        let unsigned = (self.request_to_unsigned)(request)?;
         let message_to = match signer {
             Some(signer) => signer.sign(unsigned),
             None => self.null_signer.sign(unsigned),
@@ -83,7 +83,7 @@ where
     where
         TWaitedResponse: Send + Sync + 'static,
     {
-        let unsigned = (self.request_to_unsigned)(&request)?;
+        let unsigned = (self.request_to_unsigned)(request)?;
         let message_to = match signer {
             Some(signer) => signer.sign(unsigned),
             None => self.null_signer.sign(unsigned),
