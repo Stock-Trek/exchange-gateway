@@ -26,7 +26,7 @@ where
     TTo: Send,
 {
     async fn on_message(&self, message: TFrom) -> EGResult<()> {
-        let converted = (self.converter)(message).map_err(EGError::Convert)?;
+        let converted = (self.converter)(message).map_err(|e| EGError::Convert(Box::new(e)))?;
         self.delegate.on_message(converted).await
     }
 }

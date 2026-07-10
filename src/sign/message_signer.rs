@@ -42,7 +42,7 @@ where
     TSignedMessage: Send + Sync,
 {
     fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
-        let bytes = (self.to_bytes)(&unsigned).map_err(EGError::Convert)?;
+        let bytes = (self.to_bytes)(&unsigned).map_err(|e| EGError::Convert(Box::new(e)))?;
         let signature = if bytes.is_empty() {
             None
         } else {

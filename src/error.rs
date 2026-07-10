@@ -5,7 +5,7 @@ pub enum EGError {
     #[error("Transport produced bad response")]
     BadResponse,
     #[error("Conversion failed: {0}")]
-    Convert(EGError),
+    Convert(Box<EGError>),
     #[error("Crypto key error: {0}")]
     CryptoKey(String),
     #[error("IO error: {0}")]

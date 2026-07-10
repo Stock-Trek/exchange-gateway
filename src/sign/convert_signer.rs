@@ -25,6 +25,6 @@ where
     TSignedMessage: Send + Sync,
 {
     fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
-        (self.converter)(unsigned).map_err(EGError::Convert)
+        (self.converter)(unsigned).map_err(|e| EGError::Convert(Box::new(e)))
     }
 }

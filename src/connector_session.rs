@@ -46,7 +46,8 @@ where
         timeout: Duration,
     ) -> EGResult<()> {
         self.check_rate_limits()?;
-        let unsigned = (self.request_to_unsigned)(&request).map_err(EGError::Convert)?;
+        let unsigned =
+            (self.request_to_unsigned)(&request).map_err(|e| EGError::Convert(Box::new(e)))?;
         let message_to = match signed {
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),
@@ -64,7 +65,8 @@ where
         TWaitedResponse: Send + Sync + 'static,
     {
         self.check_rate_limits()?;
-        let unsigned = (self.request_to_unsigned)(&request).map_err(EGError::Convert)?;
+        let unsigned =
+            (self.request_to_unsigned)(&request).map_err(|e| EGError::Convert(Box::new(e)))?;
         let message_to = match signed {
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),

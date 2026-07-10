@@ -82,14 +82,15 @@ where
         message_to: TMessageToExchange,
         timeout: Duration,
     ) -> EGResult<()> {
-        let dto = (self.request_to_dto)(message_to).map_err(EGError::Convert)?;
+        let dto = (self.request_to_dto)(message_to).map_err(|e| EGError::Convert(Box::new(e)))?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_message_from)(dto).map_err(EGError::Convert)?;
-                let response =
-                    (self.message_from_to_response)(message_from).map_err(EGError::Convert)?;
+                let message_from =
+                    (self.dto_to_message_from)(dto).map_err(|e| EGError::Convert(Box::new(e)))?;
+                let response = (self.message_from_to_response)(message_from)
+                    .map_err(|e| EGError::Convert(Box::new(e)))?;
                 self.listener.on_message(response).await
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
@@ -107,13 +108,14 @@ where
     where
         TFiltered: Send + Sync + 'static,
     {
-        let dto = (self.request_to_dto)(message_to).map_err(EGError::Convert)?;
+        let dto = (self.request_to_dto)(message_to).map_err(|e| EGError::Convert(Box::new(e)))?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_message_from)(dto).map_err(EGError::Convert)?;
-                converter(message_from).map_err(EGError::Convert)
+                let message_from =
+                    (self.dto_to_message_from)(dto).map_err(|e| EGError::Convert(Box::new(e)))?;
+                converter(message_from).map_err(|e| EGError::Convert(Box::new(e)))
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await?;
@@ -133,15 +135,16 @@ where
     where
         TFiltered: Send + Sync + 'static,
     {
-        let dto = (self.request_to_dto)(message_to).map_err(EGError::Convert)?;
+        let dto = (self.request_to_dto)(message_to).map_err(|e| EGError::Convert(Box::new(e)))?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_message_from)(dto).map_err(EGError::Convert)?;
-                let response =
-                    (self.message_from_to_response)(message_from).map_err(EGError::Convert)?;
-                converter(response).map_err(EGError::Convert)
+                let message_from =
+                    (self.dto_to_message_from)(dto).map_err(|e| EGError::Convert(Box::new(e)))?;
+                let response = (self.message_from_to_response)(message_from)
+                    .map_err(|e| EGError::Convert(Box::new(e)))?;
+                converter(response).map_err(|e| EGError::Convert(Box::new(e)))
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 let response_converter =

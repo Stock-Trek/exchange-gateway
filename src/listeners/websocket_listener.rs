@@ -81,7 +81,7 @@ where
     TResponse: Clone + Send,
 {
     async fn on_message(&self, message: TransportMessageDto) -> EGResult<()> {
-        let response = (self.converter)(message).map_err(EGError::Convert)?;
+        let response = (self.converter)(message).map_err(|e| EGError::Convert(Box::new(e)))?;
         {
             let mut guard = self.handlers.lock().unwrap();
             let handler_index = guard
