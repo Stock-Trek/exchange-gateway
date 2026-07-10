@@ -1,5 +1,5 @@
 use crate::{
-    error::{EGError, EGResult},
+    error::EGResult,
     functions::{ArcTryConvertRef, ArcTryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
@@ -46,7 +46,7 @@ where
         timeout: Duration,
     ) -> EGResult<()> {
         self.check_rate_limits()?;
-        let unsigned = (self.request_to_unsigned)(&request).map_err(EGError::Convert)?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signed {
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),
@@ -64,7 +64,7 @@ where
         TWaitedResponse: Send + Sync + 'static,
     {
         self.check_rate_limits()?;
-        let unsigned = (self.request_to_unsigned)(&request).map_err(EGError::Convert)?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signed {
             true => self.signer.sign(unsigned),
             false => self.null_signer.sign(unsigned),

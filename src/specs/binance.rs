@@ -24,7 +24,6 @@ use crate::{
         websocket::{CreateWebsocketClient, WebsocketMessageDto},
     },
 };
-use anyhow::Result;
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
@@ -209,11 +208,11 @@ fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
 }
 fn create_signer_from_message(
     _message: BinanceWebsocketResponse,
-) -> Result<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
+) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     Ok(Box::new(ConvertSigner::new(websocket_converter)))
 }
 
-fn to_http_dto(message: BinanceHttpRequest) -> Result<TransportMessageDto> {
+fn to_http_dto(message: BinanceHttpRequest) -> EGResult<TransportMessageDto> {
     let body_json = serde_json::to_string(&message)
         .map_err(|e| EGError::SerdeJson(format!("Failed to serialize HTTP request: {e}")))?;
     Ok(TransportMessageDto::Http(HttpMessageDto {
@@ -221,20 +220,20 @@ fn to_http_dto(message: BinanceHttpRequest) -> Result<TransportMessageDto> {
         body_json,
     }))
 }
-fn from_http_dto(dto: HttpMessageDto) -> Result<BinanceHttpResponse> {
+fn from_http_dto(dto: HttpMessageDto) -> EGResult<BinanceHttpResponse> {
     let message: BinanceHttpResponse = serde_json::from_str(dto.body_json.as_str())
         .map_err(|e| EGError::SerdeJson(format!("Failed to deserialize HTTP response: {e}")))?;
     Ok(message)
 }
 
-fn to_websocket_dto(message: BinanceWebsocketRequest) -> Result<TransportMessageDto> {
+fn to_websocket_dto(message: BinanceWebsocketRequest) -> EGResult<TransportMessageDto> {
     let body_json = serde_json::to_string(&message)
         .map_err(|e| EGError::SerdeJson(format!("Failed to serialize websocket request: {e}")))?;
     Ok(TransportMessageDto::Websocket(WebsocketMessageDto {
         body_json,
     }))
 }
-fn from_websocket_dto(dto: WebsocketMessageDto) -> Result<BinanceWebsocketResponse> {
+fn from_websocket_dto(dto: WebsocketMessageDto) -> EGResult<BinanceWebsocketResponse> {
     let message: BinanceWebsocketResponse =
         serde_json::from_str(dto.body_json.as_str()).map_err(|e| {
             EGError::SerdeJson(format!("Failed to deserialize websocket response: {e}"))
@@ -244,7 +243,7 @@ fn from_websocket_dto(dto: WebsocketMessageDto) -> Result<BinanceWebsocketRespon
 
 fn create_http_signer_from_credentials(
     credentials: ApiKeyCredentials,
-) -> Result<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>> {
+) -> EGResult<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
     Ok(Box::new(MessageSigner::<
         BinanceHttpUnsignedRequest,
@@ -258,7 +257,7 @@ fn create_http_signer_from_credentials(
 }
 fn create_websocket_signer_from_credentials(
     credentials: ApiKeyCredentials,
-) -> Result<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
+) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
     Ok(Box::new(MessageSigner::<
         BinanceWebsocketUnsignedRequest,
@@ -272,10 +271,10 @@ fn create_websocket_signer_from_credentials(
 }
 fn websocket_unsigned_request_to_bytes(
     request: &BinanceWebsocketUnsignedRequest,
-) -> Result<Vec<u8>> {
+) -> EGResult<Vec<u8>> {
     unsigned_params_to_bytes(&request.params)
 }
-fn unsigned_params_to_bytes(params: &BinanceUnsignedParams) -> Result<Vec<u8>> {
+fn unsigned_params_to_bytes(params: &BinanceUnsignedParams) -> EGResult<Vec<u8>> {
     Ok(serde_urlencoded::to_string(params)
         .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
         .into_bytes())
@@ -284,7 +283,7 @@ fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::Ed25519.signer(secret)
 }
 
-fn http_converter(unsigned: BinanceHttpUnsignedRequest) -> Result<BinanceHttpRequest> {
+fn http_converter(unsigned: BinanceHttpUnsignedRequest) -> EGResult<BinanceHttpRequest> {
     let request = BinanceHttpRequest {
         signature: None,
         params: unsigned,
@@ -293,7 +292,7 @@ fn http_converter(unsigned: BinanceHttpUnsignedRequest) -> Result<BinanceHttpReq
 }
 fn websocket_converter(
     unsigned: BinanceWebsocketUnsignedRequest,
-) -> Result<BinanceWebsocketRequest> {
+) -> EGResult<BinanceWebsocketRequest> {
     let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
     let params = BinanceParams {
         signature: None,

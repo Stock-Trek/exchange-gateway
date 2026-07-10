@@ -1,8 +1,4 @@
-use crate::{
-    error::{EGError, EGResult},
-    functions::TryConvertValue,
-    sign::signer::SignerTrait,
-};
+use crate::{error::EGResult, functions::TryConvertValue, sign::signer::SignerTrait};
 
 pub(crate) struct ConvertSigner<TUnsignedMessage, TSignedMessage> {
     converter: TryConvertValue<TUnsignedMessage, TSignedMessage>,
@@ -25,6 +21,6 @@ where
     TSignedMessage: Send + Sync,
 {
     fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
-        (self.converter)(unsigned).map_err(EGError::Convert)
+        (self.converter)(unsigned)
     }
 }

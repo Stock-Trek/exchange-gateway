@@ -1,5 +1,5 @@
 use crate::{
-    error::{EGError, EGResult},
+    error::EGResult,
     functions::ArcTryConvertValue,
     listeners::listener::{Listener, ListenerTrait},
 };
@@ -26,7 +26,7 @@ where
     TTo: Send,
 {
     async fn on_message(&self, message: TFrom) -> EGResult<()> {
-        let converted = (self.converter)(message).map_err(EGError::Convert)?;
+        let converted = (self.converter)(message)?;
         self.delegate.on_message(converted).await
     }
 }

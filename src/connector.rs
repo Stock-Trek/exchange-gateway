@@ -1,6 +1,6 @@
 use crate::{
     connector_session::ConnectorSession,
-    error::{EGError, EGResult},
+    error::EGResult,
     functions::{ArcTryConvertRef, ArcTryConvertValue, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
@@ -58,7 +58,7 @@ where
         &self,
         credentials: TCredentials,
     ) -> EGResult<Signer<TUnsignedMessageToExchange, TMessageToExchange>> {
-        (self.create_signer_from_credentials)(credentials).map_err(EGError::Convert)
+        (self.create_signer_from_credentials)(credentials)
     }
     pub async fn fire_and_forget(
         &self,
@@ -66,7 +66,7 @@ where
         signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
         timeout: Duration,
     ) -> EGResult<()> {
-        let unsigned = (self.request_to_unsigned)(&request).map_err(EGError::Convert)?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signer {
             Some(signer) => signer.sign(unsigned),
             None => self.null_signer.sign(unsigned),
@@ -83,7 +83,7 @@ where
     where
         TWaitedResponse: Send + Sync + 'static,
     {
-        let unsigned = (self.request_to_unsigned)(&request).map_err(EGError::Convert)?;
+        let unsigned = (self.request_to_unsigned)(&request)?;
         let message_to = match signer {
             Some(signer) => signer.sign(unsigned),
             None => self.null_signer.sign(unsigned),
@@ -104,8 +104,7 @@ where
             TResponse,
         >,
     > {
-        let mut signer =
-            (self.create_signer_from_credentials)(credentials).map_err(EGError::Convert)?;
+        let mut signer = (self.create_signer_from_credentials)(credentials)?;
         for leg in &self.authenticate_legs {
             let auth_message = (leg.create_auth_message)();
             let signed_auth_message = signer.sign(auth_message)?;
@@ -117,7 +116,7 @@ where
                     leg.filter_response.clone(),
                 )
                 .await?;
-            signer = (leg.create_signer_from)(authentication_response).map_err(EGError::Convert)?;
+            signer = (leg.create_signer_from)(authentication_response)?;
         }
         let Connector {
             rate_limits,
