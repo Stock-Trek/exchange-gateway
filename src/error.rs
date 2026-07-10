@@ -1,48 +1,21 @@
 pub type EGResult<T> = Result<T, EGError>;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum EGError {
+    #[error("Transport produced bad response")]
     BadResponse,
-    Convert(anyhow::Error),
+    #[error("Conversion failed: {0}")]
+    Convert(EGError),
+    #[error("Crypto key error: {0}")]
     CryptoKey(String),
-    Io(std::io::Error),
-    Parse(std::num::ParseIntError),
-    ReceiveTimeout(std::sync::mpsc::RecvTimeoutError),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Parse error: {0}")]
+    Parse(#[from] std::num::ParseIntError),
+    #[error("Receive timeout error: {0}")]
+    ReceiveTimeout(#[from] std::sync::mpsc::RecvTimeoutError),
+    #[error("JSON error: {0}")]
     SerdeJson(String),
+    #[error("URL encoding error: {0}")]
     SerdeUrlencoded(String),
-}
-
-impl std::fmt::Display for EGError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EGError::BadResponse => write!(f, "Transport produced bad response"),
-            EGError::Convert(e) => write!(f, "Conversion failed: {}", e),
-            EGError::CryptoKey(e) => write!(f, "Crypto key error: {}", e),
-            EGError::Io(e) => write!(f, "IO error: {}", e),
-            EGError::Parse(e) => write!(f, "Parse error: {}", e),
-            EGError::ReceiveTimeout(e) => write!(f, "Receive timeout error: {}", e),
-            EGError::SerdeJson(e) => write!(f, "JSON error: {}", e),
-            EGError::SerdeUrlencoded(e) => write!(f, "URL encoding error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for EGError {}
-
-impl From<std::io::Error> for EGError {
-    fn from(e: std::io::Error) -> Self {
-        EGError::Io(e)
-    }
-}
-
-impl From<std::num::ParseIntError> for EGError {
-    fn from(e: std::num::ParseIntError) -> Self {
-        EGError::Parse(e)
-    }
-}
-
-impl From<std::sync::mpsc::RecvTimeoutError> for EGError {
-    fn from(e: std::sync::mpsc::RecvTimeoutError) -> Self {
-        EGError::ReceiveTimeout(e)
-    }
 }

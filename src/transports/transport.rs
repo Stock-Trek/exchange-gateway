@@ -10,7 +10,6 @@ use crate::{
         websocket::{WebsocketClient, WebsocketMessageDto},
     },
 };
-use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 
 pub(crate) struct Transport<TMessageToExchange, TMessageFromExchange, TResponse>
@@ -37,16 +36,16 @@ pub(crate) enum TransportMessageDto {
     Websocket(WebsocketMessageDto),
 }
 
-pub(crate) fn filter_http_dto(dto: TransportMessageDto) -> Result<HttpMessageDto> {
+pub(crate) fn filter_http_dto(dto: TransportMessageDto) -> EGResult<HttpMessageDto> {
     match dto {
         TransportMessageDto::Http(http_message_dto) => Ok(http_message_dto),
-        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse.into()),
+        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse),
     }
 }
-pub(crate) fn filter_websocket_dto(dto: TransportMessageDto) -> Result<WebsocketMessageDto> {
+pub(crate) fn filter_websocket_dto(dto: TransportMessageDto) -> EGResult<WebsocketMessageDto> {
     match dto {
         TransportMessageDto::Websocket(websocket_message_dto) => Ok(websocket_message_dto),
-        TransportMessageDto::Http(_) => Err(EGError::BadResponse.into()),
+        TransportMessageDto::Http(_) => Err(EGError::BadResponse),
     }
 }
 
@@ -96,7 +95,7 @@ where
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
             }
-            _ => Err(crate::error::EGError::BadResponse),
+            _ => Err(EGError::BadResponse),
         }
     }
     pub async fn send_and_wait_for_message_from<TFiltered>(

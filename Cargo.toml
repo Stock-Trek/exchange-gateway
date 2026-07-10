@@ -4,7 +4,7 @@ version = "0.5.3"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.103"
+thiserror = "2.0.18"
 async-trait = "0.1.89"
 bimap = "0.6.3"
 bs58 = "0.5.1"
