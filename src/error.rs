@@ -3,6 +3,7 @@ pub type EGResult<T> = Result<T, EGError>;
 #[derive(Debug)]
 pub enum EGError {
     BadResponse,
+    Convert(anyhow::Error),
     CryptoKey(String),
     Io(std::io::Error),
     Parse(std::num::ParseIntError),
@@ -15,6 +16,7 @@ impl std::fmt::Display for EGError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EGError::BadResponse => write!(f, "Transport produced bad response"),
+            EGError::Convert(e) => write!(f, "Conversion failed: {}", e),
             EGError::CryptoKey(e) => write!(f, "Crypto key error: {}", e),
             EGError::Io(e) => write!(f, "IO error: {}", e),
             EGError::Parse(e) => write!(f, "Parse error: {}", e),

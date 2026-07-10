@@ -1,5 +1,5 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::ArcTryConvertValue,
     listeners::listener::{Listener, ListenerTrait},
     transports::transport::TransportMessageDto,
@@ -81,7 +81,7 @@ where
     TResponse: Clone + Send,
 {
     async fn on_message(&self, message: TransportMessageDto) -> EGResult<()> {
-        let response = (self.converter)(message)?;
+        let response = (self.converter)(message).map_err(EGError::Convert)?;
         {
             let mut guard = self.handlers.lock().unwrap();
             let handler_index = guard

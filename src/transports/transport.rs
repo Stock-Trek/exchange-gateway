@@ -10,6 +10,7 @@ use crate::{
         websocket::{WebsocketClient, WebsocketMessageDto},
     },
 };
+use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 
 pub(crate) struct Transport<TMessageToExchange, TMessageFromExchange, TResponse>
@@ -36,16 +37,16 @@ pub(crate) enum TransportMessageDto {
     Websocket(WebsocketMessageDto),
 }
 
-pub(crate) fn filter_http_dto(dto: TransportMessageDto) -> EGResult<HttpMessageDto> {
+pub(crate) fn filter_http_dto(dto: TransportMessageDto) -> Result<HttpMessageDto> {
     match dto {
         TransportMessageDto::Http(http_message_dto) => Ok(http_message_dto),
-        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse),
+        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse.into()),
     }
 }
-pub(crate) fn filter_websocket_dto(dto: TransportMessageDto) -> EGResult<WebsocketMessageDto> {
+pub(crate) fn filter_websocket_dto(dto: TransportMessageDto) -> Result<WebsocketMessageDto> {
     match dto {
         TransportMessageDto::Websocket(websocket_message_dto) => Ok(websocket_message_dto),
-        TransportMessageDto::Http(_) => Err(EGError::BadResponse),
+        TransportMessageDto::Http(_) => Err(EGError::BadResponse.into()),
     }
 }
 
@@ -82,13 +83,14 @@ where
         message_to: TMessageToExchange,
         timeout: Duration,
     ) -> EGResult<()> {
-        let dto = (self.request_to_dto)(message_to)?;
+        let dto = (self.request_to_dto)(message_to).map_err(EGError::Convert)?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_message_from)(dto)?;
-                let response = (self.message_from_to_response)(message_from)?;
+                let message_from = (self.dto_to_message_from)(dto).map_err(EGError::Convert)?;
+                let response =
+                    (self.message_from_to_response)(message_from).map_err(EGError::Convert)?;
                 self.listener.on_message(response).await
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
@@ -106,13 +108,13 @@ where
     where
         TFiltered: Send + Sync + 'static,
     {
-        let dto = (self.request_to_dto)(message_to)?;
+        let dto = (self.request_to_dto)(message_to).map_err(EGError::Convert)?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_message_from)(dto)?;
-                converter(message_from).map_err(|_| EGError::BadResponse)
+                let message_from = (self.dto_to_message_from)(dto).map_err(EGError::Convert)?;
+                converter(message_from).map_err(EGError::Convert)
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await?;
@@ -120,7 +122,7 @@ where
                     .wait_for_converted_response(converter)
                     .await
             }
-            _ => Err(crate::error::EGError::BadResponse),
+            _ => Err(EGError::BadResponse),
         }
     }
     pub async fn send_and_wait_for_response<TFiltered>(
@@ -132,14 +134,15 @@ where
     where
         TFiltered: Send + Sync + 'static,
     {
-        let dto = (self.request_to_dto)(message_to)?;
+        let dto = (self.request_to_dto)(message_to).map_err(EGError::Convert)?;
         match (&self.transport_client, dto) {
             (TransportClient::Http(client), TransportMessageDto::Http(dto)) => {
                 let http_message_dto = client.send_message(dto, timeout).await?;
                 let dto = TransportMessageDto::Http(http_message_dto);
-                let message_from = (self.dto_to_message_from)(dto)?;
-                let response = (self.message_from_to_response)(message_from)?;
-                converter(response).map_err(|_| EGError::BadResponse)
+                let message_from = (self.dto_to_message_from)(dto).map_err(EGError::Convert)?;
+                let response =
+                    (self.message_from_to_response)(message_from).map_err(EGError::Convert)?;
+                converter(response).map_err(EGError::Convert)
             }
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 let response_converter =
@@ -149,7 +152,7 @@ where
                     .wait_for_converted_response(response_converter)
                     .await
             }
-            _ => Err(crate::error::EGError::BadResponse),
+            _ => Err(EGError::BadResponse),
         }
     }
 }

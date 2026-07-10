@@ -1,5 +1,5 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcCombineValues, TryConvertRef},
     sign::{
         encode::{byte_encoder::ByteEncoder, byte_encoding::ByteEncoding},
@@ -42,7 +42,7 @@ where
     TSignedMessage: Send + Sync,
 {
     fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
-        let bytes = (self.to_bytes)(&unsigned)?;
+        let bytes = (self.to_bytes)(&unsigned).map_err(EGError::Convert)?;
         let signature = if bytes.is_empty() {
             None
         } else {

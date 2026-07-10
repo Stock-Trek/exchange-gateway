@@ -16,7 +16,6 @@ pub mod prelude {
         connector::Connector,
         connector_session::ConnectorSession,
         connectors::Connectors,
-        error::{EGError, EGResult},
         functions::{ArcTryConvertRef, ArcTryConvertValue},
         transports::{
             http::{HttpClient, HttpClientTrait, HttpMessageDto},
