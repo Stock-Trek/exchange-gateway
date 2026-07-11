@@ -16,10 +16,16 @@ pub mod prelude {
         connector::Connector,
         connector_session::ConnectorSession,
         connectors::Connectors,
+        credentials::{api_key_credential::ApiKeyCredentials, jwt_credential::JwtCredentials},
+        error::{EGError, EGResult},
         functions::ArcTryConvertValue,
+        listeners::listener::{Listener, ListenerTrait},
         transports::{
-            http::{HttpClientMarker, HttpClientTrait, HttpMessageDto},
-            websocket::{WebsocketClientMarker, WebsocketClientTrait, WebsocketMessageDto},
+            http::{CreateHttpClient, HttpClientMarker, HttpClientTrait, HttpMessageDto},
+            websocket::{
+                CreateWebsocketClient, WebsocketClientMarker, WebsocketClientTrait,
+                WebsocketMessageDto,
+            },
         },
     };
 }
