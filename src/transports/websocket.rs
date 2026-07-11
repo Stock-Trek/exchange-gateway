@@ -1,10 +1,12 @@
 use crate::{error::EGResult, listeners::listener::Listener};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
-pub type CreateWebsocketClient = Arc<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClient>;
+pub type CreateWebsocketClient =
+    Arc<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClientMarker>;
 
-pub type WebsocketClient = Box<dyn WebsocketClientTrait>;
+pub type WebsocketClientMarker = Box<dyn WebsocketClientTrait>;
 
 #[async_trait]
 pub trait WebsocketClientTrait: Send + Sync {
@@ -12,7 +14,7 @@ pub trait WebsocketClientTrait: Send + Sync {
     async fn send_message(&self, message: WebsocketMessageDto, timeout: Duration) -> EGResult<()>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WebsocketMessageDto {
     pub body_json: String,
 }

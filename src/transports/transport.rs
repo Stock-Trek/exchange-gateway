@@ -6,8 +6,8 @@ use crate::{
         websocket_listener::WebsocketListener,
     },
     transports::{
-        http::{HttpClient, HttpMessageDto},
-        websocket::{WebsocketClient, WebsocketMessageDto},
+        http::{HttpClientMarker, HttpMessageDto},
+        websocket::{WebsocketClientMarker, WebsocketMessageDto},
     },
 };
 use std::{sync::Arc, time::Duration};
@@ -26,8 +26,8 @@ where
 }
 
 pub(crate) enum TransportClient {
-    Http(HttpClient),
-    Websocket(WebsocketClient),
+    Http(HttpClientMarker),
+    Websocket(WebsocketClientMarker),
 }
 
 #[derive(Clone)]

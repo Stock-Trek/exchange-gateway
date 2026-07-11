@@ -18,8 +18,8 @@ pub mod prelude {
         connectors::Connectors,
         functions::ArcTryConvertValue,
         transports::{
-            http::{HttpClient, HttpClientTrait, HttpMessageDto},
-            websocket::{WebsocketClient, WebsocketClientTrait, WebsocketMessageDto},
+            http::{HttpClientMarker, HttpClientTrait, HttpMessageDto},
+            websocket::{WebsocketClientMarker, WebsocketClientTrait, WebsocketMessageDto},
         },
     };
 }

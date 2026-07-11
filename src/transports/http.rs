@@ -1,10 +1,11 @@
 use crate::error::EGResult;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-pub type CreateHttpClient = Arc<dyn Fn() -> HttpClient>;
+pub type CreateHttpClient = Arc<dyn Fn() -> HttpClientMarker>;
 
-pub type HttpClient = Box<dyn HttpClientTrait>;
+pub type HttpClientMarker = Box<dyn HttpClientTrait>;
 
 #[async_trait]
 pub trait HttpClientTrait: Send + Sync {
@@ -15,7 +16,7 @@ pub trait HttpClientTrait: Send + Sync {
     ) -> EGResult<HttpMessageDto>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct HttpMessageDto {
     pub headers: HashMap<String, String>,
     pub body_json: String,
