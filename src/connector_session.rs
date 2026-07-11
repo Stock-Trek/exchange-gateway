@@ -73,6 +73,10 @@ where
             .send_and_wait_for_response(message_to, timeout, filter_response)
             .await
     }
+    pub async fn disconnect(self) -> EGResult<()> {
+        self.transport.disconnect().await
+    }
+
     fn check_rate_limits(&self) -> EGResult<()> {
         // TODO add rate limits back in
         // if !self
