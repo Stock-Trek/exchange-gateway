@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 pub type CreateHttpClient = Arc<dyn Fn() -> HttpClientMarker>;
 
-pub type HttpClientMarker = Box<dyn HttpClientTrait>;
+pub type HttpClientMarker = Arc<dyn HttpClientTrait>;
 
 #[async_trait]
 pub trait HttpClientTrait: Send + Sync {

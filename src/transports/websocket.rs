@@ -6,7 +6,7 @@ use std::{sync::Arc, time::Duration};
 pub type CreateWebsocketClient =
     Arc<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClientMarker>;
 
-pub type WebsocketClientMarker = Box<dyn WebsocketClientTrait>;
+pub type WebsocketClientMarker = Arc<dyn WebsocketClientTrait>;
 
 #[async_trait]
 pub trait WebsocketClientTrait: Send + Sync {
