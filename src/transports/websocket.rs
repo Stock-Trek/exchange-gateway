@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
 pub type CreateWebsocketClient =
-    Arc<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClientMarker>;
+    Arc<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClientMarker + Send + Sync>;
 
 pub type WebsocketClientMarker = Arc<dyn WebsocketClientTrait>;
 
