@@ -152,4 +152,10 @@ where
             _ => Err(EGError::BadResponse),
         }
     }
+    pub async fn disconnect(&self) -> EGResult<()> {
+        match &self.transport_client {
+            TransportClient::Websocket(client) => client.disconnect().await,
+            _ => Ok(()),
+        }
+    }
 }

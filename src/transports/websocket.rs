@@ -12,6 +12,7 @@ pub type WebsocketClientMarker = Arc<dyn WebsocketClientTrait>;
 pub trait WebsocketClientTrait: Send + Sync {
     fn start_listening(&self) -> EGResult<()>;
     async fn send_message(&self, message: WebsocketMessageDto, timeout: Duration) -> EGResult<()>;
+    async fn disconnect(&self) -> EGResult<()>;
 }
 
 #[derive(Clone, Serialize, Deserialize)]
