@@ -1,8 +1,8 @@
 use crate::error::EGResult;
 use async_trait::async_trait;
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-pub type CreateHttpClient = fn() -> HttpClient;
+pub type CreateHttpClient = Arc<dyn Fn() -> HttpClient>;
 
 pub type HttpClient = Box<dyn HttpClientTrait>;
 
