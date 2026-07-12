@@ -3,8 +3,20 @@ use strum::Display;
 #[derive(Debug, Clone)]
 pub(crate) struct ExchangeUrls {
     name: String,
+    http: ExchangeTransportUrls,
+    websocket: ExchangeTransportUrls,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExchangeTransportUrls {
     live: String,
     test: String,
+}
+
+#[derive(Debug, Display, Clone, Copy)]
+pub enum ExchangeTransportType {
+    HTTP,
+    WEBSOCKET,
 }
 
 #[derive(Debug, Display, Clone, Copy)]
@@ -13,22 +25,40 @@ pub enum ExchangeNetType {
     TEST,
 }
 
-impl ExchangeUrls {
-    pub fn new(name: &str, live: &str, test: &str) -> Self {
+impl ExchangeTransportUrls {
+    pub fn new(live: &str, test: &str) -> Self {
         Self {
-            name: name.into(),
             live: live.into(),
             test: test.into(),
         }
     }
-    pub fn url(&self, net_type: ExchangeNetType) -> String {
-        let env_var_name = format!("{}_{}", self.name, net_type);
-        std::env::var(env_var_name).unwrap_or_else(|_| self.default_url(net_type).into())
+}
+
+impl ExchangeUrls {
+    pub fn new(name: &str, http: ExchangeTransportUrls, websocket: ExchangeTransportUrls) -> Self {
+        Self {
+            name: name.into(),
+            http,
+            websocket,
+        }
     }
-    fn default_url(&self, net_type: ExchangeNetType) -> &str {
+    pub fn url(&self, transport_type: ExchangeTransportType, net_type: ExchangeNetType) -> String {
+        let env_var_name = format!("{}_{}_{}", self.name, transport_type, net_type);
+        std::env::var(env_var_name)
+            .unwrap_or_else(|_| self.default_url(transport_type, net_type).into())
+    }
+    fn default_url(
+        &self,
+        transport_type: ExchangeTransportType,
+        net_type: ExchangeNetType,
+    ) -> &str {
+        let transport_urls = match transport_type {
+            ExchangeTransportType::HTTP => &self.http,
+            ExchangeTransportType::WEBSOCKET => &self.websocket,
+        };
         match net_type {
-            ExchangeNetType::LIVE => &self.live,
-            ExchangeNetType::TEST => &self.test,
+            ExchangeNetType::LIVE => &transport_urls.live,
+            ExchangeNetType::TEST => &transport_urls.test,
         }
     }
 }

@@ -23,7 +23,7 @@ use crate::{
         },
         websocket::{CreateWebsocketClient, WebsocketMessageDto},
     },
-    urls::{ExchangeNetType, ExchangeUrls},
+    urls::{ExchangeNetType, ExchangeTransportType, ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
@@ -85,7 +85,7 @@ where
             to_response,
         } = self;
         let exchange_urls = exchange_urls();
-        let url = exchange_urls.url(exchange_net_type);
+        let url = exchange_urls.url(ExchangeTransportType::HTTP, exchange_net_type);
         let client = (client_creator)(&url);
         let transport_client = TransportClient::Http(client);
         let request_to_dto = Arc::new(to_http_dto);
@@ -150,7 +150,7 @@ where
             to_response,
         } = self;
         let exchange_urls = exchange_urls();
-        let url = exchange_urls.url(exchange_net_type);
+        let url = exchange_urls.url(ExchangeTransportType::WEBSOCKET, exchange_net_type);
         let websocket_dto_to_message_from = Arc::new(from_websocket_dto);
         let converter =
             double_converter(websocket_dto_to_message_from.clone(), to_response.clone());
@@ -186,8 +186,14 @@ where
 fn exchange_urls() -> ExchangeUrls {
     ExchangeUrls::new(
         "BINANCE",
-        "wss://ws-fapi.binance.com/ws-fapi/v1",
-        "wss://testnet.binancefuture.com/ws-fapi/v1",
+        ExchangeTransportUrls::new(
+            "https://api.binance.com",
+            "https://testnet.binance.vision/api",
+        ),
+        ExchangeTransportUrls::new(
+            "wss://ws-fapi.binance.com/ws-fapi/v1",
+            "wss://testnet.binancefuture.com/ws-fapi/v1",
+        ),
     )
 }
 
