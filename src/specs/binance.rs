@@ -263,7 +263,7 @@ fn from_websocket_dto(dto: WebsocketMessageDto) -> EGResult<BinanceWebsocketResp
 }
 
 fn create_http_signer_from_credentials(
-    credentials: ApiKeyCredentials,
+    credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
     Ok(Box::new(MessageSigner::<
@@ -271,13 +271,13 @@ fn create_http_signer_from_credentials(
         BinanceHttpRequest,
     >::new(
         unsigned_params_to_bytes,
-        data_signer(&secret)?,
+        data_signer(secret)?,
         ByteEncoding::Base64,
-        signature_appender_http(api_key),
+        signature_appender_http(api_key.into()),
     )))
 }
 fn create_websocket_signer_from_credentials(
-    credentials: ApiKeyCredentials,
+    credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
     Ok(Box::new(MessageSigner::<
@@ -285,9 +285,9 @@ fn create_websocket_signer_from_credentials(
         BinanceWebsocketRequest,
     >::new(
         websocket_unsigned_request_to_bytes,
-        data_signer(&secret)?,
+        data_signer(secret)?,
         ByteEncoding::Base64,
-        signature_appender_websocket(api_key),
+        signature_appender_websocket(api_key.into()),
     )))
 }
 fn websocket_unsigned_request_to_bytes(

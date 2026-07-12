@@ -1,7 +1,7 @@
 use crate::{
     connector_session::ConnectorSession,
     error::EGResult,
-    functions::{ArcTryConvertValue, TryConvertValue},
+    functions::{ArcTryConvertValue, TryConvertRef, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::signer::Signer,
     transports::transport::Transport,
@@ -25,7 +25,7 @@ pub struct Connector<
     pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
-        TryConvertValue<TCredentials, Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
+        TryConvertRef<TCredentials, Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
     pub(crate) authenticate_legs:
         Vec<AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>>,
 }
@@ -56,7 +56,7 @@ where
 {
     pub fn signer(
         &self,
-        credentials: TCredentials,
+        credentials: &TCredentials,
     ) -> EGResult<Signer<TUnsignedMessageToExchange, TMessageToExchange>> {
         (self.create_signer_from_credentials)(credentials)
     }
@@ -100,7 +100,7 @@ where
     }
     pub async fn into_session(
         self,
-        credentials: TCredentials,
+        credentials: &TCredentials,
     ) -> EGResult<
         ConnectorSession<
             TRequest,
