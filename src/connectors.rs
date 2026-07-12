@@ -7,6 +7,7 @@ use crate::{
     listeners::listener::Listener,
     specs::binance::{BinanceHttpConnectorCreator, BinanceWebsocketConnectorCreator},
     transports::{http::CreateHttpClient, websocket::CreateWebsocketClient},
+    urls::ExchangeNetType,
 };
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
@@ -20,6 +21,7 @@ pub struct Connectors;
 impl Connectors {
     pub fn binance_http<TTransport, TRequest, TResponse>(
         &self,
+        exchange_net_type: ExchangeNetType,
         client_creator: CreateHttpClient,
         convert_request: ArcTryConvertValue<TRequest, BinanceHttpUnsignedRequest>,
         convert_response: ArcTryConvertValue<BinanceHttpResponse, TResponse>,
@@ -43,10 +45,11 @@ impl Connectors {
             to_response: convert_response,
             to_unsigned: convert_request,
         }
-        .into_connector(listener)
+        .into_connector(exchange_net_type, listener)
     }
     pub fn binance_websocket<TRequest, TResponse>(
         &self,
+        exchange_net_type: ExchangeNetType,
         client_creator: CreateWebsocketClient,
         convert_request: ArcTryConvertValue<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: ArcTryConvertValue<BinanceWebsocketResponse, TResponse>,
@@ -70,6 +73,6 @@ impl Connectors {
             to_response: convert_response,
             to_unsigned: convert_request,
         }
-        .into_connector(listener)
+        .into_connector(exchange_net_type, listener)
     }
 }

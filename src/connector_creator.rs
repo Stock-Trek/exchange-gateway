@@ -1,4 +1,6 @@
-use crate::{connector::Connector, error::EGResult, listeners::listener::Listener};
+use crate::{
+    connector::Connector, error::EGResult, listeners::listener::Listener, urls::ExchangeNetType,
+};
 
 pub(crate) trait ConnectorCreatorTrait<
     TRequest,
@@ -13,6 +15,7 @@ pub(crate) trait ConnectorCreatorTrait<
 {
     fn into_connector(
         self,
+        exchange_net_type: ExchangeNetType,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<

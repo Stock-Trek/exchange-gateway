@@ -4,15 +4,12 @@ use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
 pub type CreateWebsocketClient =
-    Arc<dyn Fn(Listener<WebsocketMessageDto>) -> WebsocketClientMarker + Send + Sync>;
+    Arc<dyn Fn(&str, Listener<WebsocketMessageDto>) -> WebsocketClientMarker + Send + Sync>;
 
 pub type WebsocketClientMarker = Arc<dyn WebsocketClientTrait>;
 
 #[async_trait]
 pub trait WebsocketClientTrait: Send + Sync {
-    fn new(url: &str) -> Self
-    where
-        Self: Sized;
     async fn connect(&self) -> EGResult<()>;
     async fn send_message(&self, message: WebsocketMessageDto, timeout: Duration) -> EGResult<()>;
     fn is_connected(&self) -> bool;

@@ -23,6 +23,7 @@ use crate::{
         },
         websocket::{CreateWebsocketClient, WebsocketMessageDto},
     },
+    urls::{ExchangeNetType, ExchangeUrls},
 };
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
@@ -66,6 +67,7 @@ where
 {
     fn into_connector(
         self,
+        exchange_net_type: ExchangeNetType,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
@@ -82,7 +84,9 @@ where
             to_unsigned,
             to_response,
         } = self;
-        let client = (client_creator)();
+        let exchange_urls = exchange_urls();
+        let url = exchange_urls.url(exchange_net_type);
+        let client = (client_creator)(&url);
         let transport_client = TransportClient::Http(client);
         let request_to_dto = Arc::new(to_http_dto);
         let dto_to_message_from =
@@ -128,6 +132,7 @@ where
 {
     fn into_connector(
         self,
+        exchange_net_type: ExchangeNetType,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
@@ -144,11 +149,13 @@ where
             to_unsigned,
             to_response,
         } = self;
+        let exchange_urls = exchange_urls();
+        let url = exchange_urls.url(exchange_net_type);
         let websocket_dto_to_message_from = Arc::new(from_websocket_dto);
         let converter =
             double_converter(websocket_dto_to_message_from.clone(), to_response.clone());
         let convert_listener = Arc::new(ConvertListener::new(converter, listener.clone()));
-        let client = (client_creator)(convert_listener);
+        let client = (client_creator)(&url, convert_listener);
         let transport_client = TransportClient::Websocket(client);
         let request_to_dto = Arc::new(to_websocket_dto);
         let dto_to_message_from = double_converter(
@@ -174,6 +181,14 @@ where
             rate_limits: rate_limits(),
         })
     }
+}
+
+fn exchange_urls() -> ExchangeUrls {
+    ExchangeUrls::new(
+        "BINANCE",
+        "wss://ws-fapi.binance.com/ws-fapi/v1",
+        "wss://testnet.binancefuture.com/ws-fapi/v1",
+    )
 }
 
 fn authenticate_websocket_leg() -> AuthenticateLeg<

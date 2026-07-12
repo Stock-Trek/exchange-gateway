@@ -10,6 +10,7 @@ pub mod rate_limit;
 pub mod sign;
 pub mod specs;
 pub mod transports;
+pub mod urls;
 
 pub mod prelude {
     pub use crate::{
@@ -27,5 +28,6 @@ pub mod prelude {
                 WebsocketMessageDto,
             },
         },
+        urls::ExchangeNetType,
     };
 }

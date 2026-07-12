@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-pub type CreateHttpClient = Arc<dyn Fn() -> HttpClientMarker + Send + Sync>;
+pub type CreateHttpClient = Arc<dyn Fn(&str) -> HttpClientMarker + Send + Sync>;
 
 pub type HttpClientMarker = Arc<dyn HttpClientTrait>;
 
