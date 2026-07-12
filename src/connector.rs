@@ -69,7 +69,7 @@ where
     pub async fn fire_and_forget(
         &self,
         request: TRequest,
-        signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
+        signer: Option<&Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
         timeout: Duration,
     ) -> EGResult<()> {
         let unsigned = (self.request_to_unsigned)(request)?;
@@ -82,7 +82,7 @@ where
     pub async fn send_and_wait<TWaitedResponse>(
         &self,
         request: TRequest,
-        signer: Option<Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
+        signer: Option<&Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
         filter_response: ArcTryConvertValue<TResponse, TWaitedResponse>,
         timeout: Duration,
     ) -> EGResult<TWaitedResponse>
