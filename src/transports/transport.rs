@@ -30,22 +30,31 @@ pub(crate) enum TransportClient {
     Websocket(WebsocketClientMarker),
 }
 
-#[derive(Clone)]
-pub(crate) enum TransportMessageDto {
+#[derive(Debug, Clone)]
+pub enum TransportMessageDto {
     Http(HttpMessageDto),
     Websocket(WebsocketMessageDto),
+}
+
+impl std::fmt::Display for TransportMessageDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Http(http) => http.fmt(f),
+            Self::Websocket(websocket) => websocket.fmt(f),
+        }
+    }
 }
 
 pub(crate) fn filter_http_dto(dto: TransportMessageDto) -> EGResult<HttpMessageDto> {
     match dto {
         TransportMessageDto::Http(http_message_dto) => Ok(http_message_dto),
-        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse),
+        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse(dto)),
     }
 }
 pub(crate) fn filter_websocket_dto(dto: TransportMessageDto) -> EGResult<WebsocketMessageDto> {
     match dto {
         TransportMessageDto::Websocket(websocket_message_dto) => Ok(websocket_message_dto),
-        TransportMessageDto::Http(_) => Err(EGError::BadResponse),
+        TransportMessageDto::Http(_) => Err(EGError::BadResponse(dto)),
     }
 }
 
@@ -106,7 +115,7 @@ where
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
             }
-            _ => Err(crate::error::EGError::BadResponse),
+            (_, dto) => Err(crate::error::EGError::BadResponse(dto)),
         }
     }
     pub async fn send_and_wait_for_message_from<TFiltered>(
@@ -132,7 +141,7 @@ where
                     .wait_for_converted_response(converter)
                     .await
             }
-            _ => Err(EGError::BadResponse),
+            (_, dto) => Err(EGError::BadResponse(dto)),
         }
     }
     pub async fn send_and_wait_for_response<TFiltered>(
@@ -161,7 +170,7 @@ where
                     .wait_for_converted_response(response_converter)
                     .await
             }
-            _ => Err(EGError::BadResponse),
+            (_, dto) => Err(EGError::BadResponse(dto)),
         }
     }
 }

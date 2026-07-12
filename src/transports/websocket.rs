@@ -16,7 +16,13 @@ pub trait WebsocketClientTrait: Send + Sync {
     async fn disconnect(&self) -> EGResult<()>;
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebsocketMessageDto {
     pub body_json: String,
+}
+
+impl std::fmt::Display for WebsocketMessageDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WebsocketMessageDto( body: {} )", self.body_json)
+    }
 }

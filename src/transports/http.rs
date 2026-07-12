@@ -16,8 +16,18 @@ pub trait HttpClientTrait: Send + Sync {
     ) -> EGResult<HttpMessageDto>;
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpMessageDto {
     pub headers: HashMap<String, String>,
     pub body_json: String,
+}
+
+impl std::fmt::Display for HttpMessageDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "HttpMessageDto( headers: {:?}, body: {} )",
+            self.headers, self.body_json
+        )
+    }
 }
