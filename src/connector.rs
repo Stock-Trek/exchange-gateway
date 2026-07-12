@@ -60,6 +60,12 @@ where
     ) -> EGResult<Signer<TUnsignedMessageToExchange, TMessageToExchange>> {
         (self.create_signer_from_credentials)(credentials)
     }
+    pub async fn connect(&self) -> EGResult<()> {
+        self.transport.connect().await
+    }
+    pub async fn disconnect(&self) -> EGResult<()> {
+        self.transport.disconnect().await
+    }
     pub async fn fire_and_forget(
         &self,
         request: TRequest,
@@ -91,9 +97,6 @@ where
         self.transport
             .send_and_wait_for_response(message_to, timeout, filter_response)
             .await
-    }
-    pub async fn disconnect(self) -> EGResult<()> {
-        self.transport.disconnect().await
     }
     pub async fn into_session(
         self,

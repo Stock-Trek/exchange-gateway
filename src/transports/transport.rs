@@ -77,6 +77,18 @@ where
             websocket_listener,
         }
     }
+    pub async fn connect(&self) -> EGResult<()> {
+        match &self.transport_client {
+            TransportClient::Websocket(client) => client.connect().await,
+            _ => Ok(()),
+        }
+    }
+    pub async fn disconnect(&self) -> EGResult<()> {
+        match &self.transport_client {
+            TransportClient::Websocket(client) => client.disconnect().await,
+            _ => Ok(()),
+        }
+    }
     pub async fn fire_and_forget(
         &self,
         message_to: TMessageToExchange,
@@ -150,12 +162,6 @@ where
                     .await
             }
             _ => Err(EGError::BadResponse),
-        }
-    }
-    pub async fn disconnect(&self) -> EGResult<()> {
-        match &self.transport_client {
-            TransportClient::Websocket(client) => client.disconnect().await,
-            _ => Ok(()),
         }
     }
 }

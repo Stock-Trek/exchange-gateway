@@ -4,6 +4,8 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     #[error("Transport produced bad response")]
     BadResponse,
+    #[error("Connection error")]
+    Connection,
     #[error(transparent)]
     ConversionFailure(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("Crypto key error: {0}")]

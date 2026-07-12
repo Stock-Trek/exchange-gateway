@@ -39,6 +39,12 @@ where
     TMessageFromExchange: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
+    pub async fn connect(&self) -> EGResult<()> {
+        self.transport.connect().await
+    }
+    pub async fn disconnect(&self) -> EGResult<()> {
+        self.transport.disconnect().await
+    }
     pub async fn fire_and_forget(
         &self,
         request: TRequest,
@@ -72,9 +78,6 @@ where
         self.transport
             .send_and_wait_for_response(message_to, timeout, filter_response)
             .await
-    }
-    pub async fn disconnect(self) -> EGResult<()> {
-        self.transport.disconnect().await
     }
 
     fn check_rate_limits(&self) -> EGResult<()> {
