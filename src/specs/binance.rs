@@ -23,7 +23,7 @@ use crate::{
         },
         websocket::{CreateWebsocketClient, WebsocketMessageDto},
     },
-    urls::{ExchangeNetType, ExchangeTransportType, ExchangeTransportUrls, ExchangeUrls},
+    urls::{ExchangeTransportType, ExchangeTransportUrls, ExchangeUrls, TradingMode},
 };
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
@@ -67,7 +67,7 @@ where
 {
     fn into_connector(
         self,
-        exchange_net_type: ExchangeNetType,
+        trading_mode: TradingMode,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
@@ -85,7 +85,7 @@ where
             to_response,
         } = self;
         let exchange_urls = exchange_urls();
-        let url = exchange_urls.url(ExchangeTransportType::HTTP, exchange_net_type);
+        let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
         let client = (client_creator)(&url);
         let transport_client = TransportClient::Http(client);
         let request_to_dto = Arc::new(to_http_dto);
@@ -132,7 +132,7 @@ where
 {
     fn into_connector(
         self,
-        exchange_net_type: ExchangeNetType,
+        trading_mode: TradingMode,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
@@ -150,7 +150,7 @@ where
             to_response,
         } = self;
         let exchange_urls = exchange_urls();
-        let url = exchange_urls.url(ExchangeTransportType::WEBSOCKET, exchange_net_type);
+        let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
         let websocket_dto_to_message_from = Arc::new(from_websocket_dto);
         let converter =
             double_converter(websocket_dto_to_message_from.clone(), to_response.clone());

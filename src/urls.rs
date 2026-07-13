@@ -10,27 +10,27 @@ pub(crate) struct ExchangeUrls {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ExchangeTransportUrls {
-    live: String,
-    test: String,
+    real: String,
+    paper: String,
 }
 
 #[derive(Debug, Display, Clone, Copy, Serialize, Deserialize)]
 pub enum ExchangeTransportType {
-    HTTP,
-    WEBSOCKET,
+    Http,
+    Websocket,
 }
 
 #[derive(Debug, Display, Clone, Copy, Serialize, Deserialize)]
-pub enum ExchangeNetType {
-    LIVE,
-    TEST,
+pub enum TradingMode {
+    Real,
+    Paper,
 }
 
 impl ExchangeTransportUrls {
-    pub fn new(live: &str, test: &str) -> Self {
+    pub fn new(real: &str, paper: &str) -> Self {
         Self {
-            live: live.into(),
-            test: test.into(),
+            real: real.into(),
+            paper: paper.into(),
         }
     }
 }
@@ -43,23 +43,28 @@ impl ExchangeUrls {
             websocket,
         }
     }
-    pub fn url(&self, transport_type: ExchangeTransportType, net_type: ExchangeNetType) -> String {
-        let env_var_name = format!("{}_{}_{}", self.name, transport_type, net_type);
+    pub fn url(&self, transport_type: ExchangeTransportType, trading_mode: TradingMode) -> String {
+        let env_var_name = format!(
+            "{}_{}_{}",
+            self.name.to_uppercase(),
+            transport_type.to_string().to_uppercase(),
+            trading_mode.to_string().to_uppercase()
+        );
         std::env::var(env_var_name)
-            .unwrap_or_else(|_| self.default_url(transport_type, net_type).into())
+            .unwrap_or_else(|_| self.default_url(transport_type, trading_mode).into())
     }
     fn default_url(
         &self,
         transport_type: ExchangeTransportType,
-        net_type: ExchangeNetType,
+        trading_mode: TradingMode,
     ) -> &str {
         let transport_urls = match transport_type {
-            ExchangeTransportType::HTTP => &self.http,
-            ExchangeTransportType::WEBSOCKET => &self.websocket,
+            ExchangeTransportType::Http => &self.http,
+            ExchangeTransportType::Websocket => &self.websocket,
         };
-        match net_type {
-            ExchangeNetType::LIVE => &transport_urls.live,
-            ExchangeNetType::TEST => &transport_urls.test,
+        match trading_mode {
+            TradingMode::Real => &transport_urls.real,
+            TradingMode::Paper => &transport_urls.paper,
         }
     }
 }

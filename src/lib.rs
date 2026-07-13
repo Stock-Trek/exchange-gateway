@@ -28,6 +28,6 @@ pub mod prelude {
                 WebsocketMessageDto,
             },
         },
-        urls::ExchangeNetType,
+        urls::TradingMode,
     };
 }

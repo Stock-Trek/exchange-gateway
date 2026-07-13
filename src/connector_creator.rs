@@ -1,5 +1,5 @@
 use crate::{
-    connector::Connector, error::EGResult, listeners::listener::Listener, urls::ExchangeNetType,
+    connector::Connector, error::EGResult, listeners::listener::Listener, urls::TradingMode,
 };
 
 pub(crate) trait ConnectorCreatorTrait<
@@ -15,7 +15,7 @@ pub(crate) trait ConnectorCreatorTrait<
 {
     fn into_connector(
         self,
-        exchange_net_type: ExchangeNetType,
+        trading_mode: TradingMode,
         listener: Listener<TResponse>,
     ) -> EGResult<
         Connector<
