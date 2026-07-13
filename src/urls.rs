@@ -1,25 +1,26 @@
+use serde::{Deserialize, Serialize};
 use strum::Display;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ExchangeUrls {
     name: String,
     http: ExchangeTransportUrls,
     websocket: ExchangeTransportUrls,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ExchangeTransportUrls {
     live: String,
     test: String,
 }
 
-#[derive(Debug, Display, Clone, Copy)]
+#[derive(Debug, Display, Clone, Copy, Serialize, Deserialize)]
 pub enum ExchangeTransportType {
     HTTP,
     WEBSOCKET,
 }
 
-#[derive(Debug, Display, Clone, Copy)]
+#[derive(Debug, Display, Clone, Copy, Serialize, Deserialize)]
 pub enum ExchangeNetType {
     LIVE,
     TEST,
