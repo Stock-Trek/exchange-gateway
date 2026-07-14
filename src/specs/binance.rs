@@ -34,9 +34,9 @@ use exchange_types::binance::{
         BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
 };
+use hashbrown::HashMap;
 use secrecy::SecretString;
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };

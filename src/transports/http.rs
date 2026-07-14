@@ -1,7 +1,8 @@
 use crate::error::EGResult;
 use async_trait::async_trait;
+use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 pub type CreateHttpClient = Arc<dyn Fn(&str) -> HttpClientMarker + Send + Sync>;
 
