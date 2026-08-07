@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 #[allow(unused)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RateLimiterState {
     interval_nanos: u128,
     capacity_per_interval: u32,

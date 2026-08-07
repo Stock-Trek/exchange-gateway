@@ -2,7 +2,10 @@ use crate::{
     error::EGResult,
     functions::ArcTryConvertValue,
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
-    sign::signer::Signer,
+    sign::{
+        convert_signer::ConvertSigner,
+        signer::{Signer, SignerTrait},
+    },
     transports::transport::Transport,
 };
 use std::time::Duration;
@@ -22,7 +25,7 @@ pub struct ConnectorSession<
     #[allow(unused)]
     pub(crate) request_weights: RequestWeights,
     pub(crate) request_to_unsigned: ArcTryConvertValue<TRequest, TUnsignedMessageToExchange>,
-    pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    pub(crate) null_signer: ConvertSigner<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
 }

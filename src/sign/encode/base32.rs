@@ -1,5 +1,6 @@
 use crate::sign::encode::byte_encoder::ByteEncoderTrait;
 
+#[derive(Debug, Clone)]
 pub(crate) struct Base32Encoder;
 
 impl ByteEncoderTrait for Base32Encoder {

@@ -41,15 +41,39 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+
+#[derive(Clone)]
 pub(crate) struct BinanceHttpConnectorCreator<TRequest, TResponse> {
     pub client_creator: CreateHttpClient,
     pub to_unsigned: ArcTryConvertValue<TRequest, BinanceHttpUnsignedRequest>,
     pub to_response: ArcTryConvertValue<BinanceHttpResponse, TResponse>,
 }
+
+#[derive(Clone)]
 pub(crate) struct BinanceWebsocketConnectorCreator<TRequest, TResponse> {
     pub client_creator: CreateWebsocketClient,
     pub to_unsigned: ArcTryConvertValue<TRequest, BinanceWebsocketUnsignedRequest>,
     pub to_response: ArcTryConvertValue<BinanceWebsocketResponse, TResponse>,
+}
+
+impl<TFrom, TTo> std::fmt::Display for BinanceHttpConnectorCreator<TFrom, TTo> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinanceHttpConnectorCreator")
+            .field("client_creator", &"<function>")
+            .field("to_unsigned", &"<function>")
+            .field("to_response", &"<function>")
+            .finish()
+    }
+}
+
+impl<TFrom, TTo> std::fmt::Display for BinanceWebsocketConnectorCreator<TFrom, TTo> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinanceWebsocketConnectorCreator")
+            .field("client_creator", &"<function>")
+            .field("to_unsigned", &"<function>")
+            .field("to_response", &"<function>")
+            .finish()
+    }
 }
 
 impl<TRequest, TResponse>
@@ -108,7 +132,7 @@ where
             TResponse,
         > {
             request_to_unsigned: to_unsigned,
-            null_signer: Box::new(ConvertSigner::new(http_converter)),
+            null_signer: ConvertSigner::new(http_converter),
             transport,
             create_signer_from_credentials: create_http_signer_from_credentials,
             authenticate_legs: Vec::new(),
@@ -173,7 +197,7 @@ where
         let authenticate_legs = vec![authenticate_websocket_leg()];
         Ok(Connector {
             request_to_unsigned: to_unsigned,
-            null_signer: Box::new(ConvertSigner::new(websocket_converter)),
+            null_signer: ConvertSigner::new(websocket_converter),
             transport,
             create_signer_from_credentials: create_websocket_signer_from_credentials,
             authenticate_legs,

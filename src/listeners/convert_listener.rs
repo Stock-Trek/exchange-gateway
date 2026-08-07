@@ -5,6 +5,7 @@ use crate::{
 };
 use async_trait::async_trait;
 
+#[derive(Clone)]
 pub(crate) struct ConvertListener<TFrom, TTo> {
     converter: ArcTryConvertValue<TFrom, TTo>,
     delegate: Listener<TTo>,
@@ -28,5 +29,14 @@ where
     async fn on_message(&self, message: TFrom) -> EGResult<()> {
         let converted = (self.converter)(message)?;
         self.delegate.on_message(converted).await
+    }
+}
+
+impl<TFrom, TTo> std::fmt::Display for ConvertListener<TFrom, TTo> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConvertListener")
+            .field("converter", &"<function>")
+            .field("delegate", &"<Listener>")
+            .finish()
     }
 }

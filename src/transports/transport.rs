@@ -12,6 +12,7 @@ use crate::{
 };
 use std::{sync::Arc, time::Duration};
 
+#[derive(Clone)]
 pub(crate) struct Transport<TMessageToExchange, TMessageFromExchange, TResponse>
 where
     TMessageFromExchange: Send,
@@ -25,6 +26,7 @@ where
     websocket_listener: WebsocketListener<TMessageFromExchange>,
 }
 
+#[derive(Clone)]
 pub(crate) enum TransportClient {
     Http(HttpClientMarker),
     Websocket(WebsocketClientMarker),
@@ -34,6 +36,36 @@ pub(crate) enum TransportClient {
 pub enum TransportMessageDto {
     Http(HttpMessageDto),
     Websocket(WebsocketMessageDto),
+}
+
+impl<TMessageToExchange, TMessageFromExchange, TResponse> std::fmt::Debug
+    for Transport<TMessageToExchange, TMessageFromExchange, TResponse>
+where
+    TMessageFromExchange: Send,
+    TResponse: Send,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transport")
+            .field("transport_client", &self.transport_client)
+            .field("request_to_dto", &"<function>")
+            .field("dto_to_message_from", &"<function>")
+            .field("message_from_to_response", &"<function>")
+            .field("listener", &"<Listener>")
+            .field("websocket_listener", &self.websocket_listener)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for TransportClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match self {
+            Self::Http(..) => "http",
+            Self::Websocket(..) => "websocket",
+        };
+        f.debug_struct("TransportClient")
+            .field("variant", &variant)
+            .finish()
+    }
 }
 
 impl std::fmt::Display for TransportMessageDto {

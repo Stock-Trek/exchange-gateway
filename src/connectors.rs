@@ -16,6 +16,7 @@ use exchange_types::binance::{
     },
 };
 
+#[derive(Debug, Clone)]
 pub struct Connectors;
 
 impl Connectors {

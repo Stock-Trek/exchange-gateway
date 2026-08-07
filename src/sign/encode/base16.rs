@@ -1,6 +1,8 @@
 use crate::sign::encode::byte_encoder::ByteEncoderTrait;
 
+#[derive(Debug, Clone)]
 pub(crate) struct Base16EncoderLower;
+#[derive(Debug, Clone)]
 pub(crate) struct Base16EncoderUpper;
 
 impl ByteEncoderTrait for Base16EncoderLower {

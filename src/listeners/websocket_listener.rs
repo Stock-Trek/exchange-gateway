@@ -12,6 +12,7 @@ use std::{
     task::{Poll, Waker},
 };
 
+#[derive(Clone)]
 pub(crate) struct WebsocketListener<TResponse>
 where
     TResponse: Send,
@@ -19,6 +20,19 @@ where
     converter: ArcTryConvertValue<TransportMessageDto, TResponse>,
     delegate: Listener<TResponse>,
     handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<TResponse>>>>>,
+}
+
+impl<TResponse> std::fmt::Debug for WebsocketListener<TResponse>
+where
+    TResponse: Send,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebsocketListener")
+            .field("converter", &"<function>")
+            .field("delegate", &"<Listener>")
+            .field("handlers", &"<Vec<MessageHandler>>")
+            .finish()
+    }
 }
 
 impl<TResponse> WebsocketListener<TResponse>

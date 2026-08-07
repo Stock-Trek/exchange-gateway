@@ -3,11 +3,15 @@ use crate::{
     error::EGResult,
     functions::{ArcTryConvertValue, TryConvertRef, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
-    sign::signer::Signer,
+    sign::{
+        convert_signer::ConvertSigner,
+        signer::{Signer, SignerTrait},
+    },
     transports::transport::Transport,
 };
 use std::time::Duration;
 
+#[derive(Clone)]
 pub struct Connector<
     TRequest,
     TUnsignedMessageToExchange,
@@ -22,7 +26,7 @@ pub struct Connector<
     pub(crate) rate_limits: RateLimits,
     pub(crate) request_weights: RequestWeights,
     pub(crate) request_to_unsigned: ArcTryConvertValue<TRequest, TUnsignedMessageToExchange>,
-    pub(crate) null_signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
+    pub(crate) null_signer: ConvertSigner<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
         TryConvertRef<TCredentials, Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
@@ -144,6 +148,43 @@ where
     }
 }
 
+impl<
+    TRequest,
+    TUnsignedMessageToExchange,
+    TCredentials,
+    TMessageToExchange,
+    TMessageFromExchange,
+    TResponse,
+> std::fmt::Debug
+    for Connector<
+        TRequest,
+        TUnsignedMessageToExchange,
+        TCredentials,
+        TMessageToExchange,
+        TMessageFromExchange,
+        TResponse,
+    >
+where
+    TMessageFromExchange: Send,
+    TResponse: Send,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connector")
+            .field("rate_limits", &self.rate_limits)
+            .field("request_weights", &self.request_weights)
+            .field("request_to_unsigned", &"<function>")
+            .field("null_signer", &self.null_signer)
+            .field("transport", &self.transport)
+            .field(
+                "create_signer_from_credentials",
+                &self.create_signer_from_credentials,
+            )
+            .field("authenticate_legs", &self.authenticate_legs)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct AuthenticateLeg<
     TUnsignedMessageToExchange,
     TMessageToExchange,
@@ -156,4 +197,17 @@ pub(crate) struct AuthenticateLeg<
         TMessageFromExchange,
         Signer<TUnsignedMessageToExchange, TMessageToExchange>,
     >,
+}
+
+impl<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange> std::fmt::Debug
+    for AuthenticateLeg<TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthenticateLeg")
+            .field("create_auth_message", &self.create_auth_message)
+            .field("timeout", &self.timeout)
+            .field("filter_response", &"<function>")
+            .field("create_signer_from", &self.create_signer_from)
+            .finish()
+    }
 }
