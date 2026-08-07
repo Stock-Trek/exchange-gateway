@@ -12,7 +12,6 @@ use crate::{
 };
 use std::{sync::Arc, time::Duration};
 
-#[derive(Clone)]
 pub(crate) struct Transport<TMessageToExchange, TMessageFromExchange, TResponse>
 where
     TMessageFromExchange: Send,
@@ -26,7 +25,6 @@ where
     websocket_listener: WebsocketListener<TMessageFromExchange>,
 }
 
-#[derive(Clone)]
 pub(crate) enum TransportClient {
     Http(HttpClientMarker),
     Websocket(WebsocketClientMarker),

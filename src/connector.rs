@@ -11,7 +11,6 @@ use crate::{
 };
 use std::time::Duration;
 
-#[derive(Clone)]
 pub struct Connector<
     TRequest,
     TUnsignedMessageToExchange,
