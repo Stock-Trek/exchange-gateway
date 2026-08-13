@@ -28,10 +28,10 @@ use crate::{
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
-    signed::{BinanceParams, BinanceSignature, BinanceUnsignedParams},
+    signed::{BinanceSignature, BinanceSignedParams},
     websocket::{
         BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketResponse, BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
     },
 };
 use hashbrown::HashMap;
@@ -248,7 +248,7 @@ fn create_auth_message() -> BinanceWebsocketUnsignedRequest {
             id,
             method: BinanceWebsocketMethodName::Logon,
         },
-        params: BinanceUnsignedParams::Logon(params),
+        params: BinanceWebsocketUnsignedParams::Logon(params),
     }
 }
 fn create_signer_from_message(
@@ -294,7 +294,7 @@ fn create_http_signer_from_credentials(
         BinanceHttpUnsignedRequest,
         BinanceHttpRequest,
     >::new(
-        unsigned_params_to_bytes,
+        http_unsigned_request_to_bytes,
         data_signer(secret)?,
         ByteEncoding::Base64,
         signature_appender_http(api_key.into()),
@@ -308,19 +308,21 @@ fn create_websocket_signer_from_credentials(
         BinanceWebsocketUnsignedRequest,
         BinanceWebsocketRequest,
     >::new(
-        websocket_unsigned_request_to_bytes,
+        websocket_unsigned_request_params_to_bytes,
         data_signer(secret)?,
         ByteEncoding::Base64,
         signature_appender_websocket(api_key.into()),
     )))
 }
-fn websocket_unsigned_request_to_bytes(
+fn http_unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<Vec<u8>> {
+    Ok(serde_urlencoded::to_string(&request)
+        .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
+        .into_bytes())
+}
+fn websocket_unsigned_request_params_to_bytes(
     request: &BinanceWebsocketUnsignedRequest,
 ) -> EGResult<Vec<u8>> {
-    unsigned_params_to_bytes(&request.params)
-}
-fn unsigned_params_to_bytes(params: &BinanceUnsignedParams) -> EGResult<Vec<u8>> {
-    Ok(serde_urlencoded::to_string(params)
+    Ok(serde_urlencoded::to_string(&request.params)
         .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
         .into_bytes())
 }
@@ -339,7 +341,7 @@ fn websocket_converter(
     unsigned: BinanceWebsocketUnsignedRequest,
 ) -> EGResult<BinanceWebsocketRequest> {
     let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
-    let params = BinanceParams {
+    let params = BinanceSignedParams {
         signature: None,
         params,
     };
@@ -389,7 +391,7 @@ fn signature_appender_websocket(
             apiKey: api_key.to_string(),
             signature,
         });
-        let params = BinanceParams {
+        let params = BinanceSignedParams {
             params: unsigned_params,
             signature,
         };
