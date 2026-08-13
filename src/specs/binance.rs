@@ -315,7 +315,7 @@ fn create_websocket_signer_from_credentials(
     )))
 }
 fn http_unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<Vec<u8>> {
-    Ok(serde_urlencoded::to_string(&request)
+    Ok(serde_urlencoded::to_string(request)
         .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
         .into_bytes())
 }
