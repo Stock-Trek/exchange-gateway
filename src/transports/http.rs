@@ -1,6 +1,7 @@
 use crate::error::EGResult;
 use async_trait::async_trait;
 use hashbrown::HashMap;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, sync::Arc, time::Duration};
 
@@ -17,7 +18,8 @@ pub trait HttpClientTrait<T>: Send + Sync {
     ) -> EGResult<HttpMessageDto<T>>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct HttpMessageDto<T> {
     pub headers: HashMap<String, String>,
     pub body: T,

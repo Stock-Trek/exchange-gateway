@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub(crate) struct MessageSigner<TUnsignedMessage, TSignedMessage> {
-    to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
+    to_bytes: TryConvertRef<TUnsignedMessage, Option<Vec<u8>>>,
     signer: DataSigner,
     byte_encoding: ByteEncoding,
     signature_appender: ArcCombineValues<TUnsignedMessage, Option<String>, TSignedMessage>,
@@ -21,7 +21,7 @@ where
     TSignedMessage: Send + Sync + 'static,
 {
     pub fn new(
-        to_bytes: TryConvertRef<TUnsignedMessage, Vec<u8>>,
+        to_bytes: TryConvertRef<TUnsignedMessage, Option<Vec<u8>>>,
         signer: DataSigner,
         byte_encoding: ByteEncoding,
         signature_appender: ArcCombineValues<TUnsignedMessage, Option<String>, TSignedMessage>,
@@ -43,12 +43,13 @@ where
 {
     fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
         let bytes = (self.to_bytes)(&unsigned)?;
-        let signature = if bytes.is_empty() {
-            None
-        } else {
-            let signature_bytes = self.signer.sign(&bytes)?;
-            let byte_encoder = ByteEncoder::from(self.byte_encoding);
-            Some(byte_encoder.encode(&signature_bytes))
+        let signature = match bytes {
+            Some(bytes) => {
+                let signature_bytes = self.signer.sign(&bytes)?;
+                let byte_encoder = ByteEncoder::from(self.byte_encoding);
+                Some(byte_encoder.encode(&signature_bytes))
+            }
+            None => None,
         };
         Ok((self.signature_appender)(unsigned, signature))
     }

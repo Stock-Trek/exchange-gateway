@@ -1,26 +1,31 @@
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub(crate) struct ExchangeUrls {
     name: String,
     http: ExchangeTransportUrls,
     websocket: ExchangeTransportUrls,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub(crate) struct ExchangeTransportUrls {
     real: String,
     paper: String,
 }
 
-#[derive(Debug, Display, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum ExchangeTransportType {
     Http,
     Websocket,
 }
 
-#[derive(Debug, Display, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Display, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum TradingMode {
     Real,
     Paper,
