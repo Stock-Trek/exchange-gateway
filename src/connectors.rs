@@ -10,9 +10,10 @@ use crate::{
     urls::TradingMode,
 };
 use exchange_types::binance::{
-    http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
+    http::{BinanceHttpBody, BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     websocket::{
-        BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketBody, BinanceWebsocketRequest, BinanceWebsocketResponse,
+        BinanceWebsocketUnsignedRequest,
     },
 };
 
@@ -20,10 +21,10 @@ use exchange_types::binance::{
 pub struct Connectors;
 
 impl Connectors {
-    pub fn binance_http<TTransport, TRequest, TResponse>(
+    pub fn binance_http<TRequest, TResponse>(
         &self,
         trading_mode: TradingMode,
-        client_creator: CreateHttpClient,
+        client_creator: CreateHttpClient<BinanceHttpBody>,
         convert_request: ArcTryConvertValue<TRequest, BinanceHttpUnsignedRequest>,
         convert_response: ArcTryConvertValue<BinanceHttpResponse, TResponse>,
         listener: Listener<TResponse>,
@@ -33,6 +34,7 @@ impl Connectors {
             BinanceHttpUnsignedRequest,
             ApiKeyCredentials,
             BinanceHttpRequest,
+            BinanceHttpBody,
             BinanceHttpResponse,
             TResponse,
         >,
@@ -51,7 +53,7 @@ impl Connectors {
     pub fn binance_websocket<TRequest, TResponse>(
         &self,
         trading_mode: TradingMode,
-        client_creator: CreateWebsocketClient,
+        client_creator: CreateWebsocketClient<BinanceWebsocketBody>,
         convert_request: ArcTryConvertValue<TRequest, BinanceWebsocketUnsignedRequest>,
         convert_response: ArcTryConvertValue<BinanceWebsocketResponse, TResponse>,
         listener: Listener<TResponse>,
@@ -61,6 +63,7 @@ impl Connectors {
             BinanceWebsocketUnsignedRequest,
             ApiKeyCredentials,
             BinanceWebsocketRequest,
+            BinanceWebsocketBody,
             BinanceWebsocketResponse,
             TResponse,
         >,

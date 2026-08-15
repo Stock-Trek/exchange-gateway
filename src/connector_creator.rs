@@ -7,6 +7,7 @@ pub(crate) trait ConnectorCreatorTrait<
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
+    TTransportBody,
     TMessageFromExchange,
     TResponse,
 > where
@@ -23,6 +24,7 @@ pub(crate) trait ConnectorCreatorTrait<
             TUnsignedMessageToExchange,
             TCredentials,
             TMessageToExchange,
+            TTransportBody,
             TMessageFromExchange,
             TResponse,
         >,

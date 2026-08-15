@@ -1,11 +1,13 @@
-use crate::transports::transport::TransportMessageDto;
+use crate::transports::transport::TransportType;
 
 pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EGError {
-    #[error("Received bad response from exchange: {0}")]
-    BadResponse(TransportMessageDto),
+    #[error("Received response from incorrect transport type: {0}")]
+    BadTransportType(TransportType),
+    #[error("Received request instead of response from exchange")]
+    ReceivedRequestInsteadOfResponse,
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("Crypto key error: {0}")]

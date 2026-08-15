@@ -14,6 +14,7 @@ pub struct ConnectorSession<
     TRequest,
     TUnsignedMessageToExchange,
     TMessageToExchange,
+    TTransportBody,
     TMessageFromExchange,
     TResponse,
 > where
@@ -27,14 +28,23 @@ pub struct ConnectorSession<
     pub(crate) request_to_unsigned: ArcTryConvertValue<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: ConvertSigner<TUnsignedMessageToExchange, TMessageToExchange>,
     pub(crate) signer: Signer<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
+    pub(crate) transport:
+        Transport<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse>,
 }
 
-impl<TRequest, TUnsignedMessageToExchange, TMessageToExchange, TMessageFromExchange, TResponse>
+impl<
+    TRequest,
+    TUnsignedMessageToExchange,
+    TTransportBody,
+    TMessageToExchange,
+    TMessageFromExchange,
+    TResponse,
+>
     ConnectorSession<
         TRequest,
         TUnsignedMessageToExchange,
         TMessageToExchange,
+        TTransportBody,
         TMessageFromExchange,
         TResponse,
     >

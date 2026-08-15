@@ -10,34 +10,42 @@ use crate::{
         websocket::{WebsocketClientMarker, WebsocketMessageDto},
     },
 };
-use std::{sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
+use strum::Display;
 
-pub(crate) struct Transport<TMessageToExchange, TMessageFromExchange, TResponse>
+pub(crate) struct Transport<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse>
 where
     TMessageFromExchange: Send,
     TResponse: Send,
 {
-    transport_client: TransportClient,
-    request_to_dto: ArcTryConvertValue<TMessageToExchange, TransportMessageDto>,
-    dto_to_message_from: ArcTryConvertValue<TransportMessageDto, TMessageFromExchange>,
+    transport_client: TransportClient<TTransportBody>,
+    request_to_dto: ArcTryConvertValue<TMessageToExchange, TransportMessageDto<TTransportBody>>,
+    dto_to_message_from:
+        ArcTryConvertValue<TransportMessageDto<TTransportBody>, TMessageFromExchange>,
     message_from_to_response: ArcTryConvertValue<TMessageFromExchange, TResponse>,
     listener: Listener<TResponse>,
-    websocket_listener: WebsocketListener<TMessageFromExchange>,
+    websocket_listener: WebsocketListener<TTransportBody, TMessageFromExchange>,
 }
 
-pub(crate) enum TransportClient {
-    Http(HttpClientMarker),
-    Websocket(WebsocketClientMarker),
+#[derive(Debug, Display, Clone, Copy)]
+pub enum TransportType {
+    Http,
+    Websocket,
+}
+
+pub(crate) enum TransportClient<T> {
+    Http(HttpClientMarker<T>),
+    Websocket(WebsocketClientMarker<T>),
 }
 
 #[derive(Debug, Clone)]
-pub enum TransportMessageDto {
-    Http(HttpMessageDto),
-    Websocket(WebsocketMessageDto),
+pub enum TransportMessageDto<T> {
+    Http(HttpMessageDto<T>),
+    Websocket(WebsocketMessageDto<T>),
 }
 
-impl<TMessageToExchange, TMessageFromExchange, TResponse> std::fmt::Debug
-    for Transport<TMessageToExchange, TMessageFromExchange, TResponse>
+impl<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse> std::fmt::Debug
+    for Transport<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse>
 where
     TMessageFromExchange: Send,
     TResponse: Send,
@@ -54,7 +62,16 @@ where
     }
 }
 
-impl std::fmt::Debug for TransportClient {
+impl<T> TransportClient<T> {
+    pub fn transport_type(&self) -> TransportType {
+        match self {
+            Self::Http(..) => TransportType::Http,
+            Self::Websocket(..) => TransportType::Websocket,
+        }
+    }
+}
+
+impl<TTransportBody> std::fmt::Debug for TransportClient<TTransportBody> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let variant = match self {
             Self::Http(..) => "http",
@@ -66,7 +83,10 @@ impl std::fmt::Debug for TransportClient {
     }
 }
 
-impl std::fmt::Display for TransportMessageDto {
+impl<TTransportBody> std::fmt::Display for TransportMessageDto<TTransportBody>
+where
+    TTransportBody: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Http(http) => http.fmt(f),
@@ -75,29 +95,38 @@ impl std::fmt::Display for TransportMessageDto {
     }
 }
 
-pub(crate) fn filter_http_dto(dto: TransportMessageDto) -> EGResult<HttpMessageDto> {
+pub(crate) fn filter_http_dto<TTransportBody>(
+    dto: TransportMessageDto<TTransportBody>,
+) -> EGResult<HttpMessageDto<TTransportBody>> {
     match dto {
         TransportMessageDto::Http(http_message_dto) => Ok(http_message_dto),
-        TransportMessageDto::Websocket(_) => Err(EGError::BadResponse(dto)),
+        TransportMessageDto::Websocket(_) => {
+            Err(EGError::BadTransportType(TransportType::Websocket))
+        }
     }
 }
-pub(crate) fn filter_websocket_dto(dto: TransportMessageDto) -> EGResult<WebsocketMessageDto> {
+pub(crate) fn filter_websocket_dto<TTransportBody>(
+    dto: TransportMessageDto<TTransportBody>,
+) -> EGResult<WebsocketMessageDto<TTransportBody>> {
     match dto {
         TransportMessageDto::Websocket(websocket_message_dto) => Ok(websocket_message_dto),
-        TransportMessageDto::Http(_) => Err(EGError::BadResponse(dto)),
+        TransportMessageDto::Http(_) => Err(EGError::BadTransportType(TransportType::Http)),
     }
 }
 
-impl<TMessageToExchange, TMessageFromExchange, TResponse>
-    Transport<TMessageToExchange, TMessageFromExchange, TResponse>
+impl<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse>
+    Transport<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse>
 where
     TMessageFromExchange: Send + Sync + 'static,
     TResponse: Send + Sync + 'static,
 {
     pub fn new(
-        transport_client: TransportClient,
-        request_to_dto: ArcTryConvertValue<TMessageToExchange, TransportMessageDto>,
-        dto_to_message_from: ArcTryConvertValue<TransportMessageDto, TMessageFromExchange>,
+        transport_client: TransportClient<TTransportBody>,
+        request_to_dto: ArcTryConvertValue<TMessageToExchange, TransportMessageDto<TTransportBody>>,
+        dto_to_message_from: ArcTryConvertValue<
+            TransportMessageDto<TTransportBody>,
+            TMessageFromExchange,
+        >,
         message_from_to_response: ArcTryConvertValue<TMessageFromExchange, TResponse>,
         listener: Listener<TResponse>,
     ) -> Self {
@@ -145,7 +174,7 @@ where
             (TransportClient::Websocket(client), TransportMessageDto::Websocket(dto)) => {
                 client.send_message(dto, timeout).await
             }
-            (_, dto) => Err(crate::error::EGError::BadResponse(dto)),
+            (client, _) => Err(EGError::BadTransportType(client.transport_type())),
         }
     }
     pub async fn send_and_wait_for_message_from<TFiltered>(
@@ -171,7 +200,7 @@ where
                     .wait_for_converted_response(converter)
                     .await
             }
-            (_, dto) => Err(EGError::BadResponse(dto)),
+            (client, _) => Err(EGError::BadTransportType(client.transport_type())),
         }
     }
     pub async fn send_and_wait_for_response<TFiltered>(
@@ -200,7 +229,7 @@ where
                     .wait_for_converted_response(response_converter)
                     .await
             }
-            (_, dto) => Err(EGError::BadResponse(dto)),
+            (client, _) => Err(EGError::BadTransportType(client.transport_type())),
         }
     }
 }

@@ -13,16 +13,16 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct WebsocketListener<TResponse>
+pub(crate) struct WebsocketListener<TTransportBody, TResponse>
 where
     TResponse: Send,
 {
-    converter: ArcTryConvertValue<TransportMessageDto, TResponse>,
+    converter: ArcTryConvertValue<TransportMessageDto<TTransportBody>, TResponse>,
     delegate: Listener<TResponse>,
     handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<TResponse>>>>>,
 }
 
-impl<TResponse> std::fmt::Debug for WebsocketListener<TResponse>
+impl<TTransportBody, TResponse> std::fmt::Debug for WebsocketListener<TTransportBody, TResponse>
 where
     TResponse: Send,
 {
@@ -35,12 +35,12 @@ where
     }
 }
 
-impl<TResponse> WebsocketListener<TResponse>
+impl<TTransportBody, TResponse> WebsocketListener<TTransportBody, TResponse>
 where
     TResponse: Send + Sync + 'static,
 {
     pub fn new(
-        converter: ArcTryConvertValue<TransportMessageDto, TResponse>,
+        converter: ArcTryConvertValue<TransportMessageDto<TTransportBody>, TResponse>,
         delegate: Listener<TResponse>,
     ) -> Self {
         Self {
@@ -90,11 +90,13 @@ where
 }
 
 #[async_trait]
-impl<TResponse> ListenerTrait<TransportMessageDto> for WebsocketListener<TResponse>
+impl<TTransportBody, TResponse> ListenerTrait<TransportMessageDto<TTransportBody>>
+    for WebsocketListener<TTransportBody, TResponse>
 where
+    TTransportBody: Send,
     TResponse: Clone + Send,
 {
-    async fn on_message(&self, message: TransportMessageDto) -> EGResult<()> {
+    async fn on_message(&self, message: TransportMessageDto<TTransportBody>) -> EGResult<()> {
         let response = (self.converter)(message)?;
         {
             let mut guard = self.handlers.lock().unwrap();

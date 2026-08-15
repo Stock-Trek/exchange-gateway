@@ -16,6 +16,7 @@ pub struct Connector<
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
+    TTransportBody,
     TMessageFromExchange,
     TResponse,
 > where
@@ -26,7 +27,8 @@ pub struct Connector<
     pub(crate) request_weights: RequestWeights,
     pub(crate) request_to_unsigned: ArcTryConvertValue<TRequest, TUnsignedMessageToExchange>,
     pub(crate) null_signer: ConvertSigner<TUnsignedMessageToExchange, TMessageToExchange>,
-    pub(crate) transport: Transport<TMessageToExchange, TMessageFromExchange, TResponse>,
+    pub(crate) transport:
+        Transport<TMessageToExchange, TTransportBody, TMessageFromExchange, TResponse>,
     pub(crate) create_signer_from_credentials:
         TryConvertRef<TCredentials, Signer<TUnsignedMessageToExchange, TMessageToExchange>>,
     pub(crate) authenticate_legs:
@@ -38,6 +40,7 @@ impl<
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
+    TTransportBody,
     TMessageFromExchange,
     TResponse,
 >
@@ -46,6 +49,7 @@ impl<
         TUnsignedMessageToExchange,
         TCredentials,
         TMessageToExchange,
+        TTransportBody,
         TMessageFromExchange,
         TResponse,
     >
@@ -109,6 +113,7 @@ where
             TRequest,
             TUnsignedMessageToExchange,
             TMessageToExchange,
+            TTransportBody,
             TMessageFromExchange,
             TResponse,
         >,
@@ -152,6 +157,7 @@ impl<
     TUnsignedMessageToExchange,
     TCredentials,
     TMessageToExchange,
+    TTransportBody,
     TMessageFromExchange,
     TResponse,
 > std::fmt::Debug
@@ -160,6 +166,7 @@ impl<
         TUnsignedMessageToExchange,
         TCredentials,
         TMessageToExchange,
+        TTransportBody,
         TMessageFromExchange,
         TResponse,
     >
