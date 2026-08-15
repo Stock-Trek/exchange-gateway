@@ -1,5 +1,6 @@
 use crate::{error::EGResult, listeners::listener::Listener};
 use async_trait::async_trait;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, sync::Arc, time::Duration};
 
@@ -20,7 +21,8 @@ pub trait WebsocketClientTrait<T>: Send + Sync {
     async fn disconnect(&self) -> EGResult<()>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct WebsocketMessageDto<T> {
     pub body: T,
 }
