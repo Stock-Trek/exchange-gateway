@@ -325,17 +325,25 @@ fn create_websocket_signer_from_credentials(
         signature_appender_websocket(api_key.into()),
     )))
 }
-fn http_unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<Vec<u8>> {
-    Ok(serde_urlencoded::to_string(request)
-        .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
-        .into_bytes())
+fn http_unsigned_request_to_bytes(
+    request: &BinanceHttpUnsignedRequest,
+) -> EGResult<Option<Vec<u8>>> {
+    Ok(match request {
+        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        _ => None,
+    })
 }
 fn websocket_unsigned_request_params_to_bytes(
     request: &BinanceWebsocketUnsignedRequest,
-) -> EGResult<Vec<u8>> {
-    Ok(serde_urlencoded::to_string(&request.params)
-        .map_err(|e| EGError::SerdeUrlencoded(format!("Failed to URL-encode params: {e}")))?
-        .into_bytes())
+) -> EGResult<Option<Vec<u8>>> {
+    Ok(match &request.params {
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        _ => None,
+    })
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::Ed25519.signer(secret)
