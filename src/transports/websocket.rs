@@ -5,8 +5,6 @@ use crate::{
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 
 #[async_trait]
