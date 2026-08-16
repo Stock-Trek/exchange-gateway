@@ -8,7 +8,6 @@ use crate::{
 use secrecy::{ExposeSecret, SecretSlice, SecretString};
 use strum::Display;
 
-#[allow(unused)]
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SigningAlgorithm {
     EcdsaP256,

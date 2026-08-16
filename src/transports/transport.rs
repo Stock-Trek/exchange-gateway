@@ -18,8 +18,6 @@ pub(crate) trait TransportTrait<EGReq, TransportReq, TransportRes, EGRes> {
     async fn connect(&self) -> EGResult<()>;
     fn is_connected(&self) -> bool;
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()>;
-    #[allow(unused)]
-    async fn send_and_wait(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes>;
     async fn send_and_wait_for(
         &self,
         request: EGReq,
@@ -65,12 +63,6 @@ where
         match self {
             Self::Http(transport) => transport.fire_and_forget(request, timeout).await,
             Self::Websocket(transport) => transport.fire_and_forget(request, timeout).await,
-        }
-    }
-    async fn send_and_wait(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
-        match self {
-            Self::Http(transport) => transport.send_and_wait(request, timeout).await,
-            Self::Websocket(transport) => transport.send_and_wait(request, timeout).await,
         }
     }
     async fn send_and_wait_for(

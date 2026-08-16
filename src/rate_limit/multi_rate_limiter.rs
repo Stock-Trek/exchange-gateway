@@ -1,13 +1,11 @@
 use crate::rate_limit::{rate_limit_config::RateLimitConfig, rate_limiter_state::RateLimiterState};
 use std::sync::{Arc, Mutex};
 
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) struct MultiRateLimiter {
     rate_limiters: Arc<Mutex<Vec<RateLimiterState>>>,
 }
 
-#[allow(unused)]
 impl MultiRateLimiter {
     pub fn new(rate_limits: Vec<RateLimitConfig>) -> Self {
         Self {
@@ -16,6 +14,7 @@ impl MultiRateLimiter {
             )),
         }
     }
+    #[allow(unused)]
     #[must_use]
     pub fn did_acquire(&self, cost: u32) -> bool {
         let mut limiters_guard = self.rate_limiters.lock().unwrap();
