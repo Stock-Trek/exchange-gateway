@@ -1,37 +1,117 @@
-use crate::{error::EGResult, listeners::listener::Listener};
+use crate::{
+    error::EGResult,
+    functions::{ArcPredicate, TryConvertValue},
+    listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
+    transports::transport::TransportTrait,
+};
 use async_trait::async_trait;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::{fmt::Display, sync::Arc, time::Duration};
-
-pub type CreateWebsocketClient<T> =
-    Arc<dyn Fn(&str, Listener<WebsocketMessageDto<T>>) -> WebsocketClientMarker<T> + Send + Sync>;
-
-pub type WebsocketClientMarker<T> = Arc<dyn WebsocketClientTrait<T>>;
+use std::{sync::Arc, time::Duration};
 
 #[async_trait]
-pub trait WebsocketClientTrait<T>: Send + Sync {
+pub trait WebsocketClientTrait: Send + Sync {
+    type TransportReq;
+    type TransportRes;
+
     async fn connect(&self) -> EGResult<()>;
-    async fn send_message(
-        &self,
-        message: WebsocketMessageDto<T>,
-        timeout: Duration,
-    ) -> EGResult<()>;
     fn is_connected(&self) -> bool;
+    async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()>;
+    async fn on_message(&self, message: Self::TransportRes) -> EGResult<()>;
     async fn disconnect(&self) -> EGResult<()>;
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct WebsocketMessageDto<T> {
-    pub body: T,
+pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes> {
+    client: Arc<dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
+    convert_request: TryConvertValue<EGReq, TransportReq>,
+    convert_response: TryConvertValue<TransportRes, EGRes>,
+    #[allow(unused)]
+    listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+    websocket_listener: WebsocketListener<TransportRes, EGRes>,
 }
 
-impl<T> std::fmt::Display for WebsocketMessageDto<T>
+#[async_trait]
+impl<EGReq, TransportReq, TransportRes, EGRes>
+    TransportTrait<EGReq, TransportReq, TransportRes, EGRes>
+    for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
 where
-    T: Display,
+    EGReq: Send,
+    EGRes: Send + Sync + 'static,
+{
+    fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
+        (self.convert_request)(request)
+    }
+    fn try_convert_response(&self, response: TransportRes) -> EGResult<EGRes> {
+        (self.convert_response)(response)
+    }
+    async fn connect(&self) -> EGResult<()> {
+        self.client.connect().await
+    }
+    fn is_connected(&self) -> bool {
+        self.client.is_connected()
+    }
+    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
+        let transport_req = self.try_convert_request(request)?;
+        self.client.send_message(transport_req, timeout).await?;
+        Ok(())
+    }
+    async fn send_and_wait(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
+        let transport_req = self.try_convert_request(request)?;
+        self.client.send_message(transport_req, timeout).await?;
+        self.websocket_listener.wait_for_response().await
+    }
+    async fn send_and_wait_for(
+        &self,
+        request: EGReq,
+        timeout: Duration,
+        filter: ArcPredicate<EGRes>,
+    ) -> EGResult<EGRes> {
+        let transport_req = self.try_convert_request(request)?;
+        self.client.send_message(transport_req, timeout).await?;
+        self.websocket_listener
+            .wait_for_filtered_response(filter)
+            .await
+    }
+    async fn disconnect(&self) -> EGResult<()> {
+        self.client.disconnect().await
+    }
+}
+
+impl<EGReq, TransportReq, TransportRes, EGRes>
+    WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
+where
+    EGRes: Send + Sync + 'static,
+    TransportRes: 'static,
+{
+    pub fn new(
+        client: Arc<
+            dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>,
+        >,
+        convert_request: TryConvertValue<EGReq, TransportReq>,
+        convert_response: TryConvertValue<TransportRes, EGRes>,
+        listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+    ) -> Self {
+        let websocket_listener = WebsocketListener::new(convert_response, listener.clone());
+        Self {
+            client,
+            convert_request,
+            convert_response,
+            listener,
+            websocket_listener,
+        }
+    }
+}
+
+impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
+    for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "WebsocketMessageDto( body: {} )", self.body)
+        f.debug_struct("WebsocketTransport")
+            .field("client", &"<HttpClientTrait>")
+            .field("convert_request", &self.convert_request)
+            .field("convert_response", &self.convert_response)
+            .field("listener", &"<Listener>")
+            .field("websocket_listener", &self.websocket_listener)
+            .finish()
     }
 }

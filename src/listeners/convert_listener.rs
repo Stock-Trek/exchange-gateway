@@ -1,18 +1,18 @@
-use crate::{
-    error::EGResult,
-    functions::ArcTryConvertValue,
-    listeners::listener::{Listener, ListenerTrait},
-};
+use crate::{error::EGResult, functions::ArcTryConvertValue, listeners::listener::ListenerTrait};
 use async_trait::async_trait;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct ConvertListener<TFrom, TTo> {
     converter: ArcTryConvertValue<TFrom, TTo>,
-    delegate: Listener<TTo>,
+    delegate: Arc<dyn ListenerTrait<TMessage = TTo>>,
 }
 
 impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
-    pub fn new(converter: ArcTryConvertValue<TFrom, TTo>, delegate: Listener<TTo>) -> Self {
+    pub fn new(
+        converter: ArcTryConvertValue<TFrom, TTo>,
+        delegate: Arc<dyn ListenerTrait<TMessage = TTo>>,
+    ) -> Self {
         Self {
             converter,
             delegate,
@@ -21,11 +21,13 @@ impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
 }
 
 #[async_trait]
-impl<TFrom, TTo> ListenerTrait<TFrom> for ConvertListener<TFrom, TTo>
+impl<TFrom, TTo> ListenerTrait for ConvertListener<TFrom, TTo>
 where
     TFrom: Send,
     TTo: Send,
 {
+    type TMessage = TFrom;
+
     async fn on_message(&self, message: TFrom) -> EGResult<()> {
         let converted = (self.converter)(message)?;
         self.delegate.on_message(converted).await

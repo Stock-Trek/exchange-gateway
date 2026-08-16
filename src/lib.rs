@@ -1,7 +1,7 @@
+pub mod authenticate_leg;
+pub mod connect;
 pub mod connector;
-pub mod connector_creator;
-pub mod connector_session;
-pub mod connectors;
+pub mod connector_impl;
 pub mod credentials;
 pub mod error;
 pub mod functions;
@@ -14,20 +14,13 @@ pub mod urls;
 
 pub mod prelude {
     pub use crate::{
-        connector::Connector,
-        connector_session::ConnectorSession,
-        connectors::Connectors,
+        connect::Connect,
+        connector_impl::ConnectorImpl,
         credentials::{api_key_credential::ApiKeyCredentials, jwt_credential::JwtCredentials},
         error::{EGError, EGResult},
         functions::ArcTryConvertValue,
-        listeners::listener::{Listener, ListenerTrait},
-        transports::{
-            http::{CreateHttpClient, HttpClientMarker, HttpClientTrait, HttpMessageDto},
-            websocket::{
-                CreateWebsocketClient, WebsocketClientMarker, WebsocketClientTrait,
-                WebsocketMessageDto,
-            },
-        },
+        listeners::listener::ListenerTrait,
+        transports::{http::HttpClientTrait, websocket::WebsocketClientTrait},
         urls::TradingMode,
     };
 }

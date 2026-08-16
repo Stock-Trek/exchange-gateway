@@ -1,8 +1,7 @@
 use crate::{
     error::EGResult,
-    functions::ArcTryConvertValue,
-    listeners::listener::{Listener, ListenerTrait},
-    transports::transport::TransportMessageDto,
+    functions::{ArcPredicate, ArcTryConvertValue},
+    listeners::listener::ListenerTrait,
 };
 use async_trait::async_trait;
 use std::{
@@ -13,62 +12,43 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct WebsocketListener<TTransportBody, TResponse>
-where
-    TResponse: Send,
-{
-    converter: ArcTryConvertValue<TransportMessageDto<TTransportBody>, TResponse>,
-    delegate: Listener<TResponse>,
-    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<TResponse>>>>>,
+pub(crate) struct WebsocketListener<TransportRes, EGRes> {
+    converter: ArcTryConvertValue<TransportRes, EGRes>,
+    delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
 }
 
-impl<TTransportBody, TResponse> std::fmt::Debug for WebsocketListener<TTransportBody, TResponse>
-where
-    TResponse: Send,
-{
+impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EGRes> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebsocketListener")
-            .field("converter", &"<function>")
+            .field("converter", &"<Converter>")
             .field("delegate", &"<Listener>")
             .field("handlers", &"<Vec<MessageHandler>>")
             .finish()
     }
 }
 
-impl<TTransportBody, TResponse> WebsocketListener<TTransportBody, TResponse>
+impl<TransportRes, EGRes> WebsocketListener<TransportRes, EGRes>
 where
-    TResponse: Send + Sync + 'static,
+    EGRes: Send + Sync + 'static,
 {
     pub fn new(
-        converter: ArcTryConvertValue<TransportMessageDto<TTransportBody>, TResponse>,
-        delegate: Listener<TResponse>,
+        converter: impl Fn(TransportRes) -> EGResult<EGRes> + Send + Sync + 'static,
+        delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     ) -> Self {
         Self {
-            converter,
+            converter: Arc::new(converter),
             delegate,
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
-
-    #[allow(unused)]
-    pub async fn wait_for_response(&self) -> EGResult<TResponse> {
-        self.wait_for_converted_response(Arc::new(|msg| Ok(msg)))
-            .await
+    pub async fn wait_for_response(&self) -> EGResult<EGRes> {
+        self.wait_for_filtered_response(Arc::new(|_| true)).await
     }
-
-    pub async fn wait_for_converted_response<TConvertedResponse>(
-        &self,
-        converter: ArcTryConvertValue<TResponse, TConvertedResponse>,
-    ) -> EGResult<TConvertedResponse>
-    where
-        TConvertedResponse: Send + 'static,
-    {
-        let waiter_state = Arc::new(Mutex::new(WaiterState {
-            converted_response: None,
-            waker: None,
-        }));
+    pub async fn wait_for_filtered_response(&self, filter: ArcPredicate<EGRes>) -> EGResult<EGRes> {
+        let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {
-            converter,
+            filter,
             state: waiter_state.clone(),
             _phantom_response: PhantomData,
         });
@@ -78,7 +58,7 @@ where
         }
         poll_fn(|cx| {
             let mut guard = waiter_state.lock().unwrap();
-            if let Some(msg) = guard.converted_response.take() {
+            if let Some(msg) = guard.filtered_response.take() {
                 Poll::Ready(Ok(msg))
             } else {
                 guard.waker = Some(cx.waker().clone());
@@ -90,13 +70,14 @@ where
 }
 
 #[async_trait]
-impl<TTransportBody, TResponse> ListenerTrait<TransportMessageDto<TTransportBody>>
-    for WebsocketListener<TTransportBody, TResponse>
+impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
 where
-    TTransportBody: Send,
-    TResponse: Clone + Send,
+    EGRes: Clone + Send,
+    TransportRes: Send,
 {
-    async fn on_message(&self, message: TransportMessageDto<TTransportBody>) -> EGResult<()> {
+    type TMessage = TransportRes;
+
+    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
         let response = (self.converter)(message)?;
         {
             let mut guard = self.handlers.lock().unwrap();
@@ -112,48 +93,49 @@ where
     }
 }
 
-trait MessageHandler<TResponse>: Send + Sync
+trait MessageHandler<EGRes>: Send + Sync
 where
-    TResponse: Send,
+    EGRes: Send,
 {
-    fn handle(self: Arc<Self>, response: TResponse) -> bool;
+    fn handle(self: Arc<Self>, response: EGRes) -> bool;
 }
 
-impl<TResponse, TConvertedResponse> MessageHandler<TResponse>
-    for WaitEntry<TResponse, TConvertedResponse>
+impl<TResponse> MessageHandler<TResponse> for WaitEntry<TResponse>
 where
     TResponse: Send + Sync,
-    TConvertedResponse: Send,
 {
     fn handle(self: Arc<Self>, response: TResponse) -> bool {
-        match (self.converter)(response) {
-            Err(_) => false,
-            Ok(converted_response) => {
-                let mut state = self.state.lock().unwrap();
-                state.converted_response = Some(converted_response);
-                if let Some(waker) = state.waker.take() {
-                    waker.wake();
-                }
-                true
+        let is_handled = (self.filter)(&response);
+        if is_handled {
+            let mut state = self.state.lock().unwrap();
+            state.filtered_response = Some(response);
+            if let Some(waker) = state.waker.take() {
+                waker.wake();
             }
         }
+        is_handled
     }
 }
 
-struct WaitEntry<TResponse, TConvertedResponse>
-where
-    TResponse: Send,
-    TConvertedResponse: Send,
-{
-    converter: ArcTryConvertValue<TResponse, TConvertedResponse>,
-    state: Arc<Mutex<WaiterState<TConvertedResponse>>>,
+struct WaitEntry<TResponse> {
+    filter: ArcPredicate<TResponse>,
+    state: Arc<Mutex<WaiterState<TResponse>>>,
     _phantom_response: PhantomData<TResponse>,
 }
 
-struct WaiterState<TConvertedResponse>
-where
-    TConvertedResponse: Send,
-{
-    converted_response: Option<TConvertedResponse>,
+struct WaiterState<EGRes> {
+    filtered_response: Option<EGRes>,
     waker: Option<Waker>,
+}
+
+impl<EGRes> Default for WaiterState<EGRes>
+where
+    EGRes: Send,
+{
+    fn default() -> Self {
+        Self {
+            filtered_response: None,
+            waker: None,
+        }
+    }
 }
