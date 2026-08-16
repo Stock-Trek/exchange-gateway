@@ -43,6 +43,7 @@ use std::{
 };
 use uuid::Uuid;
 
+#[allow(clippy::too_many_arguments)]
 pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
     trading_mode: TradingMode,
     create_client: impl Fn(&str) -> TClient,
@@ -72,14 +73,10 @@ where
         to_binance_response,
         response_listener,
     );
-    let signer = Arc::new(Mutex::new(if let Some(credentials) = &credentials {
-        Some(
-            create_http_signer_from_credentials(credentials)
-                .expect("Failed to create signer from credentials"),
-        )
-    } else {
-        None
-    }));
+    let signer = Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
+        create_http_signer_from_credentials(credentials)
+            .expect("Failed to create signer from credentials")
+    })));
     ConnectorImpl {
         rate_limits: rate_limits(),
         request_weights: request_weights(),
@@ -92,6 +89,7 @@ where
         signer,
     }
 }
+#[allow(clippy::too_many_arguments)]
 pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
     trading_mode: TradingMode,
     create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>) -> TClient,
@@ -135,14 +133,10 @@ where
     } else {
         (
             vec![],
-            Arc::new(Mutex::new(if let Some(credentials) = &credentials {
-                Some(
-                    create_websocket_signer_from_credentials(credentials)
-                        .expect("Failed to create signer from credentials"),
-                )
-            } else {
-                None
-            })),
+            Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
+                create_websocket_signer_from_credentials(credentials)
+                    .expect("Failed to create signer from credentials")
+            }))),
         )
     };
     ConnectorImpl {

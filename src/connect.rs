@@ -13,6 +13,7 @@ use std::sync::Arc;
 pub struct Connect;
 
 impl Connect {
+    #[allow(clippy::too_many_arguments)]
     pub fn binance_websocket<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
         &self,
         trading_mode: TradingMode,

@@ -68,7 +68,7 @@ where
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
         if let Some(credentials) = &self.credentials {
-            let mut signer = (self.create_signer)(&credentials)?;
+            let mut signer = (self.create_signer)(credentials)?;
             for leg in &self.authenticate_legs {
                 let auth_message = (leg.create_auth_message)();
                 let signed_auth_message = signer.sign(auth_message)?;
