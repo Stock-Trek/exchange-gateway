@@ -175,7 +175,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     let id = Arc::new(id());
     let create_auth_message = {
         let id = id.clone();
-        Arc::new(move || create_auth_message_with_id(&id))
+        Arc::new(move || create_auth_message(&id))
     };
     let filter = {
         let id = id.clone();
@@ -188,7 +188,7 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
         timeout,
     }
 }
-fn create_auth_message_with_id(id: &str) -> BinanceWebsocketUnsignedRequest {
+fn create_auth_message(id: &str) -> BinanceWebsocketUnsignedRequest {
     let timestamp: i64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Negative time since epoch")
