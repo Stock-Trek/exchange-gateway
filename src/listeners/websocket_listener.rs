@@ -5,7 +5,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    marker::PhantomData,
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -52,23 +51,20 @@ where
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<WaiterForResponse<EGRes>> {
         let handler_id = self.next_handler_id.fetch_add(1, Ordering::Relaxed);
-        let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
+        let state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {
+            state: state.clone(),
             filter,
-            state: waiter_state.clone(),
             handler_id,
-            _phantom_response: PhantomData,
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
             guard.push(entry);
         }
         Ok(WaiterForResponse {
-            state: waiter_state,
-            deregister: DeregisterGuard {
-                handlers: self.handlers.clone(),
-                handler_id,
-            },
+            state,
+            handlers: self.handlers.clone(),
+            handler_id,
         })
     }
 }
@@ -78,8 +74,8 @@ where
     EGRes: Send,
 {
     state: Arc<Mutex<WaiterState<EGRes>>>,
-    #[allow(dead_code)]
-    deregister: DeregisterGuard<EGRes>,
+    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
+    handler_id: u64,
 }
 
 impl<EGRes> Future for WaiterForResponse<EGRes>
@@ -102,26 +98,15 @@ where
     }
 }
 
-struct DeregisterGuard<EGRes>
-where
-    EGRes: Send,
-{
-    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
-    handler_id: u64,
-}
-
-impl<EGRes> Drop for DeregisterGuard<EGRes>
+impl<EGRes> Drop for WaiterForResponse<EGRes>
 where
     EGRes: Send,
 {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.handlers.lock()
-            && let Some(index) = guard
-                .iter()
-                .position(|handler| handler.id() == self.handler_id)
-        {
-            guard.swap_remove(index);
-        }
+        let _ = remove_handler(
+            &self.handlers,
+            |handler| Ok(handler.id() == self.handler_id),
+        );
     }
 }
 
@@ -135,21 +120,35 @@ where
 
     async fn on_message(&self, message: TransportRes) -> EGResult<()> {
         let response = (self.converter)(message)?;
-        {
-            let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-            let mut handler_index = None;
-            for (index, handler) in guard.iter().enumerate() {
-                if handler.clone().handle(response.clone())? {
-                    handler_index = Some(index);
-                    break;
-                }
-            }
-            if let Some(index) = handler_index {
-                guard.swap_remove(index);
-                return Ok(());
-            }
+        if remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone())
+        })? {
+            return Ok(());
         }
         self.delegate.on_message(response).await
+    }
+}
+
+fn remove_handler<EGRes>(
+    handlers: &Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>,
+    mut predicate: impl FnMut(&Arc<dyn MessageHandler<EGRes>>) -> EGResult<bool>,
+) -> EGResult<bool>
+where
+    EGRes: Send,
+{
+    let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
+    let mut handler_index = None;
+    for (index, handler) in guard.iter().enumerate() {
+        if predicate(handler)? {
+            handler_index = Some(index);
+            break;
+        }
+    }
+    if let Some(index) = handler_index {
+        guard.swap_remove(index);
+        Ok(true)
+    } else {
+        Ok(false)
     }
 }
 
@@ -181,11 +180,10 @@ where
     }
 }
 
-struct WaitEntry<TResponse> {
-    filter: ArcPredicate<TResponse>,
-    state: Arc<Mutex<WaiterState<TResponse>>>,
+struct WaitEntry<EGRes> {
+    state: Arc<Mutex<WaiterState<EGRes>>>,
+    filter: ArcPredicate<EGRes>,
     handler_id: u64,
-    _phantom_response: PhantomData<TResponse>,
 }
 
 struct WaiterState<EGRes> {
