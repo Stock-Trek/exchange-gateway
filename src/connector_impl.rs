@@ -132,7 +132,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     }
     fn check_rate_limits(&self, unsigned: &EGUnsignedReq) -> EGResult<()> {
         let weight = (self.to_weight)(unsigned);
-        if !self.rate_limits.request_weight.did_acquire(weight) {
+        if !self.rate_limits.request.did_acquire(weight) {
             return Err(EGError::RateLimited);
         }
         Ok(())
