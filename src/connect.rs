@@ -3,7 +3,7 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
-    specs::binance::{http_connector, websocket_connector},
+    specs::binance::{HttpConnectorBuilder, WebsocketConnectorBuilder},
     transports::{http::HttpClientTrait, websocket::WebsocketClientTrait},
     urls::TradingMode,
 };
@@ -23,7 +23,7 @@ impl Connect {
     pub fn binance_http<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        create_client: impl Fn(&str) -> TClient,
+        create_client: impl Fn(&str) -> TClient + 'static,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
         to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
         to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
@@ -38,23 +38,23 @@ impl Connect {
         HttpRes: Send + 'static,
         ExternalRes: Clone + Send + Sync + 'static,
     {
-        http_connector(
-            trading_mode,
-            create_client,
-            to_unsigned_request,
-            to_transport_request,
-            to_binance_response,
-            to_external_response,
-            listener,
-            credentials,
-        )
+        HttpConnectorBuilder::new(create_client)
+            .trading_mode(trading_mode)
+            .to_unsigned_request(to_unsigned_request)
+            .to_transport_request(to_transport_request)
+            .to_binance_response(to_binance_response)
+            .to_external_response(to_external_response)
+            .listener(listener)
+            .credentials(credentials)
+            .build()
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn binance_websocket<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
+        create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient
+        + 'static,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
         to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
         to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
@@ -71,16 +71,15 @@ impl Connect {
         WebsocketRes: Send + 'static,
         ExternalRes: Clone + Send + Sync + 'static,
     {
-        websocket_connector(
-            trading_mode,
-            create_client,
-            to_unsigned_request,
-            to_transport_request,
-            to_binance_response,
-            to_external_response,
-            listener,
-            credentials,
-            use_session,
-        )
+        WebsocketConnectorBuilder::new(create_client)
+            .trading_mode(trading_mode)
+            .to_unsigned_request(to_unsigned_request)
+            .to_transport_request(to_transport_request)
+            .to_binance_response(to_binance_response)
+            .to_external_response(to_external_response)
+            .listener(listener)
+            .credentials(credentials)
+            .use_session(use_session)
+            .build()
     }
 }

@@ -44,112 +44,310 @@ use std::{
 };
 use uuid::Uuid;
 
-#[allow(clippy::too_many_arguments)]
-pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
+type HttpCreateClient<TClient> = Box<dyn Fn(&str) -> TClient>;
+type WebsocketCreateClient<TClient, WebsocketRes> =
+    Box<dyn Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient>;
+
+pub struct HttpConnectorBuilder<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes> {
     trading_mode: TradingMode,
-    create_client: impl Fn(&str) -> TClient,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
-    to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
-    to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    create_client: Option<HttpCreateClient<TClient>>,
+    to_unsigned_request: Option<ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>>,
+    to_transport_request: Option<ArcTryConvertValue<BinanceHttpRequest, HttpReq>>,
+    to_binance_response: Option<ArcTryConvertValue<HttpRes, BinanceHttpResponse>>,
+    to_external_response: Option<ArcTryConvertValue<BinanceHttpResponse, ExternalRes>>,
+    listener: Option<Arc<dyn ListenerTrait<TMessage = ExternalRes>>>,
     credentials: Option<ApiKeyCredentials>,
-) -> impl Connector<ExternalReq, ExternalRes>
-where
-    TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
-    ExternalReq: Send,
-    HttpReq: Send,
-    HttpRes: Send + 'static,
-    ExternalRes: Clone + Send + Sync + 'static,
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
+    HttpConnectorBuilder<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
 {
-    let exchange_urls = exchange_urls();
-    let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
-    let client = Arc::new((create_client)(&url));
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
-    let http_transport = HttpTransport::new(
-        client,
-        to_transport_request,
-        to_binance_response,
-        response_listener,
-        request_to_http_endpoint,
-        http_endpoints(),
-    );
-    let signer = Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
-        create_http_signer_from_credentials(credentials)
-            .expect("Failed to create signer from credentials")
-    })));
-    ConnectorImpl {
-        rate_limits: rate_limits(),
-        to_weight: http_request_weight,
-        to_unsigned_request,
-        transport: Transport::Http(http_transport),
-        null_signer: null_http_signer(),
-        credentials,
-        create_signer: create_http_signer_from_credentials,
-        authenticate_legs: vec![],
-        signer,
+    pub fn new(create_client: impl Fn(&str) -> TClient + 'static) -> Self {
+        Self {
+            trading_mode: TradingMode::Real,
+            create_client: Some(Box::new(create_client)),
+            to_unsigned_request: None,
+            to_transport_request: None,
+            to_binance_response: None,
+            to_external_response: None,
+            listener: None,
+            credentials: None,
+        }
+    }
+    pub fn trading_mode(mut self, trading_mode: TradingMode) -> Self {
+        self.trading_mode = trading_mode;
+        self
+    }
+    pub fn to_unsigned_request(
+        mut self,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    ) -> Self {
+        self.to_unsigned_request = Some(to_unsigned_request);
+        self
+    }
+    pub fn to_transport_request(
+        mut self,
+        to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
+    ) -> Self {
+        self.to_transport_request = Some(to_transport_request);
+        self
+    }
+    pub fn to_binance_response(
+        mut self,
+        to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
+    ) -> Self {
+        self.to_binance_response = Some(to_binance_response);
+        self
+    }
+    pub fn to_external_response(
+        mut self,
+        to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+    ) -> Self {
+        self.to_external_response = Some(to_external_response);
+        self
+    }
+    pub fn listener(mut self, listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>) -> Self {
+        self.listener = Some(listener);
+        self
+    }
+    pub fn credentials(mut self, credentials: Option<ApiKeyCredentials>) -> Self {
+        self.credentials = credentials;
+        self
+    }
+    pub fn build(self) -> impl Connector<ExternalReq, ExternalRes>
+    where
+        TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
+        ExternalReq: Send,
+        HttpReq: Send,
+        HttpRes: Send + 'static,
+        ExternalRes: Clone + Send + Sync + 'static,
+    {
+        let exchange_urls = exchange_urls();
+        let url = exchange_urls.url(ExchangeTransportType::Http, self.trading_mode);
+        let create_client = self
+            .create_client
+            .expect("create_client is required to build the binance http connector");
+        let client = Arc::new(create_client(&url));
+        let to_external_response = self
+            .to_external_response
+            .expect("to_external_response is required to build the binance http connector");
+        let listener = self
+            .listener
+            .expect("listener is required to build the binance http connector");
+        let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(ConvertListener::new(to_external_response, listener));
+        let to_transport_request = self
+            .to_transport_request
+            .expect("to_transport_request is required to build the binance http connector");
+        let to_binance_response = self
+            .to_binance_response
+            .expect("to_binance_response is required to build the binance http connector");
+        let http_transport = HttpTransport::new(
+            client,
+            to_transport_request,
+            to_binance_response,
+            response_listener,
+            request_to_http_endpoint,
+            http_endpoints(),
+        );
+        let to_unsigned_request = self
+            .to_unsigned_request
+            .expect("to_unsigned_request is required to build the binance http connector");
+        let signer = Arc::new(Mutex::new(self.credentials.as_ref().map(|credentials| {
+            create_http_signer_from_credentials(credentials)
+                .expect("Failed to create signer from credentials")
+        })));
+        ConnectorImpl {
+            rate_limits: rate_limits(),
+            to_weight: http_request_weight,
+            to_unsigned_request,
+            transport: Transport::Http(http_transport),
+            null_signer: null_http_signer(),
+            credentials: self.credentials,
+            create_signer: create_http_signer_from_credentials,
+            authenticate_legs: vec![],
+            signer,
+        }
     }
 }
-#[allow(clippy::too_many_arguments)]
-pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes> std::fmt::Debug
+    for HttpConnectorBuilder<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpConnectorBuilder")
+            .field("trading_mode", &self.trading_mode)
+            .field("create_client", &"<function>")
+            .field("to_unsigned_request", &"<function>")
+            .field("to_transport_request", &"<function>")
+            .field("to_binance_response", &"<function>")
+            .field("to_external_response", &"<function>")
+            .field("listener", &"<Listener>")
+            .field("credentials", &"<redacted>")
+            .finish()
+    }
+}
+pub struct WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
+{
     trading_mode: TradingMode,
-    create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
-    to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
-    to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    create_client: Option<WebsocketCreateClient<TClient, WebsocketRes>>,
+    to_unsigned_request: Option<ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>>,
+    to_transport_request: Option<ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>>,
+    to_binance_response: Option<ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>>,
+    to_external_response: Option<ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>>,
+    listener: Option<Arc<dyn ListenerTrait<TMessage = ExternalRes>>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
-) -> impl Connector<ExternalReq, ExternalRes>
-where
-    TClient:
-        WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes> + 'static,
-    ExternalReq: Send,
-    WebsocketReq: Send,
-    WebsocketRes: Send + 'static,
-    ExternalRes: Clone + Send + Sync + 'static,
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
+    WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
 {
-    let exchange_urls = exchange_urls();
-    let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
-    let websocket_listener = Arc::new(WebsocketListener::new(
-        to_binance_response.clone(),
-        response_listener,
-    ));
-    let client = Arc::new((create_client)(&url, websocket_listener.clone()));
-    let websocket_transport = WebsocketTransport::new(
-        client,
-        to_transport_request,
-        to_binance_response,
-        websocket_listener,
-    );
-    let (authenticate_legs, signer) = if use_session {
-        (
-            vec![authenticate_websocket_leg()],
-            Arc::new(Mutex::new(None)),
-        )
-    } else {
-        (
-            vec![],
-            Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
-                create_websocket_signer_from_credentials(credentials)
-                    .expect("Failed to create signer from credentials")
-            }))),
-        )
-    };
-    ConnectorImpl {
-        rate_limits: rate_limits(),
-        to_weight: websocket_request_weight,
-        to_unsigned_request,
-        transport: Transport::Websocket(websocket_transport),
-        null_signer: null_websocket_signer(),
-        credentials,
-        create_signer: create_websocket_signer_from_credentials,
-        authenticate_legs,
-        signer,
+    pub fn new(
+        create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient
+        + 'static,
+    ) -> Self {
+        Self {
+            trading_mode: TradingMode::Real,
+            create_client: Some(Box::new(create_client)),
+            to_unsigned_request: None,
+            to_transport_request: None,
+            to_binance_response: None,
+            to_external_response: None,
+            listener: None,
+            credentials: None,
+            use_session: false,
+        }
+    }
+    pub fn trading_mode(mut self, trading_mode: TradingMode) -> Self {
+        self.trading_mode = trading_mode;
+        self
+    }
+    pub fn to_unsigned_request(
+        mut self,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+    ) -> Self {
+        self.to_unsigned_request = Some(to_unsigned_request);
+        self
+    }
+    pub fn to_transport_request(
+        mut self,
+        to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
+    ) -> Self {
+        self.to_transport_request = Some(to_transport_request);
+        self
+    }
+    pub fn to_binance_response(
+        mut self,
+        to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
+    ) -> Self {
+        self.to_binance_response = Some(to_binance_response);
+        self
+    }
+    pub fn to_external_response(
+        mut self,
+        to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+    ) -> Self {
+        self.to_external_response = Some(to_external_response);
+        self
+    }
+    pub fn listener(mut self, listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>) -> Self {
+        self.listener = Some(listener);
+        self
+    }
+    pub fn credentials(mut self, credentials: Option<ApiKeyCredentials>) -> Self {
+        self.credentials = credentials;
+        self
+    }
+    pub fn use_session(mut self, use_session: bool) -> Self {
+        self.use_session = use_session;
+        self
+    }
+    pub fn build(self) -> impl Connector<ExternalReq, ExternalRes>
+    where
+        TClient: WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes>
+            + 'static,
+        ExternalReq: Send,
+        WebsocketReq: Send,
+        WebsocketRes: Send + 'static,
+        ExternalRes: Clone + Send + Sync + 'static,
+    {
+        let exchange_urls = exchange_urls();
+        let url = exchange_urls.url(ExchangeTransportType::Websocket, self.trading_mode);
+        let to_external_response = self
+            .to_external_response
+            .expect("to_external_response is required to build the binance websocket connector");
+        let listener = self
+            .listener
+            .expect("listener is required to build the binance websocket connector");
+        let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+            Arc::new(ConvertListener::new(to_external_response, listener));
+        let to_binance_response = self
+            .to_binance_response
+            .expect("to_binance_response is required to build the binance websocket connector");
+        let websocket_listener = Arc::new(WebsocketListener::new(
+            to_binance_response.clone(),
+            response_listener,
+        ));
+        let create_client = self
+            .create_client
+            .expect("create_client is required to build the binance websocket connector");
+        let client = Arc::new(create_client(&url, websocket_listener.clone()));
+        let to_transport_request = self
+            .to_transport_request
+            .expect("to_transport_request is required to build the binance websocket connector");
+        let websocket_transport = WebsocketTransport::new(
+            client,
+            to_transport_request,
+            to_binance_response,
+            websocket_listener,
+        );
+        let (authenticate_legs, signer) = if self.use_session {
+            (
+                vec![authenticate_websocket_leg()],
+                Arc::new(Mutex::new(None)),
+            )
+        } else {
+            (
+                vec![],
+                Arc::new(Mutex::new(self.credentials.as_ref().map(|credentials| {
+                    create_websocket_signer_from_credentials(credentials)
+                        .expect("Failed to create signer from credentials")
+                }))),
+            )
+        };
+        let to_unsigned_request = self
+            .to_unsigned_request
+            .expect("to_unsigned_request is required to build the binance websocket connector");
+        ConnectorImpl {
+            rate_limits: rate_limits(),
+            to_weight: websocket_request_weight,
+            to_unsigned_request,
+            transport: Transport::Websocket(websocket_transport),
+            null_signer: null_websocket_signer(),
+            credentials: self.credentials,
+            create_signer: create_websocket_signer_from_credentials,
+            authenticate_legs,
+            signer,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes> std::fmt::Debug
+    for WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebsocketConnectorBuilder")
+            .field("trading_mode", &self.trading_mode)
+            .field("create_client", &"<function>")
+            .field("to_unsigned_request", &"<function>")
+            .field("to_transport_request", &"<function>")
+            .field("to_binance_response", &"<function>")
+            .field("to_external_response", &"<function>")
+            .field("listener", &"<Listener>")
+            .field("credentials", &"<redacted>")
+            .field("use_session", &self.use_session)
+            .finish()
     }
 }
 
