@@ -38,7 +38,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes>
     for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
 where
     EGReq: Send,
-    TransportRes: 'static,
     EGRes: Send + Sync + 'static,
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
@@ -80,7 +79,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes>
     WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
 where
     EGRes: Send + Sync + 'static,
-    TransportRes: 'static,
 {
     pub fn new(
         client: Arc<
@@ -128,27 +126,4 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("websocket_listener", &self.websocket_listener)
             .finish()
     }
-}
-
-/// Waits for the response waiter to resolve, timing out with [`EGError::TimedOut`]
-/// if no matching response arrives before `timeout` elapses.
-fn wait_for_response<EGRes>(
-    waiter: impl Future<Output = EGResult<EGRes>> + Send + 'static,
-    timeout: Duration,
-) -> impl Future<Output = EGResult<EGRes>> + Send + 'static
-where
-    EGRes: Send + Sync + 'static,
-{
-    let mut waiter = Box::pin(waiter);
-    let mut delay = Box::pin(Delay::new(timeout));
-    poll_fn(move |cx| {
-        // Poll the timeout first so a missing response can't wedge the wait.
-        if let Poll::Ready(()) = delay.as_mut().poll(cx) {
-            return Poll::Ready(Err(EGError::TimedOut));
-        }
-        match waiter.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(result),
-            Poll::Pending => Poll::Pending,
-        }
-    })
 }
