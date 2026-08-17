@@ -64,10 +64,9 @@ where
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<EGRes> {
         let transport_req = self.try_convert_request(request)?;
-        let (waiter, deregister) = self
+        let waiter = self
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
-        let _guard = WaiterGuard::new(deregister);
         self.client.send_message(transport_req, timeout).await?;
         self.wait_for_response(waiter, timeout).await
     }
@@ -112,29 +111,6 @@ where
                 Poll::Pending => Poll::Pending,
             }
         })
-    }
-}
-
-/// RAII guard that deregisters the waiter from the listener's handler list when
-/// dropped, ensuring no handler is leaked even when the wait times out or the
-/// future is cancelled.
-struct WaiterGuard {
-    deregister: Option<Box<dyn FnOnce() + Send + 'static>>,
-}
-
-impl WaiterGuard {
-    fn new(deregister: impl FnOnce() + Send + 'static) -> Self {
-        Self {
-            deregister: Some(Box::new(deregister)),
-        }
-    }
-}
-
-impl Drop for WaiterGuard {
-    fn drop(&mut self) {
-        if let Some(deregister) = self.deregister.take() {
-            deregister();
-        }
     }
 }
 
