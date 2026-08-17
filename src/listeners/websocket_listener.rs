@@ -53,11 +53,11 @@ where
             _phantom_response: PhantomData,
         });
         {
-            let mut guard = self.handlers.lock().map_err(|_| EGError::BadResponse)?;
+            let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
             guard.push(entry);
         }
         let waiter = poll_fn(move |cx| {
-            let mut guard = waiter_state.lock().map_err(|_| EGError::BadResponse)?;
+            let mut guard = waiter_state.lock().map_err(|_| EGError::MutexPoisoned)?;
             if let Some(msg) = guard.filtered_response.take() {
                 Poll::Ready(Ok(msg))
             } else {
@@ -80,7 +80,7 @@ where
     async fn on_message(&self, message: TransportRes) -> EGResult<()> {
         let response = (self.converter)(message)?;
         {
-            let mut guard = self.handlers.lock().map_err(|_| EGError::BadResponse)?;
+            let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
             let mut handler_index = None;
             for (index, handler) in guard.iter().enumerate() {
                 if handler.clone().handle(response.clone())? {
@@ -111,7 +111,7 @@ where
     fn handle(self: Arc<Self>, response: TResponse) -> EGResult<bool> {
         let is_handled = (self.filter)(&response);
         if is_handled {
-            let mut state = self.state.lock().map_err(|_| EGError::BadResponse)?;
+            let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
             state.filtered_response = Some(response);
             if let Some(waker) = state.waker.take() {
                 waker.wake();

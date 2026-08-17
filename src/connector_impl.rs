@@ -78,7 +78,7 @@ where
                     .await?;
                 signer = (leg.create_signer)(authentication_response)?;
             }
-            let mut guard = self.signer.lock().map_err(|_| EGError::BadResponse)?;
+            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             (*guard) = Some(signer);
         }
         Ok(())
@@ -87,12 +87,12 @@ where
         Ok(self.transport.is_connected())
     }
     fn is_authenticated(&self) -> EGResult<bool> {
-        let guard = self.signer.lock().map_err(|_| EGError::BadResponse)?;
+        let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
         Ok((*guard).is_some())
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
-            let mut guard = self.signer.lock().map_err(|_| EGError::BadResponse)?;
+            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             *guard = None;
         }
         self.transport.disconnect().await
@@ -119,9 +119,9 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     fn signed_request(&self, request: ExternalReq, signed: bool) -> EGResult<EGReq> {
         let unsigned = (self.to_unsigned_request)(request)?;
         if signed {
-            let guard = self.signer.lock().map_err(|_| EGError::BadResponse)?;
+            let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             match guard.deref() {
-                None => Err(EGError::BadResponse),
+                None => Err(EGError::NotAuthenticated),
                 Some(signer) => signer.sign(unsigned),
             }
         } else {
@@ -134,7 +134,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .send_order_request
             .did_acquire(self.request_weights.send_order_request)
         {
-            return Err(EGError::BadResponse);
+            return Err(EGError::RateLimited);
         }
         Ok(())
     }

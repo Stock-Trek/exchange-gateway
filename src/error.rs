@@ -4,6 +4,12 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     #[error("Received unrecognised response")]
     BadResponse,
+    #[error("Internal mutex poisoned by a panicking operation")]
+    MutexPoisoned,
+    #[error("Connector is not authenticated")]
+    NotAuthenticated,
+    #[error("Rate limit exceeded")]
+    RateLimited,
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("Crypto key error: {0}")]
