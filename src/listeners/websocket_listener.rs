@@ -1,5 +1,5 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
 };
@@ -50,11 +50,11 @@ where
             _phantom_response: PhantomData,
         });
         {
-            let mut guard = self.handlers.lock().unwrap();
+            let mut guard = self.handlers.lock().map_err(|_| EGError::BadResponse)?;
             guard.push(entry);
         }
         poll_fn(|cx| {
-            let mut guard = waiter_state.lock().unwrap();
+            let mut guard = waiter_state.lock().map_err(|_| EGError::BadResponse)?;
             if let Some(msg) = guard.filtered_response.take() {
                 Poll::Ready(Ok(msg))
             } else {
@@ -77,10 +77,14 @@ where
     async fn on_message(&self, message: TransportRes) -> EGResult<()> {
         let response = (self.converter)(message)?;
         {
-            let mut guard = self.handlers.lock().unwrap();
-            let handler_index = guard
-                .iter()
-                .position(|handler| handler.clone().handle(response.clone()));
+            let mut guard = self.handlers.lock().map_err(|_| EGError::BadResponse)?;
+            let mut handler_index = None;
+            for (index, handler) in guard.iter().enumerate() {
+                if handler.clone().handle(response.clone())? {
+                    handler_index = Some(index);
+                    break;
+                }
+            }
             if let Some(index) = handler_index {
                 guard.swap_remove(index);
                 return Ok(());
@@ -94,23 +98,23 @@ trait MessageHandler<EGRes>: Send + Sync
 where
     EGRes: Send,
 {
-    fn handle(self: Arc<Self>, response: EGRes) -> bool;
+    fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool>;
 }
 
 impl<TResponse> MessageHandler<TResponse> for WaitEntry<TResponse>
 where
     TResponse: Send + Sync,
 {
-    fn handle(self: Arc<Self>, response: TResponse) -> bool {
+    fn handle(self: Arc<Self>, response: TResponse) -> EGResult<bool> {
         let is_handled = (self.filter)(&response);
         if is_handled {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().map_err(|_| EGError::BadResponse)?;
             state.filtered_response = Some(response);
             if let Some(waker) = state.waker.take() {
                 waker.wake();
             }
         }
-        is_handled
+        Ok(is_handled)
     }
 }
 
