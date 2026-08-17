@@ -103,7 +103,6 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(timeout));
         poll_fn(move |cx| {
-            // Poll the timeout first so a missing response can't wedge the wait.
             if let Poll::Ready(()) = delay.as_mut().poll(cx) {
                 return Poll::Ready(Err(EGError::TimedOut));
             }
