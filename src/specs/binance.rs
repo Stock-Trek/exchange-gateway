@@ -4,7 +4,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
-    functions::{ArcCombineValues, TryConvertValue},
+    functions::{ArcCombineValues, ArcTryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -48,10 +48,10 @@ use uuid::Uuid;
 pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
     trading_mode: TradingMode,
     create_client: impl Fn(&str) -> TClient,
-    to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_transport_request: TryConvertValue<BinanceHttpRequest, HttpReq>,
-    to_binance_response: TryConvertValue<HttpRes, BinanceHttpResponse>,
-    to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
+    to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
+    to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
 ) -> impl Connector<ExternalReq, ExternalRes>
@@ -65,9 +65,8 @@ where
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
     let client = Arc::new((create_client)(&url));
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> = Arc::new(
-        ConvertListener::new(Arc::new(to_external_response), listener),
-    );
+    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+        Arc::new(ConvertListener::new(to_external_response, listener));
     let http_transport = HttpTransport::new(
         client,
         to_transport_request,
@@ -96,10 +95,10 @@ where
 pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
     trading_mode: TradingMode,
     create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
-    to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_transport_request: TryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
-    to_binance_response: TryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
-    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+    to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
+    to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
+    to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
@@ -114,11 +113,10 @@ where
 {
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> = Arc::new(
-        ConvertListener::new(Arc::new(to_external_response), listener),
-    );
+    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+        Arc::new(ConvertListener::new(to_external_response, listener));
     let websocket_listener = Arc::new(WebsocketListener::new(
-        to_binance_response,
+        to_binance_response.clone(),
         response_listener,
     ));
     let client = Arc::new((create_client)(&url, websocket_listener.clone()));

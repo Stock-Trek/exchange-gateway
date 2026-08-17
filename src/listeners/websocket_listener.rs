@@ -37,11 +37,11 @@ where
     EGRes: Send + Sync + 'static,
 {
     pub fn new(
-        converter: impl Fn(TransportRes) -> EGResult<EGRes> + Send + Sync + 'static,
+        converter: ArcTryConvertValue<TransportRes, EGRes>,
         delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     ) -> Self {
         Self {
-            converter: Arc::new(converter),
+            converter,
             delegate,
             handlers: Arc::new(Mutex::new(Vec::new())),
             next_handler_id: Arc::new(AtomicU64::new(0)),

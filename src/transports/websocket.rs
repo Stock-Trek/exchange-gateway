@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, TryConvertValue},
+    functions::{ArcPredicate, ArcTryConvertValue},
     listeners::websocket_listener::WebsocketListener,
     transports::transport::TransportTrait,
 };
@@ -27,8 +27,8 @@ pub trait WebsocketClientTrait: Send + Sync {
 
 pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
-    convert_request: TryConvertValue<EGReq, TransportReq>,
-    convert_response: TryConvertValue<TransportRes, EGRes>,
+    convert_request: ArcTryConvertValue<EGReq, TransportReq>,
+    convert_response: ArcTryConvertValue<TransportRes, EGRes>,
     websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
 }
 
@@ -84,8 +84,8 @@ where
         client: Arc<
             dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>,
         >,
-        convert_request: TryConvertValue<EGReq, TransportReq>,
-        convert_response: TryConvertValue<TransportRes, EGRes>,
+        convert_request: ArcTryConvertValue<EGReq, TransportReq>,
+        convert_response: ArcTryConvertValue<TransportRes, EGRes>,
         websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
     ) -> Self {
         Self {
@@ -120,8 +120,8 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebsocketTransport")
             .field("client", &"<HttpClientTrait>")
-            .field("convert_request", &self.convert_request)
-            .field("convert_response", &self.convert_response)
+            .field("convert_request", &"<function>")
+            .field("convert_response", &"<function>")
             .field("websocket_listener", &self.websocket_listener)
             .finish()
     }

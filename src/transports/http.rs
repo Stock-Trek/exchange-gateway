@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, TryConvertValue},
+    functions::{ArcPredicate, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
     transports::transport::TransportTrait,
 };
@@ -36,8 +36,8 @@ pub enum HttpEndpoint {
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
-    convert_request: TryConvertValue<EGReq, TransportReq>,
-    convert_response: TryConvertValue<TransportRes, EGRes>,
+    convert_request: ArcTryConvertValue<EGReq, TransportReq>,
+    convert_response: ArcTryConvertValue<TransportRes, EGRes>,
     listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
@@ -96,8 +96,8 @@ where
 {
     pub fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
-        convert_request: TryConvertValue<EGReq, TransportReq>,
-        convert_response: TryConvertValue<TransportRes, EGRes>,
+        convert_request: ArcTryConvertValue<EGReq, TransportReq>,
+        convert_response: ArcTryConvertValue<TransportRes, EGRes>,
         listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
         to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
         endpoints: HashMap<HttpEndpoint, String>,
@@ -133,8 +133,8 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpTransport")
             .field("client", &"<HttpClientTrait>")
-            .field("convert_request", &self.convert_request)
-            .field("convert_response", &self.convert_response)
+            .field("convert_request", &"<function>")
+            .field("convert_response", &"<function>")
             .field("listener", &"<Listener>")
             .field("to_http_endpoint", &self.to_http_endpoint)
             .field("action_endpoints", &self.endpoints)

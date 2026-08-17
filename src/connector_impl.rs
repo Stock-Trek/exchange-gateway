@@ -2,7 +2,7 @@ use crate::{
     authenticate_leg::AuthenticateLeg,
     connector::Connector,
     error::{EGError, EGResult},
-    functions::{TryConvertRef, TryConvertValue},
+    functions::{ArcTryConvertValue, TryConvertRef},
     rate_limit::rate_limits::RateLimits,
     sign::{
         convert_signer::ConvertSigner,
@@ -28,7 +28,7 @@ pub struct ConnectorImpl<
 > {
     pub(crate) rate_limits: RateLimits,
     pub(crate) to_weight: fn(&EGUnsignedReq) -> u32,
-    pub(crate) to_unsigned_request: TryConvertValue<ExternalReq, EGUnsignedReq>,
+    pub(crate) to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
     pub(crate) transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     pub(crate) null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     pub(crate) credentials: Option<TCredentials>,
@@ -155,11 +155,13 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         f.debug_struct("Connector")
             .field("rate_limits", &self.rate_limits)
             .field("to_weight", &"<function>")
-            .field("convert_request", &"<function>")
-            .field("null_signer", &self.null_signer)
+            .field("to_unsigned_request", &"<function>")
             .field("transport", &self.transport)
+            .field("null_signer", &self.null_signer)
+            .field("credentials", &"<redacted>")
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
+            .field("signer", &"<redacted>")
             .finish()
     }
 }
