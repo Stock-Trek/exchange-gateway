@@ -277,7 +277,10 @@ fn websocket_unsigned_request_params_to_bytes(
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
             Some(params.query_params(true).into_bytes())
         }
-        _ => None,
+        BinanceWebsocketUnsignedParams::Logon(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::ExchangeInfo(_) => None,
     })
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
