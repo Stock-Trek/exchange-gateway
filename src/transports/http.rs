@@ -5,7 +5,14 @@ use crate::{
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 #[async_trait]
 pub trait HttpClientTrait: Send + Sync {
@@ -34,6 +41,7 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
+    is_connected: AtomicBool,
 }
 
 #[async_trait]
@@ -51,10 +59,11 @@ where
         (self.convert_response)(response)
     }
     async fn connect(&self) -> EGResult<()> {
+        self.is_connected.store(true, Ordering::SeqCst);
         Ok(())
     }
     fn is_connected(&self) -> bool {
-        true
+        self.is_connected.load(Ordering::SeqCst)
     }
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
         let response = self.to_converted_response(request, timeout).await?;
@@ -74,6 +83,7 @@ where
         }
     }
     async fn disconnect(&self) -> EGResult<()> {
+        self.is_connected.store(false, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -99,6 +109,7 @@ where
             listener,
             to_http_endpoint,
             endpoints,
+            is_connected: AtomicBool::new(false),
         }
     }
     async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
