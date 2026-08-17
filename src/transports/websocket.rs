@@ -1,11 +1,17 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcPredicate, TryConvertValue},
     listeners::websocket_listener::WebsocketListener,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
-use std::{sync::Arc, time::Duration};
+use futures_timer::Delay;
+use std::{
+    future::{Future, poll_fn},
+    sync::Arc,
+    task::Poll,
+    time::Duration,
+};
 
 #[async_trait]
 pub trait WebsocketClientTrait: Send + Sync {
@@ -62,7 +68,9 @@ where
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        waiter.await
+        // Apply a timeout to the response wait so a missing exchange response
+        // does not hang connect() indefinitely.
+        wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.client.disconnect().await
@@ -103,4 +111,27 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("websocket_listener", &self.websocket_listener)
             .finish()
     }
+}
+
+/// Waits for the response waiter to resolve, timing out with [`EGError::TimedOut`]
+/// if no matching response arrives before `timeout` elapses.
+fn wait_for_response<EGRes>(
+    waiter: impl Future<Output = EGResult<EGRes>> + Send + 'static,
+    timeout: Duration,
+) -> impl Future<Output = EGResult<EGRes>> + Send + 'static
+where
+    EGRes: Send + Sync + 'static,
+{
+    let mut waiter = Box::pin(waiter);
+    let mut delay = Box::pin(Delay::new(timeout));
+    poll_fn(move |cx| {
+        // Poll the timeout first so a missing response can't wedge the wait.
+        if let Poll::Ready(()) = delay.as_mut().poll(cx) {
+            return Poll::Ready(Err(EGError::TimedOut));
+        }
+        match waiter.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(result),
+            Poll::Pending => Poll::Pending,
+        }
+    })
 }
