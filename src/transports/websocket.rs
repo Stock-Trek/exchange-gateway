@@ -1,11 +1,17 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcPredicate, TryConvertValue},
     listeners::websocket_listener::WebsocketListener,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
-use std::{sync::Arc, time::Duration};
+use futures_timer::Delay;
+use std::{
+    future::{Future, poll_fn},
+    sync::Arc,
+    task::Poll,
+    time::Duration,
+};
 
 #[async_trait]
 pub trait WebsocketClientTrait: Send + Sync {
@@ -62,7 +68,7 @@ where
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        waiter.await
+        self.wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.client.disconnect().await
@@ -73,7 +79,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes>
     WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
 where
     EGRes: Send + Sync + 'static,
-    TransportRes: 'static,
 {
     pub fn new(
         client: Arc<
@@ -89,6 +94,23 @@ where
             convert_response,
             websocket_listener,
         }
+    }
+    fn wait_for_response(
+        &self,
+        waiter: impl Future<Output = EGResult<EGRes>> + Send + 'static,
+        timeout: Duration,
+    ) -> impl Future<Output = EGResult<EGRes>> + Send + 'static {
+        let mut waiter = Box::pin(waiter);
+        let mut delay = Box::pin(Delay::new(timeout));
+        poll_fn(move |cx| {
+            if let Poll::Ready(()) = delay.as_mut().poll(cx) {
+                return Poll::Ready(Err(EGError::TimedOut));
+            }
+            match waiter.as_mut().poll(cx) {
+                Poll::Ready(result) => Poll::Ready(result),
+                Poll::Pending => Poll::Pending,
+            }
+        })
     }
 }
 
