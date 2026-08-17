@@ -115,13 +115,33 @@ where
     EGRes: Send,
 {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.handlers.lock()
-            && let Some(index) = guard
-                .iter()
-                .position(|handler| handler.id() == self.handler_id)
-        {
-            guard.swap_remove(index);
+        let _ = remove_handler(
+            &self.handlers,
+            |handler| Ok(handler.id() == self.handler_id),
+        );
+    }
+}
+
+fn remove_handler<EGRes>(
+    handlers: &Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>,
+    mut predicate: impl FnMut(&Arc<dyn MessageHandler<EGRes>>) -> EGResult<bool>,
+) -> EGResult<bool>
+where
+    EGRes: Send,
+{
+    let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
+    let mut handler_index = None;
+    for (index, handler) in guard.iter().enumerate() {
+        if predicate(handler)? {
+            handler_index = Some(index);
+            break;
         }
+    }
+    if let Some(index) = handler_index {
+        guard.swap_remove(index);
+        Ok(true)
+    } else {
+        Ok(false)
     }
 }
 
@@ -135,19 +155,10 @@ where
 
     async fn on_message(&self, message: TransportRes) -> EGResult<()> {
         let response = (self.converter)(message)?;
-        {
-            let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-            let mut handler_index = None;
-            for (index, handler) in guard.iter().enumerate() {
-                if handler.clone().handle(response.clone())? {
-                    handler_index = Some(index);
-                    break;
-                }
-            }
-            if let Some(index) = handler_index {
-                guard.swap_remove(index);
-                return Ok(());
-            }
+        if remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone())
+        })? {
+            return Ok(());
         }
         self.delegate.on_message(response).await
     }
