@@ -39,6 +39,7 @@ use exchange_types::binance::{
 use secrecy::SecretString;
 use std::{
     collections::HashMap,
+    marker::PhantomData,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -48,72 +49,323 @@ type HttpCreateClient<TClient> = Box<dyn Fn(&str) -> TClient>;
 type WebsocketCreateClient<TClient, WebsocketRes> =
     Box<dyn Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient>;
 
-pub struct HttpConnectorBuilder<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes> {
+/// Marker type indicating that a builder field has not been assigned yet.
+pub struct Missing;
+
+/// Marker type indicating that a builder field has been assigned.
+pub struct Set;
+
+pub struct HttpConnectorBuilder<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+> {
     trading_mode: TradingMode,
-    create_client: Option<HttpCreateClient<TClient>>,
+    create_client: HttpCreateClient<TClient>,
     to_unsigned_request: Option<ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>>,
     to_transport_request: Option<ArcTryConvertValue<BinanceHttpRequest, HttpReq>>,
     to_binance_response: Option<ArcTryConvertValue<HttpRes, BinanceHttpResponse>>,
     to_external_response: Option<ArcTryConvertValue<BinanceHttpResponse, ExternalRes>>,
     listener: Option<Arc<dyn ListenerTrait<TMessage = ExternalRes>>>,
     credentials: Option<ApiKeyCredentials>,
+    _state: PhantomData<(
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    )>,
 }
 
 impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
-    HttpConnectorBuilder<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        Missing,
+        Missing,
+        Missing,
+        Missing,
+        Missing,
+    >
 {
     pub fn new(create_client: impl Fn(&str) -> TClient + 'static) -> Self {
         Self {
             trading_mode: TradingMode::Real,
-            create_client: Some(Box::new(create_client)),
+            create_client: Box::new(create_client),
             to_unsigned_request: None,
             to_transport_request: None,
             to_binance_response: None,
             to_external_response: None,
             listener: None,
             credentials: None,
+            _state: PhantomData,
         }
     }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
+{
     pub fn trading_mode(mut self, trading_mode: TradingMode) -> Self {
         self.trading_mode = trading_mode;
-        self
-    }
-    pub fn to_unsigned_request(
-        mut self,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    ) -> Self {
-        self.to_unsigned_request = Some(to_unsigned_request);
-        self
-    }
-    pub fn to_transport_request(
-        mut self,
-        to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
-    ) -> Self {
-        self.to_transport_request = Some(to_transport_request);
-        self
-    }
-    pub fn to_binance_response(
-        mut self,
-        to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
-    ) -> Self {
-        self.to_binance_response = Some(to_binance_response);
-        self
-    }
-    pub fn to_external_response(
-        mut self,
-        to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
-    ) -> Self {
-        self.to_external_response = Some(to_external_response);
-        self
-    }
-    pub fn listener(mut self, listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>) -> Self {
-        self.listener = Some(listener);
         self
     }
     pub fn credentials(mut self, credentials: Option<ApiKeyCredentials>) -> Self {
         self.credentials = credentials;
         self
     }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        Missing,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
+{
+    pub fn to_unsigned_request(
+        self,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    ) -> HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        Set,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    > {
+        HttpConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: Some(to_unsigned_request),
+            to_transport_request: self.to_transport_request,
+            to_binance_response: self.to_binance_response,
+            to_external_response: self.to_external_response,
+            listener: self.listener,
+            credentials: self.credentials,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToBinanceResponse, ToExternalResponse, Listener>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        Missing,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
+{
+    pub fn to_transport_request(
+        self,
+        to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
+    ) -> HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        Set,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    > {
+        HttpConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: Some(to_transport_request),
+            to_binance_response: self.to_binance_response,
+            to_external_response: self.to_external_response,
+            listener: self.listener,
+            credentials: self.credentials,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToExternalResponse, Listener>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        Missing,
+        ToExternalResponse,
+        Listener,
+    >
+{
+    pub fn to_binance_response(
+        self,
+        to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
+    ) -> HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        Set,
+        ToExternalResponse,
+        Listener,
+    > {
+        HttpConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: self.to_transport_request,
+            to_binance_response: Some(to_binance_response),
+            to_external_response: self.to_external_response,
+            listener: self.listener,
+            credentials: self.credentials,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, Listener>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        Missing,
+        Listener,
+    >
+{
+    pub fn to_external_response(
+        self,
+        to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+    ) -> HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        Set,
+        Listener,
+    > {
+        HttpConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: self.to_transport_request,
+            to_binance_response: self.to_binance_response,
+            to_external_response: Some(to_external_response),
+            listener: self.listener,
+            credentials: self.credentials,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Missing,
+    >
+{
+    pub fn listener(
+        self,
+        listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    ) -> HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Set,
+    > {
+        HttpConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: self.to_transport_request,
+            to_binance_response: self.to_binance_response,
+            to_external_response: self.to_external_response,
+            listener: Some(listener),
+            credentials: self.credentials,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
+    HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        Set,
+        Set,
+        Set,
+        Set,
+        Set,
+    >
+{
     pub fn build(self) -> impl Connector<ExternalReq, ExternalRes>
     where
         TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
@@ -124,10 +376,7 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
     {
         let exchange_urls = exchange_urls();
         let url = exchange_urls.url(ExchangeTransportType::Http, self.trading_mode);
-        let create_client = self
-            .create_client
-            .expect("create_client is required to build the binance http connector");
-        let client = Arc::new(create_client(&url));
+        let client = Arc::new((self.create_client)(&url));
         let to_external_response = self
             .to_external_response
             .expect("to_external_response is required to build the binance http connector");
@@ -171,8 +420,19 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes> std::fmt::Debug
-    for HttpConnectorBuilder<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
+impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener> std::fmt::Debug
+    for HttpConnectorBuilder<
+        TClient,
+        ExternalReq,
+        HttpReq,
+        HttpRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpConnectorBuilder")
@@ -187,10 +447,21 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes> std::fmt::Debug
             .finish()
     }
 }
-pub struct WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
-{
+
+pub struct WebsocketConnectorBuilder<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+> {
     trading_mode: TradingMode,
-    create_client: Option<WebsocketCreateClient<TClient, WebsocketRes>>,
+    create_client: WebsocketCreateClient<TClient, WebsocketRes>,
     to_unsigned_request: Option<ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>>,
     to_transport_request: Option<ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>>,
     to_binance_response: Option<ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>>,
@@ -198,10 +469,28 @@ pub struct WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, Websock
     listener: Option<Arc<dyn ListenerTrait<TMessage = ExternalRes>>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
+    _state: PhantomData<(
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    )>,
 }
 
 impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
-    WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        Missing,
+        Missing,
+        Missing,
+        Missing,
+        Missing,
+    >
 {
     pub fn new(
         create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient
@@ -209,7 +498,7 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
     ) -> Self {
         Self {
             trading_mode: TradingMode::Real,
-            create_client: Some(Box::new(create_client)),
+            create_client: Box::new(create_client),
             to_unsigned_request: None,
             to_transport_request: None,
             to_binance_response: None,
@@ -217,42 +506,27 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
             listener: None,
             credentials: None,
             use_session: false,
+            _state: PhantomData,
         }
     }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
+{
     pub fn trading_mode(mut self, trading_mode: TradingMode) -> Self {
         self.trading_mode = trading_mode;
-        self
-    }
-    pub fn to_unsigned_request(
-        mut self,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    ) -> Self {
-        self.to_unsigned_request = Some(to_unsigned_request);
-        self
-    }
-    pub fn to_transport_request(
-        mut self,
-        to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
-    ) -> Self {
-        self.to_transport_request = Some(to_transport_request);
-        self
-    }
-    pub fn to_binance_response(
-        mut self,
-        to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
-    ) -> Self {
-        self.to_binance_response = Some(to_binance_response);
-        self
-    }
-    pub fn to_external_response(
-        mut self,
-        to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    ) -> Self {
-        self.to_external_response = Some(to_external_response);
-        self
-    }
-    pub fn listener(mut self, listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>) -> Self {
-        self.listener = Some(listener);
         self
     }
     pub fn credentials(mut self, credentials: Option<ApiKeyCredentials>) -> Self {
@@ -263,6 +537,242 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
         self.use_session = use_session;
         self
     }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        Missing,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
+{
+    pub fn to_unsigned_request(
+        self,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+    ) -> WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        Set,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    > {
+        WebsocketConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: Some(to_unsigned_request),
+            to_transport_request: self.to_transport_request,
+            to_binance_response: self.to_binance_response,
+            to_external_response: self.to_external_response,
+            listener: self.listener,
+            credentials: self.credentials,
+            use_session: self.use_session,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToBinanceResponse, ToExternalResponse, Listener>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        Missing,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
+{
+    pub fn to_transport_request(
+        self,
+        to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
+    ) -> WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        Set,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    > {
+        WebsocketConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: Some(to_transport_request),
+            to_binance_response: self.to_binance_response,
+            to_external_response: self.to_external_response,
+            listener: self.listener,
+            credentials: self.credentials,
+            use_session: self.use_session,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToExternalResponse, Listener>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        Missing,
+        ToExternalResponse,
+        Listener,
+    >
+{
+    pub fn to_binance_response(
+        self,
+        to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
+    ) -> WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        Set,
+        ToExternalResponse,
+        Listener,
+    > {
+        WebsocketConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: self.to_transport_request,
+            to_binance_response: Some(to_binance_response),
+            to_external_response: self.to_external_response,
+            listener: self.listener,
+            credentials: self.credentials,
+            use_session: self.use_session,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, Listener>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        Missing,
+        Listener,
+    >
+{
+    pub fn to_external_response(
+        self,
+        to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+    ) -> WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        Set,
+        Listener,
+    > {
+        WebsocketConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: self.to_transport_request,
+            to_binance_response: self.to_binance_response,
+            to_external_response: Some(to_external_response),
+            listener: self.listener,
+            credentials: self.credentials,
+            use_session: self.use_session,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Missing,
+    >
+{
+    pub fn listener(
+        self,
+        listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    ) -> WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Set,
+    > {
+        WebsocketConnectorBuilder {
+            trading_mode: self.trading_mode,
+            create_client: self.create_client,
+            to_unsigned_request: self.to_unsigned_request,
+            to_transport_request: self.to_transport_request,
+            to_binance_response: self.to_binance_response,
+            to_external_response: self.to_external_response,
+            listener: Some(listener),
+            credentials: self.credentials,
+            use_session: self.use_session,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
+    WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        Set,
+        Set,
+        Set,
+        Set,
+        Set,
+    >
+{
     pub fn build(self) -> impl Connector<ExternalReq, ExternalRes>
     where
         TClient: WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes>
@@ -289,10 +799,7 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
             to_binance_response.clone(),
             response_listener,
         ));
-        let create_client = self
-            .create_client
-            .expect("create_client is required to build the binance websocket connector");
-        let client = Arc::new(create_client(&url, websocket_listener.clone()));
+        let client = Arc::new((self.create_client)(&url, websocket_listener.clone()));
         let to_transport_request = self
             .to_transport_request
             .expect("to_transport_request is required to build the binance websocket connector");
@@ -333,8 +840,19 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes> std::fmt::Debug
-    for WebsocketConnectorBuilder<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
+impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener> std::fmt::Debug
+    for WebsocketConnectorBuilder<
+        TClient,
+        ExternalReq,
+        WebsocketReq,
+        WebsocketRes,
+        ExternalRes,
+        ToUnsignedRequest,
+        ToTransportRequest,
+        ToBinanceResponse,
+        ToExternalResponse,
+        Listener,
+    >
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebsocketConnectorBuilder")
