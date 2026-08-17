@@ -2,11 +2,11 @@ use crate::rate_limit::{rate_limit_config::RateLimitConfig, rate_limiter_state::
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
-pub(crate) struct MultiRateLimiter {
+pub(crate) struct RateLimiter {
     rate_limiters: Arc<Mutex<Vec<RateLimiterState>>>,
 }
 
-impl MultiRateLimiter {
+impl RateLimiter {
     pub fn new(rate_limits: Vec<RateLimitConfig>) -> Self {
         Self {
             rate_limiters: Arc::new(Mutex::new(
