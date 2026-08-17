@@ -65,10 +65,8 @@ where
         }
         Ok(WaiterForResponse {
             state: waiter_state,
-            deregister: DeregisterGuard {
-                handlers: self.handlers.clone(),
-                handler_id,
-            },
+            handlers: self.handlers.clone(),
+            handler_id,
         })
     }
 }
@@ -78,8 +76,8 @@ where
     EGRes: Send,
 {
     state: Arc<Mutex<WaiterState<EGRes>>>,
-    #[allow(dead_code)]
-    deregister: DeregisterGuard<EGRes>,
+    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
+    handler_id: u64,
 }
 
 impl<EGRes> Future for WaiterForResponse<EGRes>
@@ -102,15 +100,7 @@ where
     }
 }
 
-struct DeregisterGuard<EGRes>
-where
-    EGRes: Send,
-{
-    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
-    handler_id: u64,
-}
-
-impl<EGRes> Drop for DeregisterGuard<EGRes>
+impl<EGRes> Drop for WaiterForResponse<EGRes>
 where
     EGRes: Send,
 {
