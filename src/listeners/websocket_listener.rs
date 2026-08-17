@@ -5,10 +5,13 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    future::{Future, poll_fn},
     marker::PhantomData,
-    sync::{Arc, Mutex},
-    task::{Poll, Waker},
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    task::{Context, Poll, Waker},
 };
 
 #[derive(Clone)]
@@ -16,6 +19,7 @@ pub(crate) struct WebsocketListener<TransportRes, EGRes> {
     converter: ArcTryConvertValue<TransportRes, EGRes>,
     delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
+    next_handler_id: Arc<AtomicU64>,
 }
 
 impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EGRes> {
@@ -40,32 +44,84 @@ where
             converter: Arc::new(converter),
             delegate,
             handlers: Arc::new(Mutex::new(Vec::new())),
+            next_handler_id: Arc::new(AtomicU64::new(0)),
         }
     }
     pub fn waiter_for_filtered_response(
         &self,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<impl Future<Output = EGResult<EGRes>> + Send + 'static> {
+    ) -> EGResult<WaiterForResponse<EGRes>> {
+        let handler_id = self.next_handler_id.fetch_add(1, Ordering::Relaxed);
         let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {
             filter,
             state: waiter_state.clone(),
+            handler_id,
             _phantom_response: PhantomData,
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
             guard.push(entry);
         }
-        let waiter = poll_fn(move |cx| {
-            let mut guard = waiter_state.lock().map_err(|_| EGError::MutexPoisoned)?;
-            if let Some(msg) = guard.filtered_response.take() {
-                Poll::Ready(Ok(msg))
-            } else {
-                guard.waker = Some(cx.waker().clone());
-                Poll::Pending
-            }
-        });
-        Ok(waiter)
+        Ok(WaiterForResponse {
+            state: waiter_state,
+            deregister: DeregisterGuard {
+                handlers: self.handlers.clone(),
+                handler_id,
+            },
+        })
+    }
+}
+
+pub(crate) struct WaiterForResponse<EGRes>
+where
+    EGRes: Send,
+{
+    state: Arc<Mutex<WaiterState<EGRes>>>,
+    #[allow(dead_code)]
+    deregister: DeregisterGuard<EGRes>,
+}
+
+impl<EGRes> Future for WaiterForResponse<EGRes>
+where
+    EGRes: Send,
+{
+    type Output = EGResult<EGRes>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return Poll::Ready(Err(EGError::MutexPoisoned)),
+        };
+        if let Some(msg) = state.filtered_response.take() {
+            Poll::Ready(Ok(msg))
+        } else {
+            state.waker = Some(cx.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+struct DeregisterGuard<EGRes>
+where
+    EGRes: Send,
+{
+    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
+    handler_id: u64,
+}
+
+impl<EGRes> Drop for DeregisterGuard<EGRes>
+where
+    EGRes: Send,
+{
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.handlers.lock()
+            && let Some(index) = guard
+                .iter()
+                .position(|handler| handler.id() == self.handler_id)
+        {
+            guard.swap_remove(index);
+        }
     }
 }
 
@@ -102,6 +158,7 @@ where
     EGRes: Send,
 {
     fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool>;
+    fn id(&self) -> u64;
 }
 
 impl<TResponse> MessageHandler<TResponse> for WaitEntry<TResponse>
@@ -119,11 +176,15 @@ where
         }
         Ok(is_handled)
     }
+    fn id(&self) -> u64 {
+        self.handler_id
+    }
 }
 
 struct WaitEntry<TResponse> {
     filter: ArcPredicate<TResponse>,
     state: Arc<Mutex<WaiterState<TResponse>>>,
+    handler_id: u64,
     _phantom_response: PhantomData<TResponse>,
 }
 
