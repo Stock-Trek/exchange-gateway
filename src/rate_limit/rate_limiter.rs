@@ -1,28 +1,32 @@
 use crate::rate_limit::{rate_limit_config::RateLimitConfig, rate_limiter_state::RateLimiterState};
 use std::sync::{Arc, Mutex};
 
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiter {
-    state: Arc<Mutex<RateLimiterState>>,
+    rate_limiters: Arc<Mutex<Vec<RateLimiterState>>>,
 }
 
-impl Default for RateLimiter {
-    fn default() -> Self {
-        Self::new(RateLimitConfig::default())
-    }
-}
-
-#[allow(unused)]
 impl RateLimiter {
-    pub fn new(rate_limit: RateLimitConfig) -> Self {
+    pub fn new(rate_limits: Vec<RateLimitConfig>) -> Self {
         Self {
-            state: Arc::new(Mutex::new(rate_limit.to_state())),
+            rate_limiters: Arc::new(Mutex::new(
+                rate_limits.iter().map(|rl| rl.to_state()).collect(),
+            )),
         }
     }
+    #[allow(unused)]
     #[must_use]
-    pub async fn did_acquire(&self, cost: u32) -> bool {
-        let mut state_guard = self.state.lock().unwrap();
-        state_guard.did_consume(cost)
+    pub fn did_acquire(&self, cost: u32) -> bool {
+        let mut limiters_guard = self.rate_limiters.lock().unwrap();
+        for (index, limiter) in limiters_guard.iter_mut().enumerate() {
+            if !limiter.did_consume(cost) {
+                for i in 0..index {
+                    let limiter = &mut limiters_guard[i];
+                    limiter.refund(cost);
+                }
+                return false;
+            }
+        }
+        true
     }
 }

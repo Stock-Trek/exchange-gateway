@@ -10,8 +10,8 @@ use crate::{
         websocket_listener::WebsocketListener,
     },
     rate_limit::{
-        multi_rate_limiter::MultiRateLimiter, rate_limit_config::RateLimitConfig,
-        rate_limits::RateLimits, request_weights::RequestWeights,
+        rate_limit_config::RateLimitConfig, rate_limiter::RateLimiter, rate_limits::RateLimits,
+        request_weights::RequestWeights,
     },
     sign::{
         convert_signer::ConvertSigner,
@@ -290,7 +290,7 @@ fn websocket_converter(
 // TODO ensure this is correct
 fn rate_limits() -> RateLimits {
     RateLimits {
-        send_order_request: MultiRateLimiter::new(vec![RateLimitConfig {
+        send_order_request: RateLimiter::new(vec![RateLimitConfig {
             capacity_per_interval: 1200,
             interval_nanos: Duration::from_mins(1).as_nanos(),
         }]),

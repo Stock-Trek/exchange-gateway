@@ -52,12 +52,6 @@ where
         let response = self.try_convert_response(response_dto)?;
         self.listener.on_message(response).await
     }
-    async fn send_and_wait(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
-        let request_dto = self.try_convert_request(request)?;
-        let response_dto = self.client.send_message(request_dto, timeout).await?;
-        let response = self.try_convert_response(response_dto)?;
-        Ok(response)
-    }
     async fn send_and_wait_for(
         &self,
         request: EGReq,

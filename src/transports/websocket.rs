@@ -23,8 +23,6 @@ pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: TryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
-    #[allow(unused)]
-    listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     websocket_listener: WebsocketListener<TransportRes, EGRes>,
 }
 
@@ -52,11 +50,6 @@ where
         let transport_req = self.try_convert_request(request)?;
         self.client.send_message(transport_req, timeout).await?;
         Ok(())
-    }
-    async fn send_and_wait(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
-        let transport_req = self.try_convert_request(request)?;
-        self.client.send_message(transport_req, timeout).await?;
-        self.websocket_listener.wait_for_response().await
     }
     async fn send_and_wait_for(
         &self,
@@ -89,12 +82,11 @@ where
         convert_response: TryConvertValue<TransportRes, EGRes>,
         listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     ) -> Self {
-        let websocket_listener = WebsocketListener::new(convert_response, listener.clone());
+        let websocket_listener = WebsocketListener::new(convert_response, listener);
         Self {
             client,
             convert_request,
             convert_response,
-            listener,
             websocket_listener,
         }
     }
@@ -108,7 +100,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("client", &"<HttpClientTrait>")
             .field("convert_request", &self.convert_request)
             .field("convert_response", &self.convert_response)
-            .field("listener", &"<Listener>")
             .field("websocket_listener", &self.websocket_listener)
             .finish()
     }

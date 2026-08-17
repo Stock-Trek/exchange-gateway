@@ -42,9 +42,6 @@ where
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    pub async fn wait_for_response(&self) -> EGResult<EGRes> {
-        self.wait_for_filtered_response(Arc::new(|_| true)).await
-    }
     pub async fn wait_for_filtered_response(&self, filter: ArcPredicate<EGRes>) -> EGResult<EGRes> {
         let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {

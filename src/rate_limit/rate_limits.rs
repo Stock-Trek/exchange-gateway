@@ -1,7 +1,7 @@
-use crate::rate_limit::multi_rate_limiter::MultiRateLimiter;
+use crate::rate_limit::rate_limiter::RateLimiter;
 
-#[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimits {
-    pub send_order_request: MultiRateLimiter,
+    #[allow(unused)]
+    pub send_order_request: RateLimiter,
 }
