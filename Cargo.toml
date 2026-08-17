@@ -1,21 +1,17 @@
 [package]
 name = "exchange-gateway"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0.103"
 async-trait = "0.1.89"
-bimap = "0.6.3"
 bs58 = "0.5.1"
 data-encoding = "2.11.0"
 ed25519-compact = "2.3.0"
 exchange-types = { version = "0.4.2", registry = "shipyard" }
-hashbrown = "0.17.1"
 hmac = "0.12"
 p256 = "0.13"
 p384 = "0.13"
-rust_decimal = "1.42.1"
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 sha2 = "0.10"
@@ -28,7 +24,6 @@ default = []
 serde = [
     "dep:serde",
     "exchange-types/serde",
-    "hashbrown/serde",
     "secrecy/serde",
 ]
 
