@@ -14,8 +14,8 @@ pub(crate) enum SigningAlgorithm {
     EcdsaP256,
     #[allow(unused)]
     EcdsaP384,
-    Ed25519,
     #[allow(unused)]
+    Ed25519,
     HmacSha256,
     #[allow(unused)]
     HmacSha512,

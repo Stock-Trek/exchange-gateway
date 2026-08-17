@@ -8,8 +8,8 @@ pub(crate) enum ByteEncoding {
     Base32,
     #[allow(unused)]
     Base58,
-    Base64,
     #[allow(unused)]
+    Base64,
     HexLower,
     #[allow(unused)]
     HexUpper,

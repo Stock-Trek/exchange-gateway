@@ -234,7 +234,7 @@ fn create_http_signer_from_credentials(
     >::new(
         http_unsigned_request_to_bytes,
         data_signer(secret)?,
-        ByteEncoding::Base64,
+        ByteEncoding::HexLower,
         signature_appender_http(api_key.into()),
     )))
 }
@@ -248,7 +248,7 @@ fn create_websocket_signer_from_credentials(
     >::new(
         websocket_unsigned_request_params_to_bytes,
         data_signer(secret)?,
-        ByteEncoding::Base64,
+        ByteEncoding::HexLower,
         signature_appender_websocket(api_key.into()),
     )))
 }
@@ -273,7 +273,7 @@ fn websocket_unsigned_request_params_to_bytes(
     })
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
-    SigningAlgorithm::Ed25519.signer(secret)
+    SigningAlgorithm::HmacSha256.signer(secret)
 }
 
 fn websocket_converter(
