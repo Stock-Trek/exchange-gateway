@@ -14,7 +14,6 @@ impl RateLimiter {
             )),
         }
     }
-    #[allow(unused)]
     #[must_use]
     pub fn did_acquire(&self, cost: u32) -> bool {
         let mut limiters_guard = self.rate_limiters.lock().unwrap();
