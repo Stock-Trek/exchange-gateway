@@ -277,9 +277,6 @@ fn websocket_unsigned_request_params_to_bytes(
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
             Some(params.query_params(true).into_bytes())
         }
-        // Binance FAPI requires `session.logon` to be HMAC-signed over the
-        // canonical `timestamp=...` query string; without a signature the
-        // handshake is rejected and the connection cannot be authenticated.
         BinanceWebsocketUnsignedParams::Logon(params) => {
             Some(params.query_params(true).into_bytes())
         }
