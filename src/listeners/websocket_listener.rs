@@ -42,11 +42,7 @@ where
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    /// Registers a message handler for the given filter *before* returning, so
-    /// that no messages matching the filter are missed between registration and
-    /// the caller awaiting the returned future. The returned future resolves to
-    /// the first `EGRes` matching the filter.
-    pub fn register_filtered_response(
+    pub fn waiter_for_filtered_response(
         &self,
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<impl Future<Output = EGResult<EGRes>> + Send + 'static> {
@@ -60,7 +56,7 @@ where
             let mut guard = self.handlers.lock().map_err(|_| EGError::BadResponse)?;
             guard.push(entry);
         }
-        Ok(poll_fn(move |cx| {
+        let waiter = poll_fn(move |cx| {
             let mut guard = waiter_state.lock().map_err(|_| EGError::BadResponse)?;
             if let Some(msg) = guard.filtered_response.take() {
                 Poll::Ready(Ok(msg))
@@ -68,7 +64,8 @@ where
                 guard.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
-        }))
+        });
+        Ok(waiter)
     }
 }
 
