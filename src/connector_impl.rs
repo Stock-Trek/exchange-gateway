@@ -129,14 +129,13 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         }
     }
     fn check_rate_limits(&self) -> EGResult<()> {
-        // TODO add rate limits back in
-        // if !self
-        //     .rate_limits
-        //     .send_order_request
-        //     .did_acquire(self.request_weights.send_order_request)
-        // {
-        //     return Err(EGError::BadResponse);
-        // }
+        if !self
+            .rate_limits
+            .send_order_request
+            .did_acquire(self.request_weights.send_order_request)
+        {
+            return Err(EGError::BadResponse);
+        }
         Ok(())
     }
 }
