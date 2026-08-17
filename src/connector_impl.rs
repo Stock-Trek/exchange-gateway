@@ -2,7 +2,7 @@ use crate::{
     authenticate_leg::AuthenticateLeg,
     connector::Connector,
     error::{EGError, EGResult},
-    functions::{TryConvertRef, TryConvertValue},
+    functions::{ArcPredicate, ArcTryConvertValue, TryConvertRef, TryConvertValue},
     rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
     sign::{
         convert_signer::ConvertSigner,
@@ -25,10 +25,12 @@ pub struct ConnectorImpl<
     TransportReq,
     TransportRes,
     EGRes,
+    ExternalRes,
 > {
     pub(crate) rate_limits: RateLimits,
     pub(crate) request_weights: RequestWeights,
     pub(crate) to_unsigned_request: TryConvertValue<ExternalReq, EGUnsignedReq>,
+    pub(crate) to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
     pub(crate) transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     pub(crate) null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     pub(crate) credentials: Option<TCredentials>,
@@ -56,6 +58,7 @@ impl<
         TransportReq,
         TransportRes,
         EGRes,
+        ExternalRes,
     >
 where
     ExternalReq: Send,
@@ -63,7 +66,8 @@ where
     EGReq: Send,
     TransportRes: Send,
     TransportReq: Send,
-    EGRes: Send + Sync + 'static,
+    EGRes: Send + Sync + Clone + 'static,
+    ExternalRes: Send + Sync + 'static,
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
@@ -97,15 +101,29 @@ where
         }
         self.transport.disconnect().await
     }
-    async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
+    async fn send(
+        &self,
+        request: ExternalReq,
+        signed: bool,
+        timeout: Duration,
+        filter: ArcPredicate<ExternalRes>,
+    ) -> EGResult<ExternalRes> {
         self.check_rate_limits()?;
         let signed_request = self.signed_request(request, signed)?;
-        self.transport
-            .fire_and_forget(signed_request, timeout)
-            .await
+        let to_external_response = self.to_external_response.clone();
+        let response_filter: ArcPredicate<EGRes> = Arc::new(move |response| {
+            to_external_response(response.clone())
+                .map(|external_response| filter(&external_response))
+                .unwrap_or(false)
+        });
+        let internal_response = self
+            .transport
+            .send_and_wait_for(signed_request, timeout, response_filter)
+            .await?;
+        (self.to_external_response)(internal_response)
     }
 }
-impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
+impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes, ExternalRes>
     ConnectorImpl<
         ExternalReq,
         EGUnsignedReq,
@@ -114,6 +132,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         TransportReq,
         TransportRes,
         EGRes,
+        ExternalRes,
     >
 {
     fn signed_request(&self, request: ExternalReq, signed: bool) -> EGResult<EGReq> {
@@ -140,7 +159,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     }
 }
 
-impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
+impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes, ExternalRes>
     std::fmt::Debug
     for ConnectorImpl<
         ExternalReq,
@@ -150,6 +169,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         TransportReq,
         TransportRes,
         EGRes,
+        ExternalRes,
     >
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

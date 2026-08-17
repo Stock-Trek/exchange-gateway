@@ -51,7 +51,6 @@ pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
     to_transport_request: TryConvertValue<BinanceHttpRequest, HttpReq>,
     to_binance_response: TryConvertValue<HttpRes, BinanceHttpResponse>,
     to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
 ) -> impl Connector<ExternalReq, ExternalRes>
 where
@@ -64,15 +63,7 @@ where
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
     let client = Arc::new((create_client)(&url));
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> = Arc::new(
-        ConvertListener::new(Arc::new(to_external_response), listener),
-    );
-    let http_transport = HttpTransport::new(
-        client,
-        to_transport_request,
-        to_binance_response,
-        response_listener,
-    );
+    let http_transport = HttpTransport::new(client, to_transport_request, to_binance_response);
     let signer = Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
         create_http_signer_from_credentials(credentials)
             .expect("Failed to create signer from credentials")
@@ -81,6 +72,7 @@ where
         rate_limits: rate_limits(),
         request_weights: request_weights(),
         to_unsigned_request,
+        to_external_response: Arc::new(to_external_response),
         transport: Transport::Http(http_transport),
         null_signer: null_http_signer(),
         credentials,
@@ -143,6 +135,7 @@ where
         rate_limits: rate_limits(),
         request_weights: request_weights(),
         to_unsigned_request,
+        to_external_response: Arc::new(to_external_response),
         transport: Transport::Websocket(websocket_transport),
         null_signer: null_websocket_signer(),
         credentials,

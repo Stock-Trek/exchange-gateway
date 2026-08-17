@@ -1,7 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
     functions::{ArcPredicate, TryConvertValue},
-    listeners::listener::ListenerTrait,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
@@ -23,7 +22,6 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: TryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
 }
 
 #[async_trait]
@@ -45,12 +43,6 @@ where
     }
     fn is_connected(&self) -> bool {
         true
-    }
-    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
-        let request_dto = self.try_convert_request(request)?;
-        let response_dto = self.client.send_message(request_dto, timeout).await?;
-        let response = self.try_convert_response(response_dto)?;
-        self.listener.on_message(response).await
     }
     async fn send_and_wait_for(
         &self,
@@ -79,13 +71,11 @@ impl<EGReq, TransportReq, TransportRes, EGRes>
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: TryConvertValue<EGReq, TransportReq>,
         convert_response: TryConvertValue<TransportRes, EGRes>,
-        listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     ) -> Self {
         Self {
             client,
             convert_request,
             convert_response,
-            listener,
         }
     }
 }
@@ -98,7 +88,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("client", &"<HttpClientTrait>")
             .field("convert_request", &self.convert_request)
             .field("convert_response", &self.convert_response)
-            .field("listener", &"<Listener>")
             .finish()
     }
 }

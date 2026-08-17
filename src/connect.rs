@@ -28,7 +28,6 @@ impl Connect {
         to_transport_request: TryConvertValue<BinanceHttpRequest, HttpReq>,
         to_binance_response: TryConvertValue<HttpRes, BinanceHttpResponse>,
         to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-        listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
     ) -> impl Connector<ExternalReq, ExternalRes>
     where
@@ -45,7 +44,6 @@ impl Connect {
             to_transport_request,
             to_binance_response,
             to_external_response,
-            listener,
             credentials,
         )
     }
