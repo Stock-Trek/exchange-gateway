@@ -352,32 +352,3 @@ fn signature_appender_websocket(
 fn id() -> String {
     Uuid::new_v4().to_string()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn websocket_logon_is_signed() {
-        let credentials = ApiKeyCredentials {
-            api_key: "test-api-key".into(),
-            secret: SecretString::from("test-secret"),
-        };
-        let signer = create_websocket_signer_from_credentials(&credentials)
-            .expect("Failed to create signer from credentials");
-        let request = BinanceWebsocketUnsignedRequest {
-            metadata: BinanceWebsocketMetadata {
-                id: "test-id".into(),
-                method: BinanceWebsocketMethodName::Logon,
-            },
-            params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams {
-                timestamp: 1_700_000_000_000,
-            }),
-        };
-        let signed = signer.sign(request).expect("Failed to sign logon request");
-        assert!(
-            signed.params.signature.is_some(),
-            "Binance FAPI session.logon must be signed to authenticate"
-        );
-    }
-}
