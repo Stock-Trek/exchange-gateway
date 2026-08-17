@@ -1,5 +1,5 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
 };
@@ -9,7 +9,9 @@ use std::{
     marker::PhantomData,
     sync::{Arc, Mutex},
     task::{Poll, Waker},
+    time::Duration,
 };
+use tokio::time::timeout;
 
 #[derive(Clone)]
 pub(crate) struct WebsocketListener<TransportRes, EGRes> {
@@ -42,7 +44,11 @@ where
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    pub async fn wait_for_filtered_response(&self, filter: ArcPredicate<EGRes>) -> EGResult<EGRes> {
+    pub async fn wait_for_filtered_response(
+        &self,
+        filter: ArcPredicate<EGRes>,
+        wait_timeout: Duration,
+    ) -> EGResult<EGRes> {
         let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {
             filter,
@@ -51,18 +57,36 @@ where
         });
         {
             let mut guard = self.handlers.lock().unwrap();
-            guard.push(entry);
+            guard.push(entry.clone());
         }
-        poll_fn(|cx| {
-            let mut guard = waiter_state.lock().unwrap();
-            if let Some(msg) = guard.filtered_response.take() {
-                Poll::Ready(Ok(msg))
-            } else {
-                guard.waker = Some(cx.waker().clone());
-                Poll::Pending
-            }
-        })
-        .await
+        let result = timeout(
+            wait_timeout,
+            poll_fn(|cx| {
+                let mut guard = waiter_state.lock().unwrap();
+                if let Some(msg) = guard.filtered_response.take() {
+                    Poll::Ready(msg)
+                } else {
+                    guard.waker = Some(cx.waker().clone());
+                    Poll::Pending
+                }
+            }),
+        )
+        .await;
+        if result.is_err() {
+            self.remove_waiter(&entry);
+        }
+        result.map_err(|elapsed| EGError::External(Box::new(elapsed)))
+    }
+
+    fn remove_waiter(&self, entry: &Arc<WaitEntry<EGRes>>) {
+        let dyn_entry: Arc<dyn MessageHandler<EGRes>> = Arc::clone(entry);
+        let mut guard = self.handlers.lock().unwrap();
+        if let Some(index) = guard
+            .iter()
+            .position(|handler| Arc::ptr_eq(handler, &dyn_entry))
+        {
+            guard.swap_remove(index);
+        }
     }
 }
 

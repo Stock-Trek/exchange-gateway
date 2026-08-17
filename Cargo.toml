@@ -16,6 +16,7 @@ secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }
+tokio = { version = "1.40.0", features = ["time"] }
 thiserror = "2.0.18"
 uuid = { version = "1.23.3", features = ["v4"] }
 

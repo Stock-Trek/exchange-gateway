@@ -60,7 +60,7 @@ where
         let transport_req = self.try_convert_request(request)?;
         self.client.send_message(transport_req, timeout).await?;
         self.websocket_listener
-            .wait_for_filtered_response(filter)
+            .wait_for_filtered_response(filter, timeout)
             .await
     }
     async fn disconnect(&self) -> EGResult<()> {
