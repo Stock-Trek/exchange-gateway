@@ -21,7 +21,7 @@ use crate::{
         signer::Signer,
     },
     transports::{
-        http::{HttpClientTrait, HttpTransport},
+        http::{HttpClientTrait, HttpEndpoint, HttpTransport},
         transport::Transport,
         websocket::{WebsocketClientTrait, WebsocketTransport},
     },
@@ -38,6 +38,7 @@ use exchange_types::binance::{
 };
 use secrecy::SecretString;
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -72,6 +73,8 @@ where
         to_transport_request,
         to_binance_response,
         response_listener,
+        request_to_http_endpoint,
+        http_endpoints(),
     );
     let signer = Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
         create_http_signer_from_credentials(credentials)
@@ -156,14 +159,28 @@ fn exchange_urls() -> ExchangeUrls {
     ExchangeUrls::new(
         "BINANCE",
         ExchangeTransportUrls::new(
-            "https://api.binance.com",
-            "https://testnet.binance.vision/api",
+            "https://api.binance.com/api/v3",
+            "https://testnet.binance.vision/api/v3",
         ),
         ExchangeTransportUrls::new(
-            "wss://stream.binance.com:9443/ws",
-            "wss://testnet.binance.vision/ws",
+            "wss://ws-api.binance.com:443/ws-api/v3",
+            "wss://ws-api.testnet.binance.vision:443/ws-api/v3",
         ),
     )
+}
+fn request_to_http_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
+    match request.params {
+        BinanceHttpUnsignedRequest::AssetLimits => HttpEndpoint::AssetLimits,
+        BinanceHttpUnsignedRequest::ExchangeInfo(..) => HttpEndpoint::ExchangeInfo,
+        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => HttpEndpoint::PlaceOrder,
+    }
+}
+fn http_endpoints() -> HashMap<HttpEndpoint, String> {
+    let mut endpoints = HashMap::new();
+    endpoints.insert(HttpEndpoint::AssetLimits, "myFilters".into());
+    endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
+    endpoints.insert(HttpEndpoint::PlaceOrder, "order".into());
+    endpoints
 }
 
 fn authenticate_websocket_leg() -> AuthenticateLeg<

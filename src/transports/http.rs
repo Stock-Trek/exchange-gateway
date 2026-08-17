@@ -5,7 +5,7 @@ use crate::{
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 #[async_trait]
 pub trait HttpClientTrait: Send + Sync {
@@ -14,9 +14,17 @@ pub trait HttpClientTrait: Send + Sync {
 
     async fn send_message(
         &self,
+        endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HttpEndpoint {
+    AssetLimits,
+    ExchangeInfo,
+    PlaceOrder,
 }
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
@@ -24,6 +32,8 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     convert_request: TryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
     listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+    to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
+    endpoints: HashMap<HttpEndpoint, String>,
 }
 
 #[async_trait]
@@ -47,9 +57,7 @@ where
         true
     }
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
-        let request_dto = self.try_convert_request(request)?;
-        let response_dto = self.client.send_message(request_dto, timeout).await?;
-        let response = self.try_convert_response(response_dto)?;
+        let response = self.to_converted_response(request, timeout).await?;
         self.listener.on_message(response).await
     }
     async fn send_and_wait_for(
@@ -58,9 +66,7 @@ where
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<EGRes> {
-        let request_dto = self.try_convert_request(request)?;
-        let response_dto = self.client.send_message(request_dto, timeout).await?;
-        let response = self.try_convert_response(response_dto)?;
+        let response = self.to_converted_response(request, timeout).await?;
         if (filter)(&response) {
             Ok(response)
         } else {
@@ -74,19 +80,39 @@ where
 
 impl<EGReq, TransportReq, TransportRes, EGRes>
     HttpTransport<EGReq, TransportReq, TransportRes, EGRes>
+where
+    EGReq: Send,
+    EGRes: 'static,
 {
     pub fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: TryConvertValue<EGReq, TransportReq>,
         convert_response: TryConvertValue<TransportRes, EGRes>,
         listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+        to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
+        endpoints: HashMap<HttpEndpoint, String>,
     ) -> Self {
         Self {
             client,
             convert_request,
             convert_response,
             listener,
+            to_http_endpoint,
+            endpoints,
         }
+    }
+    async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
+        let http_endpoint = (self.to_http_endpoint)(&request);
+        let endpoint = self
+            .endpoints
+            .get(&http_endpoint)
+            .map_or("", String::as_str);
+        let request_dto = self.try_convert_request(request)?;
+        let response_dto = self
+            .client
+            .send_message(endpoint, request_dto, timeout)
+            .await?;
+        self.try_convert_response(response_dto)
     }
 }
 
@@ -99,6 +125,8 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("convert_request", &self.convert_request)
             .field("convert_response", &self.convert_response)
             .field("listener", &"<Listener>")
+            .field("to_http_endpoint", &self.to_http_endpoint)
+            .field("action_endpoints", &self.endpoints)
             .finish()
     }
 }
