@@ -6,6 +6,7 @@ pub(crate) type ArcCombineValues<TValue0, TValue1, TCombined> =
 
 pub type ArcTryConvertValue<TFrom, TTo> = Arc<dyn Fn(TFrom) -> EGResult<TTo> + Send + Sync>;
 pub type ArcPredicate<T> = Arc<dyn for<'a> Fn(&'a T) -> bool + Send + Sync>;
+pub type ArcCreateAuthMessage<T> = Arc<dyn Fn() -> T + Send + Sync>;
 
 pub(crate) type TryConvertRef<From, To> = fn(&From) -> EGResult<To>;
 pub(crate) type TryConvertValue<From, To> = fn(From) -> EGResult<To>;
