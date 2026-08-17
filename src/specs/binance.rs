@@ -92,7 +92,7 @@ where
 #[allow(clippy::too_many_arguments)]
 pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
     trading_mode: TradingMode,
-    create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>) -> TClient,
+    create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
     to_transport_request: TryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
     to_binance_response: TryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
@@ -111,19 +111,19 @@ where
 {
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
-    let websocket_listener = Arc::new(WebsocketListener::new(
-        to_external_response,
-        listener.clone(),
-    ));
-    let client = Arc::new((create_client)(&url, websocket_listener));
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> = Arc::new(
         ConvertListener::new(Arc::new(to_external_response), listener),
     );
+    let websocket_listener = Arc::new(WebsocketListener::new(
+        to_binance_response,
+        response_listener,
+    ));
+    let client = Arc::new((create_client)(&url, websocket_listener.clone()));
     let websocket_transport = WebsocketTransport::new(
         client,
         to_transport_request,
         to_binance_response,
-        response_listener,
+        websocket_listener,
     );
     let (authenticate_legs, signer) = if use_session {
         (

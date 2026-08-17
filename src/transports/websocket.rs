@@ -1,7 +1,7 @@
 use crate::{
     error::EGResult,
     functions::{ArcPredicate, TryConvertValue},
-    listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
+    listeners::websocket_listener::WebsocketListener,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
@@ -23,7 +23,7 @@ pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: TryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
-    websocket_listener: WebsocketListener<TransportRes, EGRes>,
+    websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
 }
 
 #[async_trait]
@@ -80,9 +80,8 @@ where
         >,
         convert_request: TryConvertValue<EGReq, TransportReq>,
         convert_response: TryConvertValue<TransportRes, EGRes>,
-        listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+        websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
     ) -> Self {
-        let websocket_listener = WebsocketListener::new(convert_response, listener);
         Self {
             client,
             convert_request,

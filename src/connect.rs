@@ -5,7 +5,7 @@ use crate::{
     urls::TradingMode,
 };
 use exchange_types::binance::websocket::{
-    BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+    BinanceWebsocketRequest, BinanceWebsocketUnsignedRequest,
 };
 use std::sync::Arc;
 
@@ -17,10 +17,7 @@ impl Connect {
     pub fn binance_websocket<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        create_client: impl Fn(
-            &str,
-            Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
-        ) -> TClient,
+        create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
         to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
         to_transport_request: TryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
         to_binance_response: TryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
