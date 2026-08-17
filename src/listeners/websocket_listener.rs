@@ -73,17 +73,11 @@ where
     }
 }
 
-/// A single wait handle that both yields the filtered response (as a
-/// `Future`) and deregisters its handler from the listener on `Drop`.
-///
-/// Returning one struct (instead of a `(future, deregister)` tuple) means a
-/// timed-out or cancelled wait is always cleaned up, so a late-arriving
-/// matching response is never swallowed and the handler entry never leaks for
-/// the connection's lifetime.
-pub(crate) struct WaiterForResponse<EGRes: Send> {
+pub(crate) struct WaiterForResponse<EGRes>
+where
+    EGRes: Send,
+{
     state: Arc<Mutex<WaiterState<EGRes>>>,
-    // Only used for its `Drop` side-effect: deregisters the handler from the
-    // listener when this future is dropped (e.g. on timeout or cancellation).
     #[allow(dead_code)]
     deregister: DeregisterGuard<EGRes>,
 }
@@ -108,12 +102,18 @@ where
     }
 }
 
-struct DeregisterGuard<EGRes: Send> {
+struct DeregisterGuard<EGRes>
+where
+    EGRes: Send,
+{
     handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
     handler_id: u64,
 }
 
-impl<EGRes: Send> Drop for DeregisterGuard<EGRes> {
+impl<EGRes> Drop for DeregisterGuard<EGRes>
+where
+    EGRes: Send,
+{
     fn drop(&mut self) {
         if let Ok(mut guard) = self.handlers.lock()
             && let Some(index) = guard
