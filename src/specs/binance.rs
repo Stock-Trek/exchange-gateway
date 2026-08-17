@@ -174,11 +174,11 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     let timeout = Duration::from_secs(20);
     let id = Arc::new(id());
     let create_auth_message = {
-        let id = Arc::clone(&id);
+        let id = id.clone();
         Arc::new(move || create_auth_message_with_id(&id))
     };
     let filter = {
-        let id = Arc::clone(&id);
+        let id = id.clone();
         Arc::new(move |response: &BinanceWebsocketResponse| response.id == *id)
     };
     AuthenticateLeg {
