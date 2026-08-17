@@ -38,6 +38,7 @@ impl<EGReq, TransportReq, TransportRes, EGRes>
     for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
 where
     EGReq: Send,
+    TransportRes: 'static,
     EGRes: Send + Sync + 'static,
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
@@ -68,9 +69,7 @@ where
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        // Apply a timeout to the response wait so a missing exchange response
-        // does not hang connect() indefinitely.
-        wait_for_response(waiter, timeout).await
+        self.wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.client.disconnect().await
@@ -97,6 +96,24 @@ where
             convert_response,
             websocket_listener,
         }
+    }
+    fn wait_for_response(
+        &self,
+        waiter: impl Future<Output = EGResult<EGRes>> + Send + 'static,
+        timeout: Duration,
+    ) -> impl Future<Output = EGResult<EGRes>> + Send + 'static {
+        let mut waiter = Box::pin(waiter);
+        let mut delay = Box::pin(Delay::new(timeout));
+        poll_fn(move |cx| {
+            // Poll the timeout first so a missing response can't wedge the wait.
+            if let Poll::Ready(()) = delay.as_mut().poll(cx) {
+                return Poll::Ready(Err(EGError::TimedOut));
+            }
+            match waiter.as_mut().poll(cx) {
+                Poll::Ready(result) => Poll::Ready(result),
+                Poll::Pending => Poll::Pending,
+            }
+        })
     }
 }
 
