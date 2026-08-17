@@ -113,7 +113,18 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+>
     HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -137,7 +148,17 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToT
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+>
     HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -180,7 +201,17 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToTransportRequest, To
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToBinanceResponse, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+>
     HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -223,7 +254,17 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToB
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToExternalResponse,
+    Listener,
+>
     HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -266,7 +307,17 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToT
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    Listener,
+>
     HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -309,7 +360,17 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToT
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse>
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+>
     HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -420,7 +481,18 @@ impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>
     }
 }
 
-impl<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener> std::fmt::Debug
+impl<
+    TClient,
+    ExternalReq,
+    HttpReq,
+    HttpRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+> std::fmt::Debug
     for HttpConnectorBuilder<
         TClient,
         ExternalReq,
@@ -511,7 +583,18 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+>
     WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
@@ -539,7 +622,17 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRe
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+>
     WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
@@ -583,7 +676,17 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToTransportR
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToBinanceResponse, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+>
     WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
@@ -627,7 +730,17 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRe
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToExternalResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToExternalResponse,
+    Listener,
+>
     WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
@@ -671,7 +784,17 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRe
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, Listener>
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    Listener,
+>
     WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
@@ -715,7 +838,17 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRe
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse>
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+>
     WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
@@ -840,7 +973,18 @@ impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>
     }
 }
 
-impl<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes, ToUnsignedRequest, ToTransportRequest, ToBinanceResponse, ToExternalResponse, Listener> std::fmt::Debug
+impl<
+    TClient,
+    ExternalReq,
+    WebsocketReq,
+    WebsocketRes,
+    ExternalRes,
+    ToUnsignedRequest,
+    ToTransportRequest,
+    ToBinanceResponse,
+    ToExternalResponse,
+    Listener,
+> std::fmt::Debug
     for WebsocketConnectorBuilder<
         TClient,
         ExternalReq,
