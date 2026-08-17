@@ -5,7 +5,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    marker::PhantomData,
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -52,19 +51,18 @@ where
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<WaiterForResponse<EGRes>> {
         let handler_id = self.next_handler_id.fetch_add(1, Ordering::Relaxed);
-        let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
+        let state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {
+            state: state.clone(),
             filter,
-            state: waiter_state.clone(),
             handler_id,
-            _phantom_response: PhantomData,
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
             guard.push(entry);
         }
         Ok(WaiterForResponse {
-            state: waiter_state,
+            state,
             handlers: self.handlers.clone(),
             handler_id,
         })
@@ -112,6 +110,25 @@ where
     }
 }
 
+#[async_trait]
+impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
+where
+    EGRes: Clone + Send,
+    TransportRes: Send,
+{
+    type TMessage = TransportRes;
+
+    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
+        let response = (self.converter)(message)?;
+        if remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone())
+        })? {
+            return Ok(());
+        }
+        self.delegate.on_message(response).await
+    }
+}
+
 fn remove_handler<EGRes>(
     handlers: &Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>,
     mut predicate: impl FnMut(&Arc<dyn MessageHandler<EGRes>>) -> EGResult<bool>,
@@ -132,25 +149,6 @@ where
         Ok(true)
     } else {
         Ok(false)
-    }
-}
-
-#[async_trait]
-impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
-where
-    EGRes: Clone + Send,
-    TransportRes: Send,
-{
-    type TMessage = TransportRes;
-
-    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        let response = (self.converter)(message)?;
-        if remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone())
-        })? {
-            return Ok(());
-        }
-        self.delegate.on_message(response).await
     }
 }
 
@@ -182,11 +180,10 @@ where
     }
 }
 
-struct WaitEntry<TResponse> {
-    filter: ArcPredicate<TResponse>,
-    state: Arc<Mutex<WaiterState<TResponse>>>,
+struct WaitEntry<EGRes> {
+    state: Arc<Mutex<WaiterState<EGRes>>>,
+    filter: ArcPredicate<EGRes>,
     handler_id: u64,
-    _phantom_response: PhantomData<TResponse>,
 }
 
 struct WaiterState<EGRes> {
