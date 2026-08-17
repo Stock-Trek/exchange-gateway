@@ -3,7 +3,7 @@ use crate::{
     connector::Connector,
     error::{EGError, EGResult},
     functions::{TryConvertRef, TryConvertValue},
-    rate_limit::{rate_limits::RateLimits, request_weights::RequestWeights},
+    rate_limit::rate_limits::RateLimits,
     sign::{
         convert_signer::ConvertSigner,
         signer::{Signer, SignerTrait},
@@ -27,7 +27,7 @@ pub struct ConnectorImpl<
     EGRes,
 > {
     pub(crate) rate_limits: RateLimits,
-    pub(crate) request_weights: RequestWeights,
+    pub(crate) to_weight: fn(&EGUnsignedReq) -> u32,
     pub(crate) to_unsigned_request: TryConvertValue<ExternalReq, EGUnsignedReq>,
     pub(crate) transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     pub(crate) null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
@@ -98,8 +98,11 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
-        self.check_rate_limits()?;
-        let signed_request = self.signed_request(request, signed)?;
+        let signed_request = {
+            let unsigned = (self.to_unsigned_request)(request)?;
+            self.check_rate_limits(&unsigned)?;
+            self.signed_request(unsigned, signed)?
+        };
         self.transport
             .fire_and_forget(signed_request, timeout)
             .await
@@ -116,8 +119,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         EGRes,
     >
 {
-    fn signed_request(&self, request: ExternalReq, signed: bool) -> EGResult<EGReq> {
-        let unsigned = (self.to_unsigned_request)(request)?;
+    fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
             let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             match guard.deref() {
@@ -128,12 +130,9 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             self.null_signer.sign(unsigned)
         }
     }
-    fn check_rate_limits(&self) -> EGResult<()> {
-        if !self
-            .rate_limits
-            .send_order_request
-            .did_acquire(self.request_weights.send_order_request)
-        {
+    fn check_rate_limits(&self, unsigned: &EGUnsignedReq) -> EGResult<()> {
+        let weight = (self.to_weight)(unsigned);
+        if !self.rate_limits.request.did_acquire(weight) {
             return Err(EGError::RateLimited);
         }
         Ok(())
@@ -155,7 +154,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Connector")
             .field("rate_limits", &self.rate_limits)
-            .field("request_weights", &self.request_weights)
+            .field("to_weight", &"<function>")
             .field("convert_request", &"<function>")
             .field("null_signer", &self.null_signer)
             .field("transport", &self.transport)

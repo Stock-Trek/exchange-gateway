@@ -11,7 +11,6 @@ use crate::{
     },
     rate_limit::{
         rate_limit_config::RateLimitConfig, rate_limiter::RateLimiter, rate_limits::RateLimits,
-        request_weights::RequestWeights,
     },
     sign::{
         convert_signer::ConvertSigner,
@@ -31,6 +30,7 @@ use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
     signed::{BinanceSignature, BinanceSignedParams},
+    spot::BinanceSpotOrderParams,
     websocket::{
         BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
         BinanceWebsocketResponse, BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
@@ -82,7 +82,7 @@ where
     })));
     ConnectorImpl {
         rate_limits: rate_limits(),
-        request_weights: request_weights(),
+        to_weight: http_request_weight,
         to_unsigned_request,
         transport: Transport::Http(http_transport),
         null_signer: null_http_signer(),
@@ -144,7 +144,7 @@ where
     };
     ConnectorImpl {
         rate_limits: rate_limits(),
-        request_weights: request_weights(),
+        to_weight: websocket_request_weight,
         to_unsigned_request,
         transport: Transport::Websocket(websocket_transport),
         null_signer: null_websocket_signer(),
@@ -315,20 +315,37 @@ fn websocket_converter(
     Ok(BinanceWebsocketRequest { metadata, params })
 }
 
-// TODO ensure this is correct
 fn rate_limits() -> RateLimits {
     RateLimits {
-        send_order_request: RateLimiter::new(vec![RateLimitConfig {
+        request: RateLimiter::new(vec![RateLimitConfig {
             capacity_per_interval: 1200,
             interval_nanos: Duration::from_mins(1).as_nanos(),
         }]),
     }
 }
 
-// TODO ensure this is correct
-fn request_weights() -> RequestWeights {
-    RequestWeights {
-        send_order_request: 1,
+fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
+    match request {
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) | BinanceHttpUnsignedRequest::AssetLimits => 1,
+        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
+    }
+}
+fn websocket_request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
+    match &request.params {
+        BinanceWebsocketUnsignedParams::ExchangeInfo(_)
+        | BinanceWebsocketUnsignedParams::Logon(_) => 1,
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
+    }
+}
+fn order_weight(params: &BinanceSpotOrderParams) -> u32 {
+    if params.icebergQty.is_some()
+        || params.trailingDelta.is_some()
+        || params.pegPriceType.is_some()
+        || params.pegOffsetValue.is_some()
+    {
+        2
+    } else {
+        1
     }
 }
 
