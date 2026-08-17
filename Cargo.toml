@@ -13,6 +13,7 @@ futures-timer = "3.0"
 hmac = "0.12"
 p256 = "0.13"
 p384 = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 sha2 = "0.10"
@@ -22,17 +23,21 @@ uuid = { version = "1.23.3", features = ["v4"] }
 
 [features]
 default = []
+reqwest = ["dep:reqwest"]
 serde = [
     "dep:serde",
     "exchange-types/serde",
     "secrecy/serde",
 ]
 
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
 [lints.clippy]
 new_ret_no_self = "allow"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
-features = []
+features = ["reqwest"]
 no-deps = true
 targets = ["x86_64-unknown-linux-gnu"]
