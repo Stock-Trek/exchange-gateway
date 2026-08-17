@@ -5,7 +5,7 @@ use crate::{
     urls::TradingMode,
 };
 use exchange_types::binance::websocket::{
-    BinanceWebsocketRequest, BinanceWebsocketUnsignedRequest,
+    BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
 };
 use std::sync::Arc;
 
