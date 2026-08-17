@@ -17,7 +17,7 @@ use std::{
 pub(crate) struct WebsocketListener<TransportRes, EGRes> {
     converter: ArcTryConvertValue<TransportRes, EGRes>,
     delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
-    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
+    handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
     next_handler_id: Arc<AtomicU64>,
 }
 
@@ -26,7 +26,8 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
         f.debug_struct("WebsocketListener")
             .field("converter", &"<Converter>")
             .field("delegate", &"<Listener>")
-            .field("handlers", &"<Vec<MessageHandler>>")
+            .field("handlers", &"<Vec<ResponseHandler>>")
+            .field("next_handler_id", &self.next_handler_id)
             .finish()
     }
 }
@@ -52,14 +53,14 @@ where
     ) -> EGResult<WaiterForResponse<EGRes>> {
         let handler_id = self.next_handler_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(Mutex::new(WaiterState::default()));
-        let entry = Arc::new(WaitEntry {
+        let handler = Arc::new(ResponseHandler {
             state: state.clone(),
             filter,
             handler_id,
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-            guard.push(entry);
+            guard.push(handler);
         }
         Ok(WaiterForResponse {
             state,
@@ -74,7 +75,7 @@ where
     EGRes: Send,
 {
     state: Arc<Mutex<WaiterState<EGRes>>>,
-    handlers: Arc<Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>>,
+    handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
     handler_id: u64,
 }
 
@@ -130,12 +131,9 @@ where
 }
 
 fn remove_handler<EGRes>(
-    handlers: &Mutex<Vec<Arc<dyn MessageHandler<EGRes>>>>,
-    mut predicate: impl FnMut(&Arc<dyn MessageHandler<EGRes>>) -> EGResult<bool>,
-) -> EGResult<bool>
-where
-    EGRes: Send,
-{
+    handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>,
+    mut predicate: impl FnMut(&Arc<ResponseHandler<EGRes>>) -> EGResult<bool>,
+) -> EGResult<bool> {
     let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
     let mut handler_index = None;
     for (index, handler) in guard.iter().enumerate() {
@@ -152,19 +150,14 @@ where
     }
 }
 
-trait MessageHandler<EGRes>: Send + Sync
-where
-    EGRes: Send,
-{
-    fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool>;
-    fn id(&self) -> u64;
+struct ResponseHandler<EGRes> {
+    state: Arc<Mutex<WaiterState<EGRes>>>,
+    filter: ArcPredicate<EGRes>,
+    handler_id: u64,
 }
 
-impl<TResponse> MessageHandler<TResponse> for WaitEntry<TResponse>
-where
-    TResponse: Send + Sync,
-{
-    fn handle(self: Arc<Self>, response: TResponse) -> EGResult<bool> {
+impl<EGRes> ResponseHandler<EGRes> {
+    fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool> {
         let is_handled = (self.filter)(&response);
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
@@ -178,12 +171,6 @@ where
     fn id(&self) -> u64 {
         self.handler_id
     }
-}
-
-struct WaitEntry<EGRes> {
-    state: Arc<Mutex<WaiterState<EGRes>>>,
-    filter: ArcPredicate<EGRes>,
-    handler_id: u64,
 }
 
 struct WaiterState<EGRes> {
