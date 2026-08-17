@@ -5,7 +5,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    future::poll_fn,
+    future::{Future, poll_fn},
     marker::PhantomData,
     sync::{Arc, Mutex},
     task::{Poll, Waker},
@@ -42,7 +42,10 @@ where
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    pub async fn wait_for_filtered_response(&self, filter: ArcPredicate<EGRes>) -> EGResult<EGRes> {
+    pub fn waiter_for_filtered_response(
+        &self,
+        filter: ArcPredicate<EGRes>,
+    ) -> EGResult<impl Future<Output = EGResult<EGRes>> + Send + 'static> {
         let waiter_state = Arc::new(Mutex::new(WaiterState::default()));
         let entry = Arc::new(WaitEntry {
             filter,
@@ -53,7 +56,7 @@ where
             let mut guard = self.handlers.lock().map_err(|_| EGError::BadResponse)?;
             guard.push(entry);
         }
-        poll_fn(|cx| {
+        let waiter = poll_fn(move |cx| {
             let mut guard = waiter_state.lock().map_err(|_| EGError::BadResponse)?;
             if let Some(msg) = guard.filtered_response.take() {
                 Poll::Ready(Ok(msg))
@@ -61,8 +64,8 @@ where
                 guard.waker = Some(cx.waker().clone());
                 Poll::Pending
             }
-        })
-        .await
+        });
+        Ok(waiter)
     }
 }
 

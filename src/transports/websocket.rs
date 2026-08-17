@@ -58,10 +58,11 @@ where
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<EGRes> {
         let transport_req = self.try_convert_request(request)?;
+        let waiter = self
+            .websocket_listener
+            .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        self.websocket_listener
-            .wait_for_filtered_response(filter)
-            .await
+        waiter.await
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.client.disconnect().await
