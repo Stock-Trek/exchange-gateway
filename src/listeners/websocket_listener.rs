@@ -27,6 +27,7 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
             .field("converter", &"<Converter>")
             .field("delegate", &"<Listener>")
             .field("handlers", &"<Vec<ResponseHandler>>")
+            .field("next_handler_id", &self.next_handler_id)
             .finish()
     }
 }
@@ -52,14 +53,14 @@ where
     ) -> EGResult<WaiterForResponse<EGRes>> {
         let handler_id = self.next_handler_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(Mutex::new(WaiterState::default()));
-        let entry = Arc::new(ResponseHandler {
+        let handler = Arc::new(ResponseHandler {
             state: state.clone(),
             filter,
             handler_id,
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-            guard.push(entry);
+            guard.push(handler);
         }
         Ok(WaiterForResponse {
             state,
