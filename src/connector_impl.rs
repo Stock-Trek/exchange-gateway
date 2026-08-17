@@ -123,7 +123,16 @@ where
         (self.to_external_response)(internal_response)
     }
 }
-impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes, ExternalRes>
+impl<
+    ExternalReq,
+    EGUnsignedReq,
+    TCredentials,
+    EGReq,
+    TransportReq,
+    TransportRes,
+    EGRes,
+    ExternalRes,
+>
     ConnectorImpl<
         ExternalReq,
         EGUnsignedReq,
@@ -159,8 +168,16 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     }
 }
 
-impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes, ExternalRes>
-    std::fmt::Debug
+impl<
+    ExternalReq,
+    EGUnsignedReq,
+    TCredentials,
+    EGReq,
+    TransportReq,
+    TransportRes,
+    EGRes,
+    ExternalRes,
+> std::fmt::Debug
     for ConnectorImpl<
         ExternalReq,
         EGUnsignedReq,
