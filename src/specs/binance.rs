@@ -160,8 +160,8 @@ fn exchange_urls() -> ExchangeUrls {
             "https://testnet.binance.vision/api",
         ),
         ExchangeTransportUrls::new(
-            "wss://ws-fapi.binance.com/ws-fapi/v1",
-            "wss://testnet.binancefuture.com/ws-fapi/v1",
+            "wss://stream.binance.com:9443/ws",
+            "wss://testnet.binance.vision/ws",
         ),
     )
 }
