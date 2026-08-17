@@ -1,6 +1,8 @@
 use crate::{
-    connector::Connector, credentials::api_key_credential::ApiKeyCredentials,
-    functions::TryConvertValue, listeners::listener::ListenerTrait,
+    connector::Connector,
+    credentials::api_key_credential::ApiKeyCredentials,
+    functions::TryConvertValue,
+    listeners::listener::ListenerTrait,
     specs::binance::{http_connector, websocket_connector},
     transports::{http::HttpClientTrait, websocket::WebsocketClientTrait},
     urls::TradingMode,
