@@ -78,10 +78,7 @@ where
         });
         let deregister = move || {
             if let Ok(mut guard) = handlers.lock() {
-                if let Some(index) = guard
-                    .iter()
-                    .position(|handler| handler.id() == handler_id)
-                {
+                if let Some(index) = guard.iter().position(|handler| handler.id() == handler_id) {
                     guard.swap_remove(index);
                 }
             }
