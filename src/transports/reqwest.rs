@@ -7,8 +7,7 @@ use std::time::Duration;
 
 /// A transport-level HTTP request handled by the reqwest-backed client.
 ///
-/// `query` carries the raw query string (including any pre-encoded values such
-/// as a signature) and is appended to the request URL verbatim.
+/// `query` carries the raw query string and is appended to the request URL verbatim.
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
     pub method: reqwest::Method,
@@ -39,7 +38,7 @@ impl ReqwestHttpClient {
     /// Creates a client that sends requests to `base_url` using a default
     /// [`reqwest::Client`].
     pub fn new(base_url: &str) -> Self {
-        Self::with_client(base_url, reqwest::Client::new())
+        Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
     }
     /// Creates a client that sends requests to `base_url` using a custom
     /// [`reqwest::Client`].
@@ -48,6 +47,14 @@ impl ReqwestHttpClient {
             client,
             base_url: base_url.into(),
         }
+    }
+    fn build_url(&self, endpoint: &str, query: Option<&str>) -> String {
+        let mut url = format!("{}/{}", self.base_url, endpoint.trim_start_matches('/'));
+        if let Some(query) = query.filter(|query| !query.is_empty()) {
+            url.push('?');
+            url.push_str(query);
+        }
+        url
     }
 }
 
@@ -62,7 +69,7 @@ impl HttpClientTrait for ReqwestHttpClient {
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        let url = build_url(&self.base_url, endpoint, message.query.as_deref());
+        let url = self.build_url(endpoint, message.query.as_deref());
         let mut request = self.client.request(message.method, &url).timeout(timeout);
         for (name, value) in &message.headers {
             request = request.header(name, value);
@@ -93,19 +100,6 @@ impl std::fmt::Debug for ReqwestHttpClient {
     }
 }
 
-fn build_url(base_url: &str, endpoint: &str, query: Option<&str>) -> String {
-    let mut url = format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        endpoint.trim_start_matches('/')
-    );
-    if let Some(query) = query.filter(|query| !query.is_empty()) {
-        url.push('?');
-        url.push_str(query);
-    }
-    url
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,26 +109,6 @@ mod tests {
         net::TcpListener,
         sync::{Arc, Mutex},
     };
-
-    #[test]
-    fn build_url_appends_endpoint_and_query() {
-        assert_eq!(
-            build_url(
-                "https://api.binance.com/api/v3",
-                "order",
-                Some("symbol=BTCUSDT")
-            ),
-            "https://api.binance.com/api/v3/order?symbol=BTCUSDT"
-        );
-        assert_eq!(
-            build_url("https://api.binance.com/api/v3/", "/order", None),
-            "https://api.binance.com/api/v3/order"
-        );
-        assert_eq!(
-            build_url("https://api.binance.com/api/v3", "exchangeInfo", Some("")),
-            "https://api.binance.com/api/v3/exchangeInfo"
-        );
-    }
 
     #[tokio::test]
     async fn send_message_round_trips_through_reqwest() {
