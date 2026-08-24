@@ -3,3 +3,5 @@ pub mod http;
 pub mod reqwest;
 pub mod transport;
 pub mod websocket;
+#[cfg(feature = "websocket")]
+pub mod websocket_client;

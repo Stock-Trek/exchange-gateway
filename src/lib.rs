@@ -15,6 +15,8 @@ pub mod urls;
 pub mod prelude {
     #[cfg(feature = "reqwest")]
     pub use crate::transports::reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient};
+    #[cfg(feature = "websocket")]
+    pub use crate::transports::websocket_client::ShipyardWebsocketClient;
     pub use crate::{
         connect::Connect,
         connector_impl::ConnectorImpl,
