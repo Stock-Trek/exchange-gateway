@@ -8,7 +8,7 @@ async-trait = "0.1.89"
 bs58 = "0.5.1"
 data-encoding = "2.11.0"
 ed25519-compact = "2.3.0"
-exchange-types = { version = "0.4.2", registry = "shipyard" }
+exchange-types = { version = "0.4.2", path = "exchange-types" }
 futures-timer = "3.0"
 hmac = "0.12"
 p256 = "0.13"

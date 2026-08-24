@@ -3,7 +3,7 @@ use crate::{
     connector::Connector,
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcCombineValues, ArcTryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
@@ -33,7 +33,8 @@ use exchange_types::binance::{
     spot::BinanceSpotOrderParams,
     websocket::{
         BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
+        BinanceWebsocketUnsignedRequest,
     },
 };
 use secrecy::SecretString;
@@ -102,7 +103,7 @@ pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, Ext
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
-) -> impl Connector<ExternalReq, ExternalRes>
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     TClient:
         WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes> + 'static,
@@ -111,6 +112,7 @@ where
     WebsocketRes: Send + 'static,
     ExternalRes: Clone + Send + Sync + 'static,
 {
+    validate_use_session(&credentials, use_session)?;
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
@@ -126,21 +128,12 @@ where
         to_binance_response,
         websocket_listener,
     );
-    let (authenticate_legs, signer) = if use_session {
-        (
-            vec![authenticate_websocket_leg()],
-            Arc::new(Mutex::new(None)),
-        )
+    let authenticate_legs = if use_session {
+        vec![authenticate_websocket_leg()]
     } else {
-        (
-            vec![],
-            Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
-                create_websocket_signer_from_credentials(credentials)
-                    .expect("Failed to create signer from credentials")
-            }))),
-        )
+        vec![]
     };
-    ConnectorImpl {
+    Ok(ConnectorImpl {
         rate_limits: rate_limits(),
         to_weight: websocket_request_weight,
         to_unsigned_request,
@@ -149,8 +142,22 @@ where
         credentials,
         create_signer: create_websocket_signer_from_credentials,
         authenticate_legs,
-        signer,
+        signer: Arc::new(Mutex::new(None)),
+    })
+}
+
+fn validate_use_session(
+    credentials: &Option<ApiKeyCredentials>,
+    use_session: bool,
+) -> EGResult<()> {
+    if !use_session && credentials.is_some() {
+        return Err(EGError::InvalidConfiguration(
+            "Binance ws-api requires session-based authentication: set use_session=true when \
+             providing credentials for a websocket connector"
+                .to_string(),
+        ));
     }
+    Ok(())
 }
 
 fn exchange_urls() -> ExchangeUrls {
@@ -220,9 +227,35 @@ fn create_auth_message(id: &str) -> BinanceWebsocketUnsignedRequest {
     }
 }
 fn create_signer_from_message(
-    _message: BinanceWebsocketResponse,
+    message: BinanceWebsocketResponse,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
-    Ok(Box::new(ConvertSigner::new(websocket_converter)))
+    if let Some(error) = message.error {
+        return Err(EGError::AuthenticationFailed(format!(
+            "Binance ws-api session.logon failed: {} ({})",
+            error.msg, error.code
+        )));
+    }
+    if message.status != 200 {
+        return Err(EGError::AuthenticationFailed(format!(
+            "Binance ws-api session.logon failed with status {}",
+            message.status
+        )));
+    }
+    let session = match message.result {
+        Some(BinanceWebsocketResponseResult::SessionAuthentication(session)) => session,
+        _ => return Err(EGError::BadResponse),
+    };
+    let api_key = session.apiKey;
+    let session_key = SecretString::from(session.sessionKey);
+    Ok(Box::new(MessageSigner::<
+        BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketRequest,
+    >::new(
+        websocket_unsigned_request_params_to_bytes,
+        data_signer(&session_key)?,
+        ByteEncoding::HexLower,
+        signature_appender_websocket(api_key),
+    )))
 }
 
 fn null_http_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
@@ -302,17 +335,6 @@ fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::HmacSha256.signer(secret)
 }
 
-fn websocket_converter(
-    unsigned: BinanceWebsocketUnsignedRequest,
-) -> EGResult<BinanceWebsocketRequest> {
-    let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
-    let params = BinanceSignedParams {
-        signature: None,
-        params,
-    };
-    Ok(BinanceWebsocketRequest { metadata, params })
-}
-
 fn rate_limits() -> RateLimits {
     RateLimits {
         request: RateLimiter::new(vec![RateLimitConfig {
@@ -383,4 +405,172 @@ fn signature_appender_websocket(
 
 fn id() -> String {
     Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sign::encode::{byte_encoder::ByteEncoder, byte_encoding::ByteEncoding};
+    use exchange_types::binance::{
+        error::BinanceError,
+        exchange_info::BinanceOrderType,
+        logon::BinanceSessionAuthenticationResult,
+        spot::{
+            BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
+            BinanceSpotOrderParams,
+        },
+    };
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    fn logon_response(status: i32, api_key: &str, session_key: &str) -> BinanceWebsocketResponse {
+        BinanceWebsocketResponse {
+            error: None,
+            id: "logon-1".into(),
+            rateLimits: vec![],
+            result: Some(BinanceWebsocketResponseResult::SessionAuthentication(
+                BinanceSessionAuthenticationResult {
+                    apiKey: api_key.into(),
+                    authorizedSince: 0,
+                    connectedSince: 0,
+                    returnRateLimits: false,
+                    serverTime: 0,
+                    userDataStream: false,
+                    sessionKey: session_key.into(),
+                },
+            )),
+            status,
+        }
+    }
+
+    fn unsigned_spot_order_request() -> BinanceWebsocketUnsignedRequest {
+        let params = BinanceSpotOrderParams {
+            icebergQty: None,
+            newClientOrderId: "client-order-id".into(),
+            newOrderRespType: BinanceNewOrderResponseType::ACK,
+            pegPriceType: None,
+            pegOffsetValue: None,
+            pegOffsetType: None,
+            price: None,
+            quantity: None,
+            quoteOrderQty: None,
+            recvWindow: None,
+            selfTradePreventionMode: BinanceSelfTradeProtection::NONE,
+            side: BinanceSide::BUY,
+            stopPrice: None,
+            strategyId: None,
+            strategyType: None,
+            symbol: "BTCUSDT".into(),
+            timeInForce: None,
+            timestamp: 1_700_000_000_000,
+            trailingDelta: None,
+            r#type: BinanceOrderType::LIMIT,
+        };
+        BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "order-1".into(),
+                method: BinanceWebsocketMethodName::PlaceOrder,
+            },
+            params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(params)),
+        }
+    }
+
+    #[test]
+    fn signer_from_logon_response_uses_session_key_as_hmac_secret() {
+        let api_key = "api-key";
+        let session_key = "session-secret";
+        let response = logon_response(200, api_key, session_key);
+        let signer =
+            create_signer_from_message(response).expect("logon response should yield a signer");
+        let unsigned = unsigned_spot_order_request();
+        let signed = signer.sign(unsigned.clone()).expect("request should sign");
+        let signature = signed
+            .params
+            .signature
+            .expect("signed request must carry a signature");
+        assert_eq!(signature.apiKey, api_key);
+        let bytes = websocket_unsigned_request_params_to_bytes(&unsigned)
+            .expect("params should serialize")
+            .expect("spot order should produce bytes");
+        let mut mac = Hmac::<Sha256>::new_from_slice(session_key.as_bytes())
+            .expect("session key should be a valid HMAC key");
+        mac.update(&bytes);
+        let expected =
+            ByteEncoder::from(ByteEncoding::HexLower).encode(&mac.finalize().into_bytes());
+        assert_eq!(signature.signature, expected);
+    }
+
+    #[test]
+    fn signer_from_logon_response_is_not_signed_with_api_secret() {
+        let api_key = "api-key";
+        let session_key = "session-secret";
+        let response = logon_response(200, api_key, session_key);
+        let signer =
+            create_signer_from_message(response).expect("logon response should yield a signer");
+        let unsigned = unsigned_spot_order_request();
+        let signed = signer.sign(unsigned.clone()).expect("request should sign");
+        let signature = signed
+            .params
+            .signature
+            .expect("signed request must carry a signature");
+        let bytes = websocket_unsigned_request_params_to_bytes(&unsigned)
+            .expect("params should serialize")
+            .expect("spot order should produce bytes");
+        let mut mac = Hmac::<Sha256>::new_from_slice(api_key.as_bytes())
+            .expect("api key should be a valid HMAC key");
+        mac.update(&bytes);
+        let api_secret_signature =
+            ByteEncoder::from(ByteEncoding::HexLower).encode(&mac.finalize().into_bytes());
+        assert_ne!(signature.signature, api_secret_signature);
+    }
+
+    #[test]
+    fn failed_logon_response_is_rejected() {
+        let response = BinanceWebsocketResponse {
+            error: Some(BinanceError {
+                code: "-2015".into(),
+                msg: "Invalid API-key, IP, or permissions for action".into(),
+            }),
+            id: "logon-1".into(),
+            rateLimits: vec![],
+            result: None,
+            status: 400,
+        };
+        let result = create_signer_from_message(response);
+        assert!(matches!(result, Err(EGError::AuthenticationFailed(_))));
+    }
+
+    #[test]
+    fn non_success_logon_status_is_rejected() {
+        let response = logon_response(500, "api-key", "session-secret");
+        let result = create_signer_from_message(response);
+        assert!(matches!(result, Err(EGError::AuthenticationFailed(_))));
+    }
+
+    #[test]
+    fn logon_response_without_session_result_is_rejected() {
+        let response = BinanceWebsocketResponse {
+            error: None,
+            id: "logon-1".into(),
+            rateLimits: vec![],
+            result: None,
+            status: 200,
+        };
+        let result = create_signer_from_message(response);
+        assert!(matches!(result, Err(EGError::BadResponse)));
+    }
+
+    #[test]
+    fn credentials_without_session_are_rejected() {
+        let credentials = Some(ApiKeyCredentials {
+            api_key: "api-key".into(),
+            secret: SecretString::from("secret"),
+        });
+        assert!(matches!(
+            validate_use_session(&credentials, false),
+            Err(EGError::InvalidConfiguration(_))
+        ));
+        assert!(validate_use_session(&credentials, true).is_ok());
+        assert!(validate_use_session(&None, false).is_ok());
+    }
 }

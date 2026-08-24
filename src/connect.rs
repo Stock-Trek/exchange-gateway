@@ -1,6 +1,7 @@
 use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
+    error::EGResult,
     functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
     specs::binance::{http_connector, websocket_connector},
@@ -62,7 +63,7 @@ impl Connect {
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
-    ) -> impl Connector<ExternalReq, ExternalRes>
+    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         TClient: WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes>
             + 'static,

@@ -1,0 +1,21 @@
+[package]
+name = "exchange-types"
+version = "0.4.2"
+edition = "2024"
+
+[dependencies]
+query-params = { version = "1.0.1", registry = "shipyard" }
+rust_decimal = "1.42.1"
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_with = { version = "3.21.0", optional = true }
+strum = { version = "0.28.0", features = ["derive"] }
+
+[features]
+default = []
+serde = ["dep:serde", "dep:serde_with", "rust_decimal/serde"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+features = []
+no-deps = true
+targets = ["x86_64-unknown-linux-gnu"]
