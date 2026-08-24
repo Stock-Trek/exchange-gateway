@@ -30,6 +30,7 @@ serde = [
 
 [lints.clippy]
 new_ret_no_self = "allow"
+type_complexity = "allow"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
