@@ -257,7 +257,7 @@ fn create_http_signer_from_credentials(
         BinanceHttpUnsignedRequest,
         BinanceHttpRequest,
     >::new(
-        http_unsigned_request_to_bytes,
+        Arc::new(http_unsigned_request_to_bytes),
         data_signer(secret)?,
         ByteEncoding::HexLower,
         signature_appender_http(api_key.into()),
@@ -267,11 +267,17 @@ fn create_websocket_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
+    let to_bytes = {
+        let api_key = api_key.clone();
+        Arc::new(move |request: &BinanceWebsocketUnsignedRequest| {
+            websocket_unsigned_request_params_to_bytes(&api_key, request)
+        })
+    };
     Ok(Box::new(MessageSigner::<
         BinanceWebsocketUnsignedRequest,
         BinanceWebsocketRequest,
     >::new(
-        websocket_unsigned_request_params_to_bytes,
+        to_bytes,
         data_signer(secret)?,
         ByteEncoding::HexLower,
         signature_appender_websocket(api_key.into()),
@@ -288,17 +294,25 @@ fn http_unsigned_request_to_bytes(
     })
 }
 fn websocket_unsigned_request_params_to_bytes(
+    api_key: &str,
     request: &BinanceWebsocketUnsignedRequest,
 ) -> EGResult<Option<Vec<u8>>> {
     Ok(match &request.params {
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
+            Some(signed_payload(api_key, &params.query_params(true)))
         }
         BinanceWebsocketUnsignedParams::Logon(params) => {
-            Some(params.query_params(true).into_bytes())
+            Some(signed_payload(api_key, &params.query_params(true)))
         }
         BinanceWebsocketUnsignedParams::ExchangeInfo(_) => None,
     })
+}
+fn signed_payload(api_key: &str, query: &str) -> Vec<u8> {
+    if query.is_empty() {
+        format!("apiKey={api_key}").into_bytes()
+    } else {
+        format!("apiKey={api_key}&{query}").into_bytes()
+    }
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::HmacSha256.signer(secret)
@@ -326,7 +340,8 @@ fn rate_limits() -> RateLimits {
 
 fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
-        BinanceHttpUnsignedRequest::ExchangeInfo(_) | BinanceHttpUnsignedRequest::AssetLimits => 1,
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) => 20,
+        BinanceHttpUnsignedRequest::AssetLimits => 1,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
     }
 }
@@ -391,6 +406,8 @@ fn id() -> String {
 mod tests {
     use super::*;
     use exchange_types::binance::error::BinanceError;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
 
     fn logon_response(
         id: String,
@@ -425,5 +442,41 @@ mod tests {
             200,
             None
         )));
+    }
+
+    #[test]
+    fn websocket_logon_signature_is_over_api_key_and_timestamp() {
+        let credentials = ApiKeyCredentials {
+            api_key: "KEY".into(),
+            secret: SecretString::from("SECRET"),
+        };
+        let signer = create_websocket_signer_from_credentials(&credentials).unwrap();
+        let request = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "id".into(),
+                method: BinanceWebsocketMethodName::Logon,
+            },
+            params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams { timestamp: 123 }),
+        };
+        let BinanceWebsocketRequest { params, .. } = signer.sign(request).unwrap();
+        let signature = params.signature.expect("logon must be signed");
+        assert_eq!(signature.apiKey, "KEY");
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"SECRET").unwrap();
+        mac.update(b"apiKey=KEY&timestamp=123");
+        let expected = mac.finalize().into_bytes();
+        let mut expected_hex = String::with_capacity(expected.len() * 2);
+        for byte in expected {
+            expected_hex.push_str(&format!("{byte:02x}"));
+        }
+        assert_eq!(signature.signature, expected_hex);
+    }
+
+    #[test]
+    fn signed_payload_prepends_api_key() {
+        assert_eq!(
+            signed_payload("KEY", "timestamp=123"),
+            b"apiKey=KEY&timestamp=123"
+        );
+        assert_eq!(signed_payload("KEY", ""), b"apiKey=KEY");
     }
 }
