@@ -194,7 +194,9 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     };
     let filter = {
         let id = id.clone();
-        Arc::new(move |response: &BinanceWebsocketResponse| response.id == *id)
+        Arc::new(move |response: &BinanceWebsocketResponse| {
+            response.id == *id && response.error.is_none() && response.status == 200
+        })
     };
     AuthenticateLeg {
         create_auth_message,
@@ -383,4 +385,45 @@ fn signature_appender_websocket(
 
 fn id() -> String {
     Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use exchange_types::binance::error::BinanceError;
+
+    fn logon_response(
+        id: String,
+        status: i32,
+        error: Option<BinanceError>,
+    ) -> BinanceWebsocketResponse {
+        BinanceWebsocketResponse {
+            error,
+            id,
+            rateLimits: vec![],
+            result: None,
+            status,
+        }
+    }
+
+    #[test]
+    fn logon_filter_only_matches_successful_logon_response() {
+        let leg = authenticate_websocket_leg();
+        let id = (leg.create_auth_message)().metadata.id;
+        assert!((leg.filter)(&logon_response(id.clone(), 200, None)));
+        assert!(!(leg.filter)(&logon_response(
+            id.clone(),
+            200,
+            Some(BinanceError {
+                code: "-2014".into(),
+                msg: "API-key format invalid.".into(),
+            }),
+        )));
+        assert!(!(leg.filter)(&logon_response(id.clone(), 401, None)));
+        assert!(!(leg.filter)(&logon_response(
+            "some-other-id".into(),
+            200,
+            None
+        )));
+    }
 }
