@@ -1,69 +1,66 @@
-//! A concrete [`WebsocketClientTrait`] implementation backed by the shipyard
-//! [`websocket`] crate.
-
+//! A concrete [`WebsocketClientTrait`] implementation backed by the
+//! [`iris`] crate.
 use crate::{
     error::{EGError, EGResult},
     listeners::listener::ListenerTrait,
     transports::websocket::WebsocketClientTrait,
 };
-use ::websocket::prelude::{MessageListenerTrait, WebsocketClient, WebsocketConfig};
 use async_trait::async_trait;
+use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-/// A concrete [`WebsocketClientTrait`] implementation backed by the shipyard
-/// [`websocket`] crate.
+/// A concrete [`WebsocketClientTrait`] implementation backed by the
+/// [`iris`] crate.
 ///
 /// Outgoing [`TransportReq`](WebsocketClientTrait::TransportReq) messages are
-/// serialized to JSON before being sent over the wire and incoming websocket
-/// frames are deserialized into
-/// [`TransportRes`](WebsocketClientTrait::TransportRes) messages, which are
-/// forwarded to the listener supplied at construction time.
-pub struct ShipyardWebsocketClient<TransportReq, TransportRes> {
-    client: WebsocketClient<serde_json::Value>,
+/// serialized to JSON before being sent over the wire and incoming frames are
+/// deserialized into [`TransportRes`](WebsocketClientTrait::TransportRes) messages,
+/// which are forwarded to the listener supplied at construction time.
+pub struct IrisWebsocketClient<TransportReq, TransportRes>
+where
+    TransportReq: Serialize + Send + 'static,
+    TransportRes: DeserializeOwned + Send + 'static,
+{
+    client: IrisClient<TransportReq, TransportRes>,
     listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
-    _transport_req: PhantomData<TransportReq>,
 }
 
-impl<TransportReq, TransportRes> ShipyardWebsocketClient<TransportReq, TransportRes>
+impl<TransportReq, TransportRes> IrisWebsocketClient<TransportReq, TransportRes>
 where
-    TransportReq: Serialize + Send + Sync + 'static,
-    TransportRes: DeserializeOwned + Send + Sync + 'static,
+    TransportReq: Serialize + Send + 'static,
+    TransportRes: DeserializeOwned + Send + 'static,
 {
     /// Creates a client that connects to `url` using a default
-    /// [`WebsocketConfig`].
+    /// [`IrisConfig`].
     pub fn new(url: &str, listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>) -> Self {
-        Self::with_config(url, WebsocketConfig::new(), listener)
+        Self::with_config(url, IrisConfig::new(), listener)
     }
 
     /// Creates a client that connects to `url` using a custom
-    /// [`WebsocketConfig`].
+    /// [`IrisConfig`].
     pub fn with_config(
         url: &str,
-        config: WebsocketConfig,
+        config: IrisConfig,
         listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
     ) -> Self {
-        let client = WebsocketClient::new(
+        let client = IrisClient::new(
             config,
-            Arc::new(ValueMessageListener {
+            Arc::new(IrisListenerAdapter {
                 delegate: listener.clone(),
             }),
             url,
         );
-        Self {
-            client,
-            listener,
-            _transport_req: PhantomData,
-        }
+        Self { client, listener }
     }
 }
 
 #[async_trait]
 impl<TransportReq, TransportRes> WebsocketClientTrait
-    for ShipyardWebsocketClient<TransportReq, TransportRes>
+    for IrisWebsocketClient<TransportReq, TransportRes>
 where
-    TransportReq: Serialize + Send + Sync + 'static,
-    TransportRes: DeserializeOwned + Send + Sync + 'static,
+    TransportReq: Serialize + Send + 'static,
+    TransportRes: DeserializeOwned + Send + 'static,
 {
     type TransportReq = TransportReq;
     type TransportRes = TransportRes;
@@ -80,7 +77,6 @@ where
     }
 
     async fn send_message(&self, message: Self::TransportReq, _timeout: Duration) -> EGResult<()> {
-        let message = serde_json::to_value(&message).map_err(|e| EGError::External(Box::new(e)))?;
         self.client
             .send(message)
             .await
@@ -99,50 +95,47 @@ where
     }
 }
 
-impl<TransportReq, TransportRes> std::fmt::Debug
-    for ShipyardWebsocketClient<TransportReq, TransportRes>
+impl<TransportReq, TransportRes> std::fmt::Debug for IrisWebsocketClient<TransportReq, TransportRes>
+where
+    TransportReq: Serialize + Send + Sync + 'static,
+    TransportRes: DeserializeOwned + Send + Sync + 'static,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ShipyardWebsocketClient")
+        f.debug_struct("IrisWebsocketClient")
             .field("client", &"<websocket::WebsocketClient>")
             .field("listener", &"<Listener>")
             .finish()
     }
 }
 
-/// Adapts an [`Arc<dyn ListenerTrait>`] to the [`MessageListenerTrait`]
-/// expected by the shipyard [`websocket`] crate by deserializing each
-/// incoming JSON value into the transport response type.
-struct ValueMessageListener<TransportRes> {
+/// Adapts an [`Arc<dyn ListenerTrait>`] to the [`IrisListener`] expected by the [`iris`] crate
+struct IrisListenerAdapter<TransportRes> {
     delegate: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
 }
 
 #[async_trait]
-impl<TransportRes> MessageListenerTrait<serde_json::Value> for ValueMessageListener<TransportRes>
+impl<TransportRes> IrisListener<TransportRes> for IrisListenerAdapter<TransportRes>
 where
     TransportRes: DeserializeOwned + Send + 'static,
 {
-    async fn on_message(&self, message: serde_json::Value) {
-        match serde_json::from_value::<TransportRes>(message) {
-            Ok(message) => {
-                // The websocket crate listener interface cannot propagate
-                // errors, so delivery failures are logged and dropped.
-                let _ = self.delegate.on_message(message).await;
-            }
-            Err(error) => {
-                eprintln!(
-                    "websocket message could not be deserialized into transport response: {error}"
-                );
-            }
-        }
+    async fn on_message(&self, message: TransportRes) {
+        let _ = self.delegate.on_message(message).await;
+    }
+}
+
+impl<TransportRes> std::fmt::Debug for IrisListenerAdapter<TransportRes> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IrisListenerAdapter")
+            .field("delegate", &"<Listener>")
+            .finish()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ::websocket::prelude::CircuitBreakerConfig;
     use futures::SinkExt;
+    use iris::CircuitBreakerConfig;
     use serde::{Deserialize, Serialize};
     use std::{
         sync::{Arc, Mutex},
@@ -150,13 +143,22 @@ mod tests {
     };
     use tokio_stream::StreamExt;
 
-    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    #[ctor::ctor]
+    fn init() {
+        ensure_crypto();
+    }
+
+    fn ensure_crypto() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
     struct TestRequest {
         id: u64,
         method: String,
     }
 
-    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+    #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
     struct TestResponse {
         id: u64,
         status: i32,
@@ -229,8 +231,8 @@ mod tests {
         (port, shutdown_tx)
     }
 
-    fn test_config() -> WebsocketConfig {
-        WebsocketConfig::new()
+    fn test_config() -> IrisConfig {
+        IrisConfig::new()
             .with_circuit_breaker_config(
                 CircuitBreakerConfig::new()
                     .with_initial_backoff(Duration::from_millis(50))
@@ -255,28 +257,25 @@ mod tests {
 
     #[tokio::test]
     async fn round_trip_send_and_receive() {
-        ::websocket::init_tests::ensure_crypto();
         let (port, _shutdown) = spawn_responder_server().await;
         let received = Arc::new(Mutex::new(Vec::new()));
         let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> = Arc::new(TestListener {
             received: received.clone(),
         });
         let url = format!("ws://127.0.0.1:{port}/ws");
-        let client = ShipyardWebsocketClient::<TestRequest, TestResponse>::with_config(
+        let client = IrisWebsocketClient::<TestRequest, TestResponse>::with_config(
             &url,
             test_config(),
             listener,
         );
         client.connect().await.expect("connect should succeed");
         wait_until_connected(&client).await;
+        let message = TestRequest {
+            id: 1,
+            method: "ping".into(),
+        };
         client
-            .send_message(
-                TestRequest {
-                    id: 1,
-                    method: "ping".into(),
-                },
-                Duration::from_secs(5),
-            )
+            .send_message(message, Duration::from_secs(5))
             .await
             .expect("send should succeed");
         let response = tokio::time::timeout(Duration::from_secs(5), async {
@@ -302,14 +301,13 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_when_not_connected_is_error() {
-        ::websocket::init_tests::ensure_crypto();
         let (port, _shutdown) = spawn_responder_server().await;
         let received = Arc::new(Mutex::new(Vec::new()));
         let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> = Arc::new(TestListener {
             received: received.clone(),
         });
         let url = format!("ws://127.0.0.1:{port}/ws");
-        let client = ShipyardWebsocketClient::<TestRequest, TestResponse>::new(&url, listener);
+        let client = IrisWebsocketClient::<TestRequest, TestResponse>::new(&url, listener);
         let result = client
             .send_message(
                 TestRequest {

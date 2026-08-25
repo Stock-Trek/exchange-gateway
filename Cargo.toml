@@ -1,6 +1,6 @@
 [package]
 name = "exchange-gateway"
-version = "0.8.3"
+version = "0.9.0"
 edition = "2024"
 
 [dependencies]
@@ -11,6 +11,7 @@ ed25519-compact = "2.3.0"
 exchange-types = { version = "0.4.2", registry = "shipyard" }
 futures-timer = "3.0"
 hmac = "0.12"
+iris = { version = "1.0.0", registry = "shipyard", optional = true }
 p256 = "0.13"
 p384 = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
@@ -21,20 +22,21 @@ sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
 uuid = { version = "1.23.3", features = ["v4"] }
-websocket = { version = "0.2.3", registry = "shipyard", optional = true }
 
 [features]
 default = []
+iris = ["dep:iris", "dep:serde_json", "dep:serde"]
 reqwest = ["dep:reqwest"]
 serde = [
     "dep:serde",
     "exchange-types/serde",
     "secrecy/serde",
 ]
-websocket = ["dep:websocket", "dep:serde_json", "serde"]
 
 [dev-dependencies]
+ctor = "0.2"
 futures = "0.3"
+rustls = { version = "0.23", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
 tokio-stream = "0.1"
@@ -45,6 +47,6 @@ new_ret_no_self = "allow"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
-features = ["reqwest", "websocket"]
+features = ["iris", "reqwest", "serde"]
 no-deps = true
 targets = ["x86_64-unknown-linux-gnu"]
