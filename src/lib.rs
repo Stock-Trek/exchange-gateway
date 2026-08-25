@@ -13,6 +13,8 @@ pub mod transports;
 pub mod urls;
 
 pub mod prelude {
+    #[cfg(feature = "iris")]
+    pub use crate::transports::iris::IrisWebsocketClient;
     #[cfg(feature = "reqwest")]
     pub use crate::transports::reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient};
     pub use crate::{
