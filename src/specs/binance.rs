@@ -432,7 +432,7 @@ mod tests {
             id.clone(),
             200,
             Some(BinanceError {
-                code: "-2014".into(),
+                code: -2014,
                 msg: "API-key format invalid.".into(),
             }),
         )));
@@ -478,5 +478,78 @@ mod tests {
             b"apiKey=KEY&timestamp=123"
         );
         assert_eq!(signed_payload("KEY", ""), b"apiKey=KEY");
+    }
+
+    // Regression tests for the bugfixes released in exchange-types 0.4.3:
+    // BinanceError.code is numeric, BinanceHttpResponse is an untagged
+    // Result|Error enum (no more silently swallowed parse failures), and
+    // exchangeInfo rateLimits parse without a `count` field and with the
+    // RAW_REQUESTS type.
+    #[cfg(feature = "serde")]
+    mod exchange_types_0_4_3 {
+        use super::*;
+        use exchange_types::binance::http::BinanceHttpResponseResult;
+
+        #[test]
+        fn binance_error_deserializes_numeric_code() {
+            let error: BinanceError = serde_json::from_str(
+                r#"{"code":-2014,"msg":"API-key format invalid."}"#,
+            )
+            .unwrap();
+            assert_eq!(error.code, -2014);
+            assert_eq!(error.msg, "API-key format invalid.");
+        }
+
+        #[test]
+        fn http_error_response_deserializes_cleanly() {
+            let response: BinanceHttpResponse = serde_json::from_str(
+                r#"{"code":-1121,"msg":"Invalid symbol."}"#,
+            )
+            .unwrap();
+            match response {
+                BinanceHttpResponse::Error(error) => {
+                    assert_eq!(error.code, -1121);
+                    assert_eq!(error.msg, "Invalid symbol.");
+                }
+                other => panic!("expected Error variant, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn exchange_info_response_deserializes_without_count_and_raw_requests() {
+            let json = r#"{
+                "exchangeFilters": [],
+                "rateLimits": [
+                    {"rateLimitType":"REQUEST_WEIGHT","interval":"MINUTE","intervalNum":1,"limit":6000},
+                    {"rateLimitType":"RAW_REQUESTS","interval":"MINUTE","intervalNum":1,"limit":61000}
+                ],
+                "serverTime": 1700000000000,
+                "symbols": [
+                    {
+                        "baseAsset":"BTC","baseAssetPrecision":8,"baseCommissionPrecision":8,
+                        "filters":[],
+                        "isSpotTradingAllowed":true,
+                        "orderTypes":["LIMIT","MARKET"],
+                        "quoteAsset":"USDT","quoteAssetPrecision":8,"quoteCommissionPrecision":8,
+                        "quoteOrderQtyMarketAllowed":true,"quotePrecision":8,
+                        "status":"TRADING","symbol":"BTCUSDT"
+                    }
+                ],
+                "timezone":"UTC"
+            }"#;
+            let response: BinanceHttpResponse = serde_json::from_str(json).unwrap();
+            let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) =
+                response
+            else {
+                panic!("expected ExchangeInfo result");
+            };
+            assert_eq!(info.symbols.len(), 1);
+            assert_eq!(info.rateLimits.len(), 2);
+            assert_eq!(info.rateLimits[0].count, None);
+            assert!(matches!(
+                info.rateLimits[1].rateLimitType,
+                exchange_types::binance::rate_limits::BinanceRateLimitType::RAW_REQUESTS
+            ));
+        }
     }
 }

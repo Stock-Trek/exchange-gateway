@@ -6,13 +6,14 @@ Iris), signing (HMAC/Ed25519/ECDSA, sessions), credentials, rate limiting, and
 listeners needed to talk to an exchange through one typed interface.
 
 Currently ships with a Binance (spot) specification built on
-[`exchange-types`](https://shipyard.rs/crates/exchange-types/0.4.2).
+[`exchange-types`](https://shipyard.rs/crates/exchange-types/0.4.3).
 
 > **Status: v0.9.0 — not yet production ready.** See
 > [Production readiness](#production-readiness) for the concrete findings and
-> bugs discovered during review. The session-based WebSocket flow works, but
-> signed orders and parts of the HTTP flow are broken by bugs in the
-> `exchange-types` dependency that this repository cannot fix.
+> bugs discovered during review. The session-based WebSocket flow works, and
+> `exchange-types` 0.4.3 fixes the error-model and `exchangeInfo` parsing bugs,
+> but signed orders are still broken by the raw-identifier bug in the
+> `query-params` derive, and `AssetLimits` is still unusable.
 
 ## Features
 
@@ -89,36 +90,42 @@ their domain model.
 
 ## Production readiness
 
-Review findings against the live Binance spot API and testnet, as of v0.9.0.
+Review findings against the live Binance spot API and testnet, as of v0.9.0
+with `exchange-types` 0.4.3.
 
-### Bugs in the `exchange-types` dependency (not fixable here)
+### Remaining bugs
 
-These block the listed flows entirely. Fixing them requires changes to
+These still block the listed flows. Fixing them requires changes to
 `exchange-types` / its `query-params` derive, after which the gateway should be
 re-tested end to end.
 
 1. **Signed order parameters serialize `type` as `r%23type`** (raw-identifier
-   bug in the `query-params` derive). The gateway signs over this broken
-   string, so Binance rejects every signed order with `-1022`. Affects REST
-   orders and WebSocket orders signed per-request (`use_session = false`).
-2. **`BinanceError.code` is typed `String`, but Binance sends numeric codes**
-   (`{"code":-2014,"msg":"..."}`). Real error responses fail serde
-   deserialization, so failed logons/requests surface as timeouts instead of
-   clean errors. This undermines the `#91` logon filter: a failed logon
-   response cannot even be parsed.
-3. **HTTP responses silently deserialize as `result: None, error: None`**.
-   The untagged `BinanceHttpResponseResult` plus `flatten` means any
-   parse failure is swallowed and the HTTP status is dropped. Demonstrated
-   live against testnet: a successful `exchangeInfo` request returns an empty
-   result instead of the payload.
-4. **`exchangeInfo` responses can never parse.** `BinanceExchangeInfoResult`
-   reuses `BinanceRateLimit`, which requires a `count` field that
-   `exchangeInfo` responses do not include, and the `BinanceRateLimitType`
-   enum lacks the `RAW_REQUESTS` variant returned by the live API.
-5. **`AssetLimits` is unusable.** The model's unit variant maps to the real
+   bug in the `query-params` derive; still present in `query-params` 1.0.1).
+   The gateway signs over this broken string, so Binance rejects every signed
+   order with `-1022`. Affects REST orders and WebSocket orders signed
+   per-request (`use_session = false`).
+2. **`AssetLimits` is unusable.** The model's unit variant maps to the real
    signed `/api/v3/myFilters` endpoint (`symbol`, `timestamp`, `signature` are
    required) but the gateway treats it as an unsigned request, so it is always
    rejected.
+
+### Fixed in `exchange-types` 0.4.3
+
+These bugs were raised in the review, fixed upstream, and verified here by
+regression tests (`specs::binance::tests::exchange_types_0_4_3`):
+
+1. **`BinanceError.code` was typed `String`, but Binance sends numeric codes**
+   (`{"code":-2014,"msg":"..."}`). Real error responses failed serde
+   deserialization, so failed logons/requests surfaced as timeouts instead of
+   clean errors. `code` is now `i64`, so error responses parse cleanly and the
+   `#91` logon filter rejects failed logons properly.
+2. **HTTP responses silently deserialized as `result: None, error: None`**.
+   `BinanceHttpResponse` is now an untagged `Result | Error` enum, so a parse
+   failure is no longer swallowed; a successful `exchangeInfo` request now
+   returns the payload instead of an empty result.
+3. **`exchangeInfo` responses could never parse.** `BinanceRateLimit.count` is
+   now optional (exchangeInfo responses omit it) and `BinanceRateLimitType`
+   gained the `RAW_REQUESTS` variant returned by the live API.
 
 ### Fixed in this repository
 
