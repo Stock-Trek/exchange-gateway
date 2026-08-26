@@ -688,12 +688,23 @@ mod tests {
 
     /// A scripted websocket client: connecting (and reconnecting) reports
     /// `on_connected` to its listener, logon requests are answered with a
-    /// successful response, and every outgoing request is recorded.
+    /// successful response, and every outgoing request is recorded. When a
+    /// [`LogonGate`] is configured, logon responses can be held so an
+    /// authentication can be observed mid-flight.
     #[derive(Clone)]
     struct MockWebsocketClient {
         listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
         connected: Arc<AtomicBool>,
         sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
+        logon_gate: Option<LogonGate>,
+    }
+
+    /// Holds logon responses (when `block` is set) until `release` notifies,
+    /// letting a test keep an authentication in flight.
+    #[derive(Clone)]
+    struct LogonGate {
+        block: Arc<AtomicBool>,
+        release: Arc<tokio::sync::Notify>,
     }
 
     #[async_trait]
@@ -718,6 +729,11 @@ mod tests {
                 .expect("mutex should not be poisoned")
                 .push(message.clone());
             if matches!(message.metadata.method, BinanceWebsocketMethodName::Logon) {
+                if let Some(gate) = &self.logon_gate {
+                    if gate.block.load(Ordering::SeqCst) {
+                        gate.release.notified().await;
+                    }
+                }
                 let response = logon_response(message.metadata.id, 200, None);
                 self.listener.on_message(response).await?;
             }
@@ -748,6 +764,7 @@ mod tests {
     /// simulated.
     fn mock_session_connector(
         client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
+        logon_gate: Option<LogonGate>,
     ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
         let credentials = ApiKeyCredentials {
             api_key: "api-key".into(),
@@ -778,6 +795,7 @@ mod tests {
                     listener,
                     connected: Arc::new(AtomicBool::new(false)),
                     sent: Arc::new(Mutex::new(Vec::new())),
+                    logon_gate: logon_gate.clone(),
                 };
                 let _ = client_handle.send(client.clone());
                 client
@@ -824,7 +842,7 @@ mod tests {
     #[tokio::test]
     async fn reauthenticates_after_reconnect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
-        let connector = mock_session_connector(client_tx).unwrap();
+        let connector = mock_session_connector(client_tx, None).unwrap();
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
@@ -861,7 +879,7 @@ mod tests {
     #[tokio::test]
     async fn logon_weight_counts_against_weight_rate_limit() {
         let (client_tx, _client_rx) = std::sync::mpsc::channel();
-        let connector = mock_session_connector(client_tx).unwrap();
+        let connector = mock_session_connector(client_tx, None).unwrap();
 
         connector.connect().await.expect("connect should succeed");
 
@@ -878,6 +896,111 @@ mod tests {
             .send(exchange_info_request(), false, Duration::from_secs(5))
             .await;
         assert!(matches!(result, Err(EGError::RateLimited)));
+    }
+
+    #[tokio::test]
+    async fn concurrent_sends_wait_for_in_flight_authentication() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let logon_gate = LogonGate {
+            block: Arc::new(AtomicBool::new(false)),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        let connector = Arc::new(
+            mock_session_connector(client_tx, Some(logon_gate.clone())).unwrap(),
+        );
+        let client = client_rx.recv().unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(connector.is_authenticated().unwrap());
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+
+        // Simulate the connection dropping and the iris client reconnecting.
+        client.connected.store(false, Ordering::SeqCst);
+        client.connect().await.expect("reconnect should succeed");
+        assert!(!connector.is_authenticated().unwrap());
+
+        // Hold logon responses so the next re-authentication stays in flight.
+        logon_gate.block.store(true, Ordering::SeqCst);
+
+        // The first signed send starts re-authentication and blocks on the
+        // held logon response.
+        let first = {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
+        };
+        for _ in 0..100 {
+            if logon_count(&client.sent.lock().unwrap()) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            logon_count(&client.sent.lock().unwrap()),
+            2,
+            "re-authentication logon should be in flight"
+        );
+
+        // Two more signed sends arrive while authentication is in flight:
+        // they must wait for it to finish instead of starting a second one.
+        let second = {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
+        };
+        let third = {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            logon_count(&client.sent.lock().unwrap()),
+            2,
+            "concurrent sends must not start a second authentication"
+        );
+
+        // Release the in-flight logon: all three sends should now complete.
+        logon_gate.block.store(false, Ordering::SeqCst);
+        logon_gate.release.notify_one();
+
+        first
+            .await
+            .expect("first send task should not panic")
+            .expect("first send should succeed");
+        second
+            .await
+            .expect("second send task should not panic")
+            .expect("second send should succeed");
+        third
+            .await
+            .expect("third send task should not panic")
+            .expect("third send should succeed");
+
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
+        assert!(connector.is_authenticated().unwrap());
+        let order_count = client
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message.metadata.method,
+                    BinanceWebsocketMethodName::PlaceOrder
+                )
+            })
+            .count();
+        assert_eq!(order_count, 3);
     }
 
     #[test]

@@ -12,11 +12,13 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
+    future::{Future, poll_fn},
     ops::Deref,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    task::{Poll, Waker},
     time::Duration,
 };
 
@@ -41,6 +43,7 @@ pub struct ConnectorImpl<
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     authenticated_epoch: Arc<AtomicU64>,
+    auth_gate: AuthGate,
 }
 
 #[async_trait]
@@ -168,12 +171,60 @@ where
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
             authenticated_epoch: Arc::new(AtomicU64::new(0)),
+            auth_gate: AuthGate::default(),
         }
     }
+    /// Runs the authentication legs against the current connection and records
+    /// the connection epoch the resulting session belongs to. Only one task
+    /// may be inside this method at a time (see [`AuthGate`]).
     async fn authenticate(&self) -> EGResult<()> {
         let Some(credentials) = &self.credentials else {
             return Ok(());
         };
+        loop {
+            // A concurrent caller may have re-authenticated while we waited.
+            if !self.session_is_stale() {
+                return Ok(());
+            }
+            let completed = match self.auth_gate.acquire()? {
+                AuthGateAcquisition::Waiting(completed) => {
+                    // Another authentication is already in flight: wait for it
+                    // to finish instead of starting a second one, then re-check
+                    // whether the session is still stale.
+                    completed.wait().await?;
+                    continue;
+                }
+                AuthGateAcquisition::Authenticator(completed) => completed,
+            };
+            let epoch = self.transport.connection_epoch();
+            let result = self.run_authentication(credentials, epoch).await;
+            // Clear the gate before waking waiters so a waiter that finds the
+            // session stale can immediately become the next authenticator.
+            self.auth_gate.release(&completed);
+            completed.notify();
+            match result {
+                Err(error) => return Err(error),
+                Ok(()) => {
+                    // The connection reconnected while we were authenticating:
+                    // the session was established on a connection that is no
+                    // longer current, so try again against the new one.
+                    if self.session_is_stale() {
+                        continue;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
+    /// Sends each authentication leg and, on success, installs the resulting
+    /// signer for `epoch`. If the connection reconnects part way through, the
+    /// signer is installed anyway (keyed to `epoch`) and the caller detects
+    /// the staleness via [`Self::session_is_stale`].
+    async fn run_authentication(
+        &self,
+        credentials: &TCredentials,
+        epoch: u64,
+    ) -> EGResult<()> {
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
             let (signed_auth_message, weight, order_count) = {
@@ -207,8 +258,7 @@ where
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             *guard = Some(signer);
         }
-        self.authenticated_epoch
-            .store(self.transport.connection_epoch(), Ordering::Relaxed);
+        self.authenticated_epoch.store(epoch, Ordering::Relaxed);
         Ok(())
     }
     fn session_is_stale(&self) -> bool {
@@ -267,6 +317,110 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("authenticate_legs", &self.authenticate_legs)
             .field("signer", &"<redacted>")
             .field("authenticated_epoch", &self.authenticated_epoch)
+            .field("auth_gate", &self.auth_gate)
             .finish()
+    }
+}
+
+/// Serializes authentication so that at most one authentication runs at a
+/// time: a caller that finds the session stale while another authentication is
+/// in flight waits for it to finish instead of starting a second one.
+#[derive(Default)]
+struct AuthGate {
+    state: Mutex<AuthGateState>,
+}
+
+#[derive(Default)]
+enum AuthGateState {
+    #[default]
+    Idle,
+    Authenticating(AuthCompleted),
+}
+
+enum AuthGateAcquisition {
+    /// This caller is now the only task running authentication.
+    Authenticator(AuthCompleted),
+    /// Another caller is authenticating; wait for its completion signal.
+    Waiting(AuthCompleted),
+}
+
+impl AuthGate {
+    /// Atomically marks the gate as busy, returning the completion signal the
+    /// caller must notify when it finishes, or the in-flight signal to wait on
+    /// if another authentication is already running.
+    fn acquire(&self) -> EGResult<AuthGateAcquisition> {
+        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+        match &*state {
+            AuthGateState::Idle => {
+                let completed = AuthCompleted::default();
+                *state = AuthGateState::Authenticating(completed.clone());
+                Ok(AuthGateAcquisition::Authenticator(completed))
+            }
+            AuthGateState::Authenticating(completed) => {
+                Ok(AuthGateAcquisition::Waiting(completed.clone()))
+            }
+        }
+    }
+
+    /// Returns the gate to idle once the running authentication finishes.
+    fn release(&self, completed: &AuthCompleted) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        if let AuthGateState::Authenticating(active) = &*state {
+            if Arc::ptr_eq(&active.0, &completed.0) {
+                *state = AuthGateState::Idle;
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for AuthGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthGate").finish_non_exhaustive()
+    }
+}
+
+/// A one-shot signal that an in-flight authentication has finished, shared
+/// between the authenticator and every caller waiting on it.
+#[derive(Clone, Default)]
+struct AuthCompleted(Arc<Mutex<AuthCompletedState>>);
+
+#[derive(Default)]
+struct AuthCompletedState {
+    done: bool,
+    wakers: Vec<Waker>,
+}
+
+impl AuthCompleted {
+    fn wait(&self) -> impl Future<Output = EGResult<()>> + Send + '_ {
+        let completed = self.clone();
+        poll_fn(move |cx| {
+            let mut state = match completed.0.lock() {
+                Ok(state) => state,
+                Err(_) => return Poll::Ready(Err(EGError::MutexPoisoned)),
+            };
+            if state.done {
+                Poll::Ready(Ok(()))
+            } else {
+                state.wakers.push(cx.waker().clone());
+                Poll::Pending
+            }
+        })
+    }
+
+    fn notify(&self) {
+        let wakers = {
+            let mut state = match self.0.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            state.done = true;
+            std::mem::take(&mut state.wakers)
+        };
+        for waker in wakers {
+            waker.wake();
+        }
     }
 }
