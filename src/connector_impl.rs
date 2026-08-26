@@ -98,14 +98,30 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
-        let signed_request = {
+        let (signed_request, weight) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             self.check_rate_limits(&unsigned)?;
-            self.signed_request(unsigned, signed)?
+            let weight = (self.to_weight)(&unsigned);
+            let signed_request = match self.signed_request(unsigned, signed) {
+                Ok(signed_request) => signed_request,
+                Err(error) => {
+                    let _ = self.rate_limits.refund(weight);
+                    return Err(error);
+                }
+            };
+            (signed_request, weight)
         };
-        self.transport
+        match self
+            .transport
             .fire_and_forget(signed_request, timeout)
             .await
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = self.rate_limits.refund(weight);
+                Err(error)
+            }
+        }
     }
 }
 impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
