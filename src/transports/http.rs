@@ -65,7 +65,7 @@ where
     fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::SeqCst)
     }
-    fn connection_generation(&self) -> u64 {
+    fn connection_epoch(&self) -> u64 {
         0
     }
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {

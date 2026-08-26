@@ -39,7 +39,7 @@ pub struct ConnectorImpl<
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
-    authenticated_generation: Arc<AtomicU64>,
+    authenticated_epoch: Arc<AtomicU64>,
 }
 
 #[async_trait]
@@ -159,7 +159,7 @@ where
             create_signer,
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
-            authenticated_generation: Arc::new(AtomicU64::new(0)),
+            authenticated_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
     async fn authenticate(&self) -> EGResult<()> {
@@ -199,14 +199,13 @@ where
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             *guard = Some(signer);
         }
-        self.authenticated_generation
-            .store(self.transport.connection_generation(), Ordering::Relaxed);
+        self.authenticated_epoch
+            .store(self.transport.connection_epoch(), Ordering::Relaxed);
         Ok(())
     }
     fn session_is_stale(&self) -> bool {
         !self.authenticate_legs.is_empty()
-            && self.transport.connection_generation()
-                != self.authenticated_generation.load(Ordering::Relaxed)
+            && self.transport.connection_epoch() != self.authenticated_epoch.load(Ordering::Relaxed)
     }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
@@ -258,7 +257,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
             .field("signer", &"<redacted>")
-            .field("authenticated_generation", &self.authenticated_generation)
+            .field("authenticated_epoch", &self.authenticated_epoch)
             .finish()
     }
 }
