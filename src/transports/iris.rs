@@ -6,10 +6,9 @@ use crate::{
     transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
-use futures_timer::Delay;
 use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{future::poll_fn, sync::Arc, task::Poll, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 /// A concrete [`WebsocketClientTrait`] implementation backed by the
 /// [`iris`] crate.
@@ -78,16 +77,10 @@ where
     }
 
     async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()> {
-        let mut send = Box::pin(self.client.send(message));
-        let mut delay = Box::pin(Delay::new(timeout));
-        poll_fn(move |cx| match send.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(result.map_err(|e| EGError::External(Box::new(e)))),
-            Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
-                Poll::Pending => Poll::Pending,
-            },
-        })
-        .await
+        tokio::time::timeout(timeout, self.client.send(message))
+            .await
+            .map_err(|_| EGError::TimedOut)?
+            .map_err(|e| EGError::External(Box::new(e)))
     }
 
     async fn on_message(&self, message: Self::TransportRes) -> EGResult<()> {
@@ -146,6 +139,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use std::{
         sync::{Arc, Mutex},
+        task::Poll,
         time::Duration,
     };
     use tokio_stream::StreamExt;
@@ -381,20 +375,34 @@ mod tests {
             .expect("trigger send should succeed");
         entered_rx.await.expect("handler should enter on_message");
 
-        // The single-slot channel is now full and the handler is stuck, so
-        // this send can only ever complete by honoring the timeout. The
-        // timeout is deliberately small so the test finishes quickly.
+        // The single-slot channel is now full and the handler is stuck, so a
+        // further send can only ever complete by honoring its timeout.
         client
             .send_message(message.clone(), Duration::from_secs(1))
             .await
             .expect("message should be accepted into the channel");
 
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            client.send_message(message, Duration::from_millis(100)),
-        )
-        .await
-        .expect("send_message should return within the timeout");
+        // Pause the clock and jump it past the timeout so the wedged send is
+        // forced to time out without waiting real time.
+        let timeout = Duration::from_secs(1);
+        tokio::time::pause();
+        let send = client.send_message(message, timeout);
+        tokio::pin!(send);
+        // Poll once so the internal timeout timer is registered against the
+        // paused clock; the wedged send itself remains pending.
+        assert!(
+            futures::poll!(send.as_mut()).is_pending(),
+            "send on a wedged connection should be pending"
+        );
+        // Advance the clock past the timeout in a single jump: the timeout
+        // fires immediately and the send completes without real time passing.
+        tokio::time::advance(timeout + Duration::from_millis(1)).await;
+        let result = match futures::poll!(send.as_mut()) {
+            Poll::Ready(result) => result,
+            Poll::Pending => panic!("send should complete once the timeout fires"),
+        };
+        tokio::time::resume();
+
         assert!(
             matches!(result, Err(EGError::TimedOut)),
             "send on a wedged connection should time out with TimedOut, got: {result:?}"

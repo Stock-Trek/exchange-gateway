@@ -24,11 +24,12 @@ serde_json = { version = "1.0.150", optional = true }
 sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
+tokio = { version = "1", features = ["time"], optional = true }
 uuid = { version = "1.23.3", features = ["v4"] }
 
 [features]
 default = []
-iris = ["dep:iris", "dep:serde_json", "dep:serde"]
+iris = ["dep:iris", "dep:serde_json", "dep:serde", "dep:tokio"]
 reqwest = ["dep:reqwest", "dep:serde_json", "dep:serde"]
 serde = [
     "dep:serde",
