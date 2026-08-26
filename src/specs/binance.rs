@@ -410,6 +410,8 @@ fn id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transports::websocket::WebsocketClientTrait;
+    use async_trait::async_trait;
     use exchange_types::binance::{
         asset_limits::BinanceAssetLimitsParams,
         error::BinanceError,
@@ -421,6 +423,11 @@ mod tests {
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
             BinanceTimeInForce,
         },
+    };
+    use secrecy::SecretString;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
     };
 
     fn logon_response(
@@ -606,5 +613,206 @@ mod tests {
         assert!(!limits.weight.did_acquire(1).unwrap());
         limits.weight.refund(20).unwrap();
         assert!(limits.weight.did_acquire(1).unwrap());
+    }
+
+    /// A scripted websocket client: connecting (and reconnecting) reports
+    /// `on_connected` to its listener, logon requests are answered with a
+    /// successful response, and every outgoing request is recorded.
+    #[derive(Clone)]
+    struct MockWebsocketClient {
+        listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
+        connected: Arc<AtomicBool>,
+        sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
+    }
+
+    #[async_trait]
+    impl WebsocketClientTrait for MockWebsocketClient {
+        type TransportReq = BinanceWebsocketRequest;
+        type TransportRes = BinanceWebsocketResponse;
+
+        async fn connect(&self) -> EGResult<()> {
+            self.connected.store(true, Ordering::SeqCst);
+            self.listener.on_connected().await
+        }
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::SeqCst)
+        }
+        async fn send_message(
+            &self,
+            message: Self::TransportReq,
+            _timeout: Duration,
+        ) -> EGResult<()> {
+            self.sent
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(message.clone());
+            if matches!(message.metadata.method, BinanceWebsocketMethodName::Logon) {
+                let response = logon_response(message.metadata.id, 200, None);
+                self.listener.on_message(response).await?;
+            }
+            Ok(())
+        }
+        async fn on_message(&self, message: Self::TransportRes) -> EGResult<()> {
+            self.listener.on_message(message).await
+        }
+        async fn disconnect(&self) -> EGResult<()> {
+            self.connected.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct IgnoreListener;
+
+    #[async_trait]
+    impl ListenerTrait for IgnoreListener {
+        type TMessage = BinanceWebsocketResponse;
+
+        async fn on_message(&self, _message: BinanceWebsocketResponse) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Builds a session-based websocket connector backed by the scripted mock
+    /// client, handing the caller a handle to the client so reconnects can be
+    /// simulated.
+    fn mock_session_connector(
+        client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
+    ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
+        let credentials = ApiKeyCredentials {
+            api_key: "api-key".into(),
+            secret: SecretString::from("secret"),
+        };
+        let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+            Arc::new(IgnoreListener);
+        let to_unsigned_request: ArcTryConvertValue<
+            BinanceWebsocketUnsignedRequest,
+            BinanceWebsocketUnsignedRequest,
+        > = Arc::new(|request| Ok(request));
+        let to_transport_request: ArcTryConvertValue<
+            BinanceWebsocketRequest,
+            BinanceWebsocketRequest,
+        > = Arc::new(|request| Ok(request));
+        let to_binance_response: ArcTryConvertValue<
+            BinanceWebsocketResponse,
+            BinanceWebsocketResponse,
+        > = Arc::new(|response| Ok(response));
+        let to_external_response: ArcTryConvertValue<
+            BinanceWebsocketResponse,
+            BinanceWebsocketResponse,
+        > = Arc::new(|response| Ok(response));
+        websocket_connector(
+            TradingMode::Paper,
+            move |_url, listener| {
+                let client = MockWebsocketClient {
+                    listener,
+                    connected: Arc::new(AtomicBool::new(false)),
+                    sent: Arc::new(Mutex::new(Vec::new())),
+                };
+                let _ = client_handle.send(client.clone());
+                client
+            },
+            to_unsigned_request,
+            to_transport_request,
+            to_binance_response,
+            to_external_response,
+            listener,
+            Some(credentials),
+            true,
+        )
+    }
+
+    fn order_request() -> BinanceWebsocketUnsignedRequest {
+        BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "order-1".into(),
+                method: BinanceWebsocketMethodName::PlaceOrder,
+            },
+            params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
+        }
+    }
+
+    fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
+        BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "exchange-info".into(),
+                method: BinanceWebsocketMethodName::ExchangeInfo,
+            },
+            params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+        }
+    }
+
+    fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
+        sent.iter()
+            .filter(|message| {
+                matches!(message.metadata.method, BinanceWebsocketMethodName::Logon)
+            })
+            .count()
+    }
+
+    #[tokio::test]
+    async fn reauthenticates_after_reconnect() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = mock_session_connector(client_tx).unwrap();
+        let client = client_rx.recv().unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(connector.is_authenticated().unwrap());
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+
+        // A signed request on a live connection does not re-authenticate.
+        connector
+            .send(order_request(), true, Duration::from_secs(5))
+            .await
+            .expect("send should succeed");
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+
+        // Simulate the connection dropping and the iris client reconnecting.
+        client.connected.store(false, Ordering::SeqCst);
+        client.connect().await.expect("reconnect should succeed");
+
+        // The old session is stale until re-authentication runs.
+        assert!(!connector.is_authenticated().unwrap());
+
+        // The next signed send re-authenticates before sending.
+        connector
+            .send(order_request(), true, Duration::from_secs(5))
+            .await
+            .expect("send should succeed");
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
+        assert!(connector.is_authenticated().unwrap());
+        assert!(client
+            .sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| matches!(
+                message.metadata.method,
+                BinanceWebsocketMethodName::PlaceOrder
+            )));
+    }
+
+    #[tokio::test]
+    async fn logon_weight_counts_against_weight_rate_limit() {
+        let (client_tx, _client_rx) = std::sync::mpsc::channel();
+        let connector = mock_session_connector(client_tx).unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+
+        // The logon consumes 2 of the 6000 weight budget; exchangeInfo costs 4,
+        // so exactly 1499 more requests fit in the remaining 5998. If the logon
+        // weight were not counted, a 1500th request would still fit.
+        for _ in 0..1499 {
+            connector
+                .send(exchange_info_request(), false, Duration::from_secs(5))
+                .await
+                .expect("send should succeed");
+        }
+        let result = connector
+            .send(exchange_info_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited)));
     }
 }

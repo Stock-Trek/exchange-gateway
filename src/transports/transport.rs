@@ -17,6 +17,7 @@ pub(crate) trait TransportTrait<EGReq, TransportReq, TransportRes, EGRes> {
     fn try_convert_response(&self, response_dto: TransportRes) -> EGResult<EGRes>;
     async fn connect(&self) -> EGResult<()>;
     fn is_connected(&self) -> bool;
+    fn connection_generation(&self) -> u64;
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()>;
     async fn send_and_wait_for(
         &self,
@@ -57,6 +58,12 @@ where
         match self {
             Self::Http(transport) => transport.is_connected(),
             Self::Websocket(transport) => transport.is_connected(),
+        }
+    }
+    fn connection_generation(&self) -> u64 {
+        match self {
+            Self::Http(transport) => transport.connection_generation(),
+            Self::Websocket(transport) => transport.connection_generation(),
         }
     }
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {

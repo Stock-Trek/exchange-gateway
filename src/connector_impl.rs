@@ -13,7 +13,10 @@ use crate::{
 use async_trait::async_trait;
 use std::{
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -36,6 +39,7 @@ pub struct ConnectorImpl<
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
+    authenticated_generation: Arc<AtomicU64>,
 }
 
 #[async_trait]
@@ -68,28 +72,17 @@ where
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
-        if let Some(credentials) = &self.credentials {
-            let mut signer = (self.create_signer)(credentials)?;
-            for leg in &self.authenticate_legs {
-                let auth_message = (leg.create_auth_message)();
-                let signed_auth_message = signer.sign(auth_message)?;
-                let authentication_response = self
-                    .transport
-                    .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
-                    .await?;
-                signer = (leg.create_signer)(authentication_response)?;
-            }
-            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
-            (*guard) = Some(signer);
-        }
-        Ok(())
+        self.authenticate().await
     }
     fn is_connected(&self) -> EGResult<bool> {
         Ok(self.transport.is_connected())
     }
     fn is_authenticated(&self) -> EGResult<bool> {
+        if !self.transport.is_connected() {
+            return Ok(false);
+        }
         let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
-        Ok((*guard).is_some())
+        Ok((*guard).is_some() && !self.session_is_stale())
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
@@ -99,6 +92,9 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
+        if signed && self.session_is_stale() {
+            self.authenticate().await?;
+        }
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             self.check_rate_limits(&unsigned)?;
@@ -136,6 +132,9 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         TransportRes,
         EGRes,
     >
+where
+    EGReq: Send,
+    EGRes: Send + Sync + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -160,7 +159,54 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             create_signer,
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
+            authenticated_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+    async fn authenticate(&self) -> EGResult<()> {
+        let Some(credentials) = &self.credentials else {
+            return Ok(());
+        };
+        let mut signer = (self.create_signer)(credentials)?;
+        for leg in &self.authenticate_legs {
+            let (signed_auth_message, weight, order_count) = {
+                let auth_message = (leg.create_auth_message)();
+                self.check_rate_limits(&auth_message)?;
+                let weight = (self.to_weight)(&auth_message);
+                let order_count = (self.to_order_count)(&auth_message);
+                let signed_auth_message = match signer.sign(auth_message) {
+                    Ok(signed_auth_message) => signed_auth_message,
+                    Err(error) => {
+                        let _ = self.rate_limits.refund(weight, order_count);
+                        return Err(error);
+                    }
+                };
+                (signed_auth_message, weight, order_count)
+            };
+            let authentication_response = match self
+                .transport
+                .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
+                .await
+            {
+                Ok(authentication_response) => authentication_response,
+                Err(error) => {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                    return Err(error);
+                }
+            };
+            signer = (leg.create_signer)(authentication_response)?;
+        }
+        {
+            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
+            *guard = Some(signer);
+        }
+        self.authenticated_generation
+            .store(self.transport.connection_generation(), Ordering::Relaxed);
+        Ok(())
+    }
+    fn session_is_stale(&self) -> bool {
+        !self.authenticate_legs.is_empty()
+            && self.transport.connection_generation()
+                != self.authenticated_generation.load(Ordering::Relaxed)
     }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
@@ -212,6 +258,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
             .field("signer", &"<redacted>")
+            .field("authenticated_generation", &self.authenticated_generation)
             .finish()
     }
 }

@@ -65,6 +65,9 @@ where
     fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::SeqCst)
     }
+    fn connection_generation(&self) -> u64 {
+        0
+    }
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
         let response = self.to_converted_response(request, timeout).await?;
         self.listener.on_message(response).await

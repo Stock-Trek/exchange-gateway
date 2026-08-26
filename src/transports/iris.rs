@@ -121,6 +121,10 @@ where
     async fn on_message(&self, message: TransportRes) {
         let _ = self.delegate.on_message(message).await;
     }
+
+    async fn on_connected(&self) {
+        let _ = self.delegate.on_connected().await;
+    }
 }
 
 impl<TransportRes> std::fmt::Debug for IrisListenerAdapter<TransportRes> {

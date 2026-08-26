@@ -19,6 +19,7 @@ pub(crate) struct WebsocketListener<TransportRes, EGRes> {
     delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
     next_handler_id: Arc<AtomicU64>,
+    connection_generation: Arc<AtomicU64>,
 }
 
 impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EGRes> {
@@ -28,6 +29,7 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
             .field("delegate", &"<Listener>")
             .field("handlers", &"<Vec<ResponseHandler>>")
             .field("next_handler_id", &self.next_handler_id)
+            .field("connection_generation", &self.connection_generation)
             .finish()
     }
 }
@@ -45,7 +47,11 @@ where
             delegate,
             handlers: Arc::new(Mutex::new(Vec::new())),
             next_handler_id: Arc::new(AtomicU64::new(0)),
+            connection_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+    pub fn connection_generation(&self) -> u64 {
+        self.connection_generation.load(Ordering::Relaxed)
     }
     pub fn waiter_for_filtered_response(
         &self,
@@ -127,6 +133,11 @@ where
             return Ok(());
         }
         self.delegate.on_message(response).await
+    }
+
+    async fn on_connected(&self) -> EGResult<()> {
+        self.connection_generation.fetch_add(1, Ordering::Relaxed);
+        self.delegate.on_connected().await
     }
 }
 
