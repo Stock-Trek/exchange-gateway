@@ -15,7 +15,7 @@ use std::{
 };
 
 #[async_trait]
-pub trait HttpClientTrait: Send + Sync {
+pub(crate) trait HttpClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
 
@@ -28,7 +28,7 @@ pub trait HttpClientTrait: Send + Sync {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HttpEndpoint {
+pub(crate) enum HttpEndpoint {
     AssetLimits,
     ExchangeInfo,
     PlaceOrder,

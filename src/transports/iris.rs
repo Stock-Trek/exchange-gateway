@@ -17,13 +17,12 @@ use std::{sync::Arc, time::Duration};
 /// serialized to JSON before being sent over the wire and incoming frames are
 /// deserialized into [`TransportRes`](WebsocketClientTrait::TransportRes) messages,
 /// which are forwarded to the listener supplied at construction time.
-pub struct IrisWebsocketClient<TransportReq, TransportRes>
+pub(crate) struct IrisWebsocketClient<TransportReq, TransportRes>
 where
     TransportReq: Serialize + Send + 'static,
     TransportRes: DeserializeOwned + Send + 'static,
 {
     client: IrisClient<TransportReq, TransportRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
 }
 
 impl<TransportReq, TransportRes> IrisWebsocketClient<TransportReq, TransportRes>
@@ -33,25 +32,26 @@ where
 {
     /// Creates a client that connects to `url` using a default
     /// [`IrisConfig`].
-    pub fn new(url: &str, listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>) -> Self {
+    pub(crate) fn new(
+        url: &str,
+        listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
+    ) -> Self {
         Self::with_config(url, IrisConfig::new(), listener)
     }
 
     /// Creates a client that connects to `url` using a custom
     /// [`IrisConfig`].
-    pub fn with_config(
+    pub(crate) fn with_config(
         url: &str,
         config: IrisConfig,
         listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
     ) -> Self {
         let client = IrisClient::new(
             config,
-            Arc::new(IrisListenerAdapter {
-                delegate: listener.clone(),
-            }),
+            Arc::new(IrisListenerAdapter { delegate: listener }),
             url,
         );
-        Self { client, listener }
+        Self { client }
     }
 }
 
@@ -83,10 +83,6 @@ where
             .map_err(|e| EGError::External(Box::new(e)))
     }
 
-    async fn on_message(&self, message: Self::TransportRes) -> EGResult<()> {
-        self.listener.on_message(message).await
-    }
-
     async fn disconnect(&self) -> EGResult<()> {
         self.client
             .disconnect()
@@ -103,7 +99,6 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IrisWebsocketClient")
             .field("client", &"<websocket::WebsocketClient>")
-            .field("listener", &"<Listener>")
             .finish()
     }
 }

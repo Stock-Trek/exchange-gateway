@@ -1,14 +1,8 @@
 use crate::{
     authenticate_leg::AuthenticateLeg,
-    connector::Connector,
-    connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcTryConvertValue},
-    listeners::{
-        convert_listener::ConvertListener, listener::ListenerTrait,
-        websocket_listener::WebsocketListener,
-    },
+    error::EGResult,
+    functions::ArcCombineValues,
     rate_limit::{
         rate_limit_config::RateLimitConfig, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
@@ -19,15 +13,34 @@ use crate::{
         message_signer::MessageSigner,
         signer::Signer,
     },
-    transports::{
-        http::{HttpClientTrait, HttpEndpoint, HttpTransport},
-        transport::Transport,
-        websocket::{WebsocketClientTrait, WebsocketTransport},
-    },
-    urls::{ExchangeTransportType, ExchangeTransportUrls, ExchangeUrls, TradingMode},
+    transports::http::HttpEndpoint,
+    urls::{ExchangeTransportUrls, ExchangeUrls},
 };
+#[cfg(any(feature = "reqwest", feature = "iris"))]
+use crate::{
+    connector::Connector,
+    connector_impl::ConnectorImpl,
+    error::EGError,
+    functions::ArcTryConvertValue,
+    listeners::convert_listener::ConvertListener,
+    listeners::listener::ListenerTrait,
+    transports::transport::Transport,
+    urls::{ExchangeTransportType, TradingMode},
+};
+#[cfg(feature = "iris")]
+use crate::{
+    listeners::websocket_listener::WebsocketListener, transports::iris::IrisWebsocketClient,
+    transports::websocket::WebsocketTransport,
+};
+#[cfg(feature = "reqwest")]
+use crate::{
+    transports::http::HttpTransport,
+    transports::reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
+};
+#[cfg(feature = "reqwest")]
+use exchange_types::binance::http::BinanceHttpResponse;
 use exchange_types::binance::{
-    http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
+    http::{BinanceHttpRequest, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
     signed::BinanceSignedParams,
     spot::BinanceSpotOrderParams,
@@ -36,6 +49,8 @@ use exchange_types::binance::{
         BinanceWebsocketResponse, BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
     },
 };
+#[cfg(feature = "reqwest")]
+use reqwest::Method;
 use secrecy::SecretString;
 use std::{
     borrow::Cow,
@@ -45,33 +60,27 @@ use std::{
 };
 use uuid::Uuid;
 
-#[allow(clippy::too_many_arguments)]
-pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
+#[cfg(feature = "reqwest")]
+pub(crate) fn http_connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
-    create_client: impl Fn(&str) -> TClient,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
-    to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
-    TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
     ExternalReq: Send,
-    HttpReq: Send,
-    HttpRes: Send + 'static,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
-    let client = Arc::new((create_client)(&url));
+    let client = Arc::new(ReqwestHttpClient::new(&url));
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
     let http_transport = HttpTransport::new(
         client,
-        to_transport_request,
-        to_binance_response,
+        Arc::new(to_http_request),
+        Arc::new(from_http_response),
         response_listener,
         request_to_http_endpoint,
         http_endpoints(),
@@ -88,24 +97,17 @@ where
         vec![],
     ))
 }
-#[allow(clippy::too_many_arguments)]
-pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
+#[cfg(feature = "iris")]
+pub(crate) fn websocket_connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
-    create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
-    to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
     to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
-    TClient:
-        WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes> + 'static,
-    ExternalReq: Send,
-    WebsocketReq: Send,
-    WebsocketRes: Send + 'static,
+    ExternalReq: Send + Sync,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let exchange_urls = exchange_urls();
@@ -113,14 +115,17 @@ where
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
     let websocket_listener = Arc::new(WebsocketListener::new(
-        to_binance_response.clone(),
+        Arc::new(from_websocket_response),
         response_listener,
     ));
-    let client = Arc::new((create_client)(&url, websocket_listener.clone()));
+    let client = Arc::new(IrisWebsocketClient::<
+        BinanceWebsocketRequest,
+        BinanceWebsocketResponse,
+    >::new(&url, websocket_listener.clone()));
     let websocket_transport = WebsocketTransport::new(
         client,
-        to_transport_request,
-        to_binance_response,
+        Arc::new(to_websocket_request),
+        Arc::new(from_websocket_response),
         websocket_listener,
     );
     let authenticate_legs = if use_session {
@@ -143,6 +148,75 @@ where
         create_websocket_signer_from_credentials,
         authenticate_legs,
     ))
+}
+
+/// Builds the transport-level HTTP request from the signed exchange-level
+/// request. The query string is exactly what the gateway signed plus the
+/// signature, so the two can never diverge.
+#[cfg(feature = "reqwest")]
+fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
+    let BinanceSignedParams { params, signature } = request;
+    let mut headers = Vec::new();
+    let (method, query) = match params {
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) => (Method::GET, None),
+        BinanceHttpUnsignedRequest::AssetLimits(params) => (
+            Method::GET,
+            Some(signed_query(params.query_params(true), signature)),
+        ),
+        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
+            let mut params = *params;
+            // `apiKey` goes in the X-MBX-APIKEY header, never in the query
+            // string or the signed payload.
+            if let Some(api_key) = params.apiKey.take() {
+                headers.push(("X-MBX-APIKEY".into(), api_key));
+            }
+            (
+                Method::POST,
+                Some(signed_query(params.query_params(true), signature)),
+            )
+        }
+    };
+    Ok(HttpRequest {
+        method,
+        query,
+        headers,
+        body: None,
+    })
+}
+
+#[cfg(feature = "reqwest")]
+fn signed_query(query: String, signature: Option<String>) -> String {
+    match signature {
+        Some(signature) => format!("{query}&signature={signature}"),
+        None => query,
+    }
+}
+
+/// Parses the transport-level HTTP response into the exchange-level response,
+/// mapping HTTP status to success/error as Binance does.
+#[cfg(feature = "reqwest")]
+fn from_http_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
+    if response.status == 200 {
+        let result = serde_json::from_slice(&response.body)
+            .map_err(|error| EGError::External(Box::new(error)))?;
+        Ok(BinanceHttpResponse::Result(result))
+    } else {
+        let error = serde_json::from_slice(&response.body)
+            .map_err(|error| EGError::External(Box::new(error)))?;
+        Ok(BinanceHttpResponse::Error(error))
+    }
+}
+
+#[cfg(feature = "iris")]
+fn to_websocket_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {
+    Ok(request)
+}
+
+#[cfg(feature = "iris")]
+fn from_websocket_response(
+    response: BinanceWebsocketResponse,
+) -> EGResult<BinanceWebsocketResponse> {
+    Ok(response)
 }
 
 fn exchange_urls() -> ExchangeUrls {

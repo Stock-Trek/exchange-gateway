@@ -9,18 +9,18 @@ use std::time::Duration;
 ///
 /// `query` carries the raw query string and is appended to the request URL verbatim.
 #[derive(Debug, Clone)]
-pub struct HttpRequest {
-    pub method: reqwest::Method,
-    pub query: Option<String>,
-    pub headers: Vec<(String, String)>,
-    pub body: Option<Vec<u8>>,
+pub(crate) struct HttpRequest {
+    pub(crate) method: reqwest::Method,
+    pub(crate) query: Option<String>,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Option<Vec<u8>>,
 }
 
 /// A transport-level HTTP response produced by the reqwest-backed client.
 #[derive(Debug, Clone)]
-pub struct HttpResponse {
-    pub status: u16,
-    pub body: Vec<u8>,
+pub(crate) struct HttpResponse {
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
 }
 
 /// A concrete [`HttpClientTrait`] implementation backed by [`reqwest`].
@@ -29,7 +29,7 @@ pub struct HttpResponse {
 /// construction time and `endpoint` is supplied per request by
 /// [`HttpTransport`](crate::transports::http::HttpTransport).
 #[derive(Clone)]
-pub struct ReqwestHttpClient {
+pub(crate) struct ReqwestHttpClient {
     client: reqwest::Client,
     base_url: String,
 }
@@ -37,12 +37,12 @@ pub struct ReqwestHttpClient {
 impl ReqwestHttpClient {
     /// Creates a client that sends requests to `base_url` using a default
     /// [`reqwest::Client`].
-    pub fn new(base_url: &str) -> Self {
+    pub(crate) fn new(base_url: &str) -> Self {
         Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
     }
     /// Creates a client that sends requests to `base_url` using a custom
     /// [`reqwest::Client`].
-    pub fn with_client(base_url: &str, client: reqwest::Client) -> Self {
+    pub(crate) fn with_client(base_url: &str, client: reqwest::Client) -> Self {
         Self {
             client,
             base_url: base_url.into(),
