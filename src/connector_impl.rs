@@ -118,7 +118,10 @@ where
             .fire_and_forget(signed_request, timeout)
             .await
         {
-            Ok(()) => Ok(()),
+            Ok(feedback) => {
+                let _ = self.rate_limits.apply_feedback(&feedback);
+                Ok(())
+            }
             Err(error) => {
                 let _ = self.rate_limits.refund(weight, order_count);
                 Err(error)

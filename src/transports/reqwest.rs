@@ -1,5 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
+    rate_limit::feedback::{RateLimitFeedback, RateLimitUsage},
     transports::http::HttpClientTrait,
 };
 use async_trait::async_trait;
@@ -17,10 +18,15 @@ pub struct HttpRequest {
 }
 
 /// A transport-level HTTP response produced by the reqwest-backed client.
+///
+/// `headers` preserves every response header (lower-cased names) so that
+/// exchange rate-limit feedback (`Retry-After`, `X-MBX-*`) survives the
+/// transport boundary.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
 }
 
 /// A concrete [`HttpClientTrait`] implementation backed by [`reqwest`].
@@ -56,6 +62,12 @@ impl ReqwestHttpClient {
         }
         url
     }
+    fn parse_header(headers: &[(String, String)], name: &str) -> Option<u32> {
+        headers
+            .iter()
+            .find(|(header_name, _)| header_name == name)
+            .and_then(|(_, value)| value.trim().parse().ok())
+    }
 }
 
 #[async_trait]
@@ -82,12 +94,65 @@ impl HttpClientTrait for ReqwestHttpClient {
             .await
             .map_err(|e| EGError::External(Box::new(e)))?;
         let status = response.status().as_u16();
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_ascii_lowercase(),
+                    value.to_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
         let body = response
             .bytes()
             .await
             .map_err(|e| EGError::External(Box::new(e)))?
             .to_vec();
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            body,
+            headers,
+        })
+    }
+    fn rate_limit_feedback(&self, response: &Self::TransportRes) -> RateLimitFeedback {
+        // Binance's REST API signals throttling via 429 (too many requests) /
+        // 418 (IP auto-banned) with an optional Retry-After header, and reports
+        // actual usage on every response via X-MBX-* headers. Feeding these
+        // into the local limiter keeps it aligned with the server.
+        let retry_after = response
+            .headers
+            .iter()
+            .find(|(name, _)| name == "retry-after")
+            .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs);
+        let mut feedback = RateLimitFeedback {
+            retry_after,
+            throttled: matches!(response.status, 429 | 418),
+            ..Default::default()
+        };
+        if let Some(used) = Self::parse_header(&response.headers, "x-mbx-used-weight-1m") {
+            feedback.usage.push(RateLimitUsage {
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+                used,
+                limit: None,
+            });
+        }
+        if let Some(used) = Self::parse_header(&response.headers, "x-mbx-order-count-10s") {
+            feedback.usage.push(RateLimitUsage {
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+                used,
+                limit: None,
+            });
+        }
+        if let Some(used) = Self::parse_header(&response.headers, "x-mbx-order-count-1d") {
+            feedback.usage.push(RateLimitUsage {
+                interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+                used,
+                limit: None,
+            });
+        }
+        feedback
     }
 }
 
@@ -113,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn send_message_round_trips_through_reqwest() {
         let request_log = Arc::new(Mutex::new(String::new()));
-        let base_url = spawn_mock_server(request_log.clone());
+        let base_url = spawn_mock_server(request_log.clone(), "200 OK", "");
         let client = ReqwestHttpClient::new(&base_url);
         let response = client
             .send_message(
@@ -136,9 +201,54 @@ mod tests {
         assert!(request.ends_with("hello"));
     }
 
-    fn spawn_mock_server(request_log: Arc<Mutex<String>>) -> String {
+    #[tokio::test]
+    async fn rate_limit_feedback_parses_usage_and_retry_after() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url = spawn_mock_server(
+            request_log.clone(),
+            "429 Too Many Requests",
+            "Retry-After: 30\r\nX-MBX-USED-WEIGHT-1M: 6000\r\nX-MBX-ORDER-COUNT-10S: 3",
+        );
+        let client = ReqwestHttpClient::new(&base_url);
+        let response = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("request should succeed");
+        let feedback = client.rate_limit_feedback(&response);
+        assert!(feedback.throttled);
+        assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
+        assert_eq!(feedback.usage.len(), 2);
+        assert_eq!(
+            feedback.usage[0].interval_nanos,
+            Duration::from_secs(60).as_nanos()
+        );
+        assert_eq!(feedback.usage[0].used, 6000);
+        assert_eq!(feedback.usage[0].limit, None);
+        assert_eq!(
+            feedback.usage[1].interval_nanos,
+            Duration::from_secs(10).as_nanos()
+        );
+        assert_eq!(feedback.usage[1].used, 3);
+    }
+
+    fn spawn_mock_server(
+        request_log: Arc<Mutex<String>>,
+        status_line: &str,
+        headers: &str,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("should bind to ephemeral port");
         let addr = listener.local_addr().expect("should have local address");
+        let status_line = status_line.to_string();
+        let headers = headers.to_string();
         std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("should accept a connection");
             let mut buf = [0u8; 4096];
@@ -146,8 +256,13 @@ mod tests {
             *request_log.lock().expect("mutex should not be poisoned") =
                 String::from_utf8_lossy(&buf[..n]).into_owned();
             let body = br#"{"ok":true}"#;
+            let header_block = if headers.is_empty() {
+                String::new()
+            } else {
+                format!("{headers}\r\n")
+            };
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status_line}\r\n{header_block}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 String::from_utf8_lossy(body)
             );

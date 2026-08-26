@@ -2,6 +2,7 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
+    rate_limit::feedback::RateLimitFeedback,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
@@ -25,6 +26,16 @@ pub trait HttpClientTrait: Send + Sync {
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes>;
+
+    /// Extracts server-side rate-limit feedback from a response, if any.
+    ///
+    /// Clients that surface exchange rate-limit headers (e.g. Binance's
+    /// `Retry-After` and `X-MBX-*` headers) override this so the gateway can
+    /// feed the server's view back into the local rate limiter. The default
+    /// returns no feedback.
+    fn rate_limit_feedback(&self, _response: &Self::TransportRes) -> RateLimitFeedback {
+        RateLimitFeedback::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,9 +76,14 @@ where
     fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::SeqCst)
     }
-    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
-        let response = self.to_converted_response(request, timeout).await?;
-        self.listener.on_message(response).await
+    async fn fire_and_forget(
+        &self,
+        request: EGReq,
+        timeout: Duration,
+    ) -> EGResult<RateLimitFeedback> {
+        let (response, feedback) = self.to_converted_response(request, timeout).await?;
+        self.listener.on_message(response).await?;
+        Ok(feedback)
     }
     async fn send_and_wait_for(
         &self,
@@ -75,7 +91,7 @@ where
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<EGRes> {
-        let response = self.to_converted_response(request, timeout).await?;
+        let (response, _) = self.to_converted_response(request, timeout).await?;
         if (filter)(&response) {
             Ok(response)
         } else {
@@ -112,7 +128,11 @@ where
             is_connected: AtomicBool::new(false),
         }
     }
-    async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
+    async fn to_converted_response(
+        &self,
+        request: EGReq,
+        timeout: Duration,
+    ) -> EGResult<(EGRes, RateLimitFeedback)> {
         let http_endpoint = (self.to_http_endpoint)(&request);
         let endpoint = self
             .endpoints
@@ -123,7 +143,9 @@ where
             .client
             .send_message(endpoint, request_dto, timeout)
             .await?;
-        self.try_convert_response(response_dto)
+        let feedback = self.client.rate_limit_feedback(&response_dto);
+        let response = self.try_convert_response(response_dto)?;
+        Ok((response, feedback))
     }
 }
 

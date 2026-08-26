@@ -2,6 +2,7 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::websocket_listener::WebsocketListener,
+    rate_limit::feedback::RateLimitFeedback,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
@@ -52,10 +53,16 @@ where
     fn is_connected(&self) -> bool {
         self.client.is_connected()
     }
-    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
+    async fn fire_and_forget(
+        &self,
+        request: EGReq,
+        timeout: Duration,
+    ) -> EGResult<RateLimitFeedback> {
         let transport_req = self.try_convert_request(request)?;
         self.client.send_message(transport_req, timeout).await?;
-        Ok(())
+        // WebSocket responses arrive asynchronously through the listener,
+        // which reports rate-limit feedback per message.
+        Ok(RateLimitFeedback::default())
     }
     async fn send_and_wait_for(
         &self,
