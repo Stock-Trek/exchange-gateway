@@ -43,6 +43,9 @@ use secrecy::SecretString;
 use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+/// Binance's default `recvWindow`, used when the caller does not specify one.
+const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
+
 #[allow(clippy::too_many_arguments)]
 pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
     trading_mode: TradingMode,
@@ -189,7 +192,7 @@ fn authenticate_websocket_leg(
         let id = id.clone();
         let api_key = api_key.clone();
         let time_sync = time_sync.clone();
-        Arc::new(move || create_auth_message(&id, &api_key, &time_sync))
+        Arc::new(move || websocket_auth_message(&id, &api_key, &time_sync))
     };
     let filter = {
         Arc::new(move |response: &BinanceWebsocketResponse| {
@@ -214,12 +217,12 @@ fn authenticate_websocket_leg(
         timeout,
     }
 }
-fn create_auth_message(
+fn websocket_auth_message(
     id: &str,
     api_key: &str,
     time_sync: &TimeSync,
 ) -> BinanceWebsocketUnsignedRequest {
-    let timestamp = time_sync.now_ms();
+    let timestamp = time_sync.now_millis();
     let params = BinanceLogonParams {
         apiKey: api_key.to_string(),
         timestamp,
@@ -264,9 +267,6 @@ fn null_websocket_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, Bin
     })
 }
 
-/// Binance's default `recvWindow`, used when the caller does not specify one.
-const DEFAULT_RECV_WINDOW_MS: u64 = 5000;
-
 /// Fills in a fresh server-synced `timestamp` and a default `recvWindow` on
 /// every signed HTTP request before it is signed.
 fn sync_http_timestamp(
@@ -298,22 +298,21 @@ fn sync_websocket_timestamp(
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
             }
             BinanceWebsocketUnsignedParams::Logon(params) => {
-                params.timestamp = time_sync.now_ms();
+                params.timestamp = time_sync.now_millis();
             }
             BinanceWebsocketUnsignedParams::ExchangeInfo(..) => {}
         }
         Ok(request)
     })
 }
-
 fn sync_timestamp_fields(
     timestamp: &mut i64,
     recv_window: &mut Option<Decimal>,
     time_sync: &TimeSync,
 ) {
-    *timestamp = time_sync.now_ms();
+    *timestamp = time_sync.now_millis();
     if recv_window.is_none() {
-        *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MS));
+        *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MILLIS));
     }
 }
 
@@ -683,9 +682,9 @@ mod tests {
     #[test]
     fn time_sync_applies_server_offset() {
         let time_sync = TimeSync::default();
-        let local = time_sync.now_ms();
+        let local = time_sync.now_millis();
         time_sync.sync(local + 10_000);
-        let synced = time_sync.now_ms();
+        let synced = time_sync.now_millis();
         assert!(synced >= local + 10_000, "synced: {synced}");
         assert!(synced < local + 10_000 + 60_000, "synced: {synced}");
     }
@@ -693,7 +692,7 @@ mod tests {
     #[test]
     fn http_sync_timestamp_fills_fresh_timestamp_and_default_recv_window() {
         let time_sync = Arc::new(TimeSync::default());
-        let before = time_sync.now_ms();
+        let before = time_sync.now_millis();
         let sync = sync_http_timestamp(time_sync);
         let request = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()));
         let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) = sync(request).unwrap() else {
@@ -738,7 +737,7 @@ mod tests {
     #[test]
     fn websocket_sync_timestamp_fills_fresh_timestamp_and_default_recv_window() {
         let time_sync = Arc::new(TimeSync::default());
-        let before = time_sync.now_ms();
+        let before = time_sync.now_millis();
         let sync = sync_websocket_timestamp(time_sync);
         let request = BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
@@ -763,7 +762,7 @@ mod tests {
     fn logon_response_syncs_server_time() {
         let time_sync = Arc::new(TimeSync::default());
         let leg = authenticate_websocket_leg("api-key".into(), time_sync.clone());
-        let local = time_sync.now_ms();
+        let local = time_sync.now_millis();
         let response = BinanceWebsocketResponse {
             error: None,
             id: "id".into(),
@@ -782,9 +781,9 @@ mod tests {
         };
         let _signer = (leg.create_signer)(response).unwrap();
         assert!(
-            time_sync.now_ms() >= local + 10_000,
+            time_sync.now_millis() >= local + 10_000,
             "now: {}",
-            time_sync.now_ms()
+            time_sync.now_millis()
         );
     }
 }
