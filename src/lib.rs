@@ -9,6 +9,7 @@ pub mod listeners;
 pub mod rate_limit;
 pub mod sign;
 pub mod specs;
+mod time_sync;
 pub mod transports;
 pub mod urls;
 
