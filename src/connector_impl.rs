@@ -137,6 +137,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         EGRes,
     >
 {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         rate_limits: RateLimits,
         to_weight: fn(&EGUnsignedReq) -> u32,
