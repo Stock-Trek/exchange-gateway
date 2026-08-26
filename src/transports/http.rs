@@ -117,7 +117,7 @@ where
         let endpoint = self
             .endpoints
             .get(&http_endpoint)
-            .map_or("", String::as_str);
+            .ok_or(EGError::UnknownEndpoint)?;
         let request_dto = self.try_convert_request(request)?;
         let response_dto = self
             .client

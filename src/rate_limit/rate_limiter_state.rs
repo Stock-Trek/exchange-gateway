@@ -38,10 +38,12 @@ impl RateLimiterState {
     }
 
     fn did_quick_consume(&mut self, cost: u32) -> bool {
-        assert!(
-            cost <= self.capacity_per_interval,
-            "cost cannot exceed bucket capacity"
-        );
+        // A single request can never consume more than the full bucket
+        // capacity. Refuse rather than panic: a request weight that exceeds
+        // the configured capacity must not take down the whole process.
+        if cost > self.capacity_per_interval {
+            return false;
+        }
         let consumed = self.current_capacity >= cost;
         if consumed {
             self.current_capacity -= cost;

@@ -8,7 +8,7 @@ async-trait = "0.1.89"
 bs58 = "0.5.1"
 data-encoding = "2.11.0"
 ed25519-compact = "2.3.0"
-exchange-types = { version = "0.4.7", registry = "shipyard" }
+exchange-types = { version = "0.4.9", registry = "shipyard" }
 futures-timer = "3.0"
 hmac = "0.12"
 iris = { version = "1.0.0", registry = "shipyard", optional = true }
@@ -26,7 +26,7 @@ uuid = { version = "1.23.3", features = ["v4"] }
 [features]
 default = []
 iris = ["dep:iris", "dep:serde_json", "dep:serde"]
-reqwest = ["dep:reqwest"]
+reqwest = ["dep:reqwest", "dep:serde_json", "dep:serde"]
 serde = [
     "dep:serde",
     "exchange-types/serde",

@@ -26,15 +26,16 @@ pub struct ConnectorImpl<
     TransportRes,
     EGRes,
 > {
-    pub(crate) rate_limits: RateLimits,
-    pub(crate) to_weight: fn(&EGUnsignedReq) -> u32,
-    pub(crate) to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-    pub(crate) transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
-    pub(crate) null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
-    pub(crate) credentials: Option<TCredentials>,
-    pub(crate) create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
-    pub(crate) authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-    pub(crate) signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
+    rate_limits: RateLimits,
+    to_weight: fn(&EGUnsignedReq) -> u32,
+    to_order_count: fn(&EGUnsignedReq) -> u32,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
+    transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
+    null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
+    credentials: Option<TCredentials>,
+    create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
+    authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+    signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
 }
 
 #[async_trait]
@@ -98,18 +99,19 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
-        let (signed_request, weight) = {
+        let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             self.check_rate_limits(&unsigned)?;
             let weight = (self.to_weight)(&unsigned);
+            let order_count = (self.to_order_count)(&unsigned);
             let signed_request = match self.signed_request(unsigned, signed) {
                 Ok(signed_request) => signed_request,
                 Err(error) => {
-                    let _ = self.rate_limits.refund(weight);
+                    let _ = self.rate_limits.refund(weight, order_count);
                     return Err(error);
                 }
             };
-            (signed_request, weight)
+            (signed_request, weight, order_count)
         };
         match self
             .transport
@@ -118,7 +120,7 @@ where
         {
             Ok(()) => Ok(()),
             Err(error) => {
-                let _ = self.rate_limits.refund(weight);
+                let _ = self.rate_limits.refund(weight, order_count);
                 Err(error)
             }
         }
@@ -135,6 +137,30 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         EGRes,
     >
 {
+    pub(crate) fn new(
+        rate_limits: RateLimits,
+        to_weight: fn(&EGUnsignedReq) -> u32,
+        to_order_count: fn(&EGUnsignedReq) -> u32,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
+        transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
+        null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
+        credentials: Option<TCredentials>,
+        create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
+        authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+    ) -> Self {
+        Self {
+            rate_limits,
+            to_weight,
+            to_order_count,
+            to_unsigned_request,
+            transport,
+            null_signer,
+            credentials,
+            create_signer,
+            authenticate_legs,
+            signer: Arc::new(Mutex::new(None)),
+        }
+    }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
             let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
@@ -148,7 +174,13 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     }
     fn check_rate_limits(&self, unsigned: &EGUnsignedReq) -> EGResult<()> {
         let weight = (self.to_weight)(unsigned);
-        if !self.rate_limits.request.did_acquire(weight)? {
+        if !self.rate_limits.weight.did_acquire(weight)? {
+            return Err(EGError::RateLimited);
+        }
+        let order_count = (self.to_order_count)(unsigned);
+        if !self.rate_limits.orders.did_acquire(order_count)? {
+            // Roll back the weight we already acquired for this request.
+            let _ = self.rate_limits.weight.refund(weight);
             return Err(EGError::RateLimited);
         }
         Ok(())
@@ -171,6 +203,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         f.debug_struct("Connector")
             .field("rate_limits", &self.rate_limits)
             .field("to_weight", &"<function>")
+            .field("to_order_count", &"<function>")
             .field("to_unsigned_request", &"<function>")
             .field("transport", &self.transport)
             .field("null_signer", &self.null_signer)
