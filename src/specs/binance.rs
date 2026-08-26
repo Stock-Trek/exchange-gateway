@@ -687,19 +687,19 @@ mod tests {
         let to_unsigned_request: ArcTryConvertValue<
             BinanceWebsocketUnsignedRequest,
             BinanceWebsocketUnsignedRequest,
-        > = Arc::new(|request| Ok(request));
+        > = Arc::new(Ok);
         let to_transport_request: ArcTryConvertValue<
             BinanceWebsocketRequest,
             BinanceWebsocketRequest,
-        > = Arc::new(|request| Ok(request));
+        > = Arc::new(Ok);
         let to_binance_response: ArcTryConvertValue<
             BinanceWebsocketResponse,
             BinanceWebsocketResponse,
-        > = Arc::new(|response| Ok(response));
+        > = Arc::new(Ok);
         let to_external_response: ArcTryConvertValue<
             BinanceWebsocketResponse,
             BinanceWebsocketResponse,
-        > = Arc::new(|response| Ok(response));
+        > = Arc::new(Ok);
         websocket_connector(
             TradingMode::Paper,
             move |_url, listener| {
@@ -746,9 +746,7 @@ mod tests {
 
     fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
         sent.iter()
-            .filter(|message| {
-                matches!(message.metadata.method, BinanceWebsocketMethodName::Logon)
-            })
+            .filter(|message| matches!(message.metadata.method, BinanceWebsocketMethodName::Logon))
             .count()
     }
 
@@ -783,15 +781,10 @@ mod tests {
             .expect("send should succeed");
         assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
         assert!(connector.is_authenticated().unwrap());
-        assert!(client
-            .sent
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|message| matches!(
-                message.metadata.method,
-                BinanceWebsocketMethodName::PlaceOrder
-            )));
+        assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
+            message.metadata.method,
+            BinanceWebsocketMethodName::PlaceOrder
+        )));
     }
 
     #[tokio::test]
