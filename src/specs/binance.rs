@@ -326,7 +326,8 @@ fn rate_limits() -> RateLimits {
 
 fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
-        BinanceHttpUnsignedRequest::ExchangeInfo(_) | BinanceHttpUnsignedRequest::AssetLimits => 1,
+        BinanceHttpUnsignedRequest::AssetLimits => 1,
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) => 20,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
     }
 }
