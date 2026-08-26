@@ -19,6 +19,13 @@ pub trait HttpClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
 
+    /// Sends a transport-level request and returns the response.
+    ///
+    /// Implementations must surface non-success HTTP statuses as [`EGError`]
+    /// rather than returning them as successful responses: 429 should map to
+    /// [`EGError::RateLimited`] and other non-2xx statuses to
+    /// [`EGError::HttpError`] so that callers do not have to inspect status
+    /// codes themselves.
     async fn send_message(
         &self,
         endpoint: &str,
