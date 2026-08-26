@@ -172,7 +172,7 @@ fn exchange_urls() -> ExchangeUrls {
 }
 fn request_to_http_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
     match request.params {
-        BinanceHttpUnsignedRequest::AssetLimits => HttpEndpoint::AssetLimits,
+        BinanceHttpUnsignedRequest::AssetLimits(..) => HttpEndpoint::AssetLimits,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => HttpEndpoint::ExchangeInfo,
         BinanceHttpUnsignedRequest::SpotOrderRequest(..) => HttpEndpoint::PlaceOrder,
     }
@@ -336,7 +336,7 @@ fn rate_limits() -> RateLimits {
 
 fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
-        BinanceHttpUnsignedRequest::AssetLimits => 1,
+        BinanceHttpUnsignedRequest::AssetLimits(..) => 1,
         BinanceHttpUnsignedRequest::ExchangeInfo(_) => 20,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
     }
