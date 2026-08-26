@@ -3,7 +3,7 @@ use crate::{
     connector::Connector,
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcCombineValues, ArcTryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
@@ -229,10 +229,16 @@ fn create_signer_from_message(
 
 fn null_http_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
     ConvertSigner::new(|unsigned| {
-        Ok(BinanceHttpRequest {
+        match unsigned {
+        BinanceHttpUnsignedRequest::AssetLimits => Err(EGError::InvalidRequest(
+            "AssetLimits maps to the signed `myFilters` endpoint and cannot be sent unsigned; it can only be sent signed once exchange-types models its parameters (timestamp)"
+                .to_string(),
+        )),
+        unsigned => Ok(BinanceHttpRequest {
             params: unsigned,
             signature: None,
-        })
+        }),
+    }
     })
 }
 fn null_websocket_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>
@@ -284,7 +290,13 @@ fn http_unsigned_request_to_bytes(
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
             Some(params.query_params(true).into_bytes())
         }
-        _ => None,
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) => None,
+        BinanceHttpUnsignedRequest::AssetLimits => {
+            return Err(EGError::InvalidRequest(
+                "AssetLimits has no signable parameters in exchange-types and `myFilters` is a signed endpoint; exchange-types must model AssetLimits with timestamp params (e.g. BinanceAssetLimitsParams) before it can be signed"
+                    .to_string(),
+            ))
+        }
     })
 }
 fn websocket_unsigned_request_params_to_bytes(
@@ -391,7 +403,11 @@ fn id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sign::signer::SignerTrait;
     use exchange_types::binance::error::BinanceError;
+    use exchange_types::binance::exchange_info::{
+        BinanceExchangeInfoParams, BinanceExchangeInfoSymbolStatus,
+    };
 
     fn logon_response(
         id: String,
@@ -426,5 +442,51 @@ mod tests {
             200,
             None
         )));
+    }
+
+    #[test]
+    fn null_http_signer_rejects_asset_limits() {
+        // AssetLimits maps to the signed `myFilters` endpoint, so it must not be
+        // sendable unsigned: the null signer should fail loudly instead of
+        // emitting a request without apiKey/signature.
+        let signer = null_http_signer();
+        assert!(matches!(
+            signer.sign(BinanceHttpUnsignedRequest::AssetLimits),
+            Err(EGError::InvalidRequest(_))
+        ));
+        // Public endpoints remain sendable unsigned.
+        let exchange_info = BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            permissions: vec![],
+            symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+        });
+        assert!(matches!(
+            signer.sign(exchange_info),
+            Ok(BinanceHttpRequest {
+                signature: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn http_signing_payload_rejects_asset_limits() {
+        // Even when a caller requests a signed request, exchange-types 0.4.2
+        // models AssetLimits as a unit variant with no timestamp params, so
+        // there is nothing to sign. Fail loudly rather than silently produce a
+        // signature-less request for a signed endpoint.
+        assert!(matches!(
+            http_unsigned_request_to_bytes(&BinanceHttpUnsignedRequest::AssetLimits),
+            Err(EGError::InvalidRequest(_))
+        ));
+        // Public endpoints have no signing payload.
+        assert!(matches!(
+            http_unsigned_request_to_bytes(&BinanceHttpUnsignedRequest::ExchangeInfo(
+                BinanceExchangeInfoParams {
+                    permissions: vec![],
+                    symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+                }
+            )),
+            Ok(None)
+        ));
     }
 }

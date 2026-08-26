@@ -8,6 +8,8 @@ pub enum EGError {
     CryptoKey(String),
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("Request cannot be sent as modeled: {0}")]
+    InvalidRequest(String),
     #[error("Internal mutex poisoned by a panicking operation")]
     MutexPoisoned,
     #[error("Connector is not authenticated")]
