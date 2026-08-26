@@ -220,11 +220,7 @@ where
     /// signer for `epoch`. If the connection reconnects part way through, the
     /// signer is installed anyway (keyed to `epoch`) and the caller detects
     /// the staleness via [`Self::session_is_stale`].
-    async fn run_authentication(
-        &self,
-        credentials: &TCredentials,
-        epoch: u64,
-    ) -> EGResult<()> {
+    async fn run_authentication(&self, credentials: &TCredentials, epoch: u64) -> EGResult<()> {
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
             let (signed_auth_message, weight, order_count) = {
@@ -368,10 +364,10 @@ impl AuthGate {
             Ok(state) => state,
             Err(_) => return,
         };
-        if let AuthGateState::Authenticating(active) = &*state {
-            if Arc::ptr_eq(&active.0, &completed.0) {
-                *state = AuthGateState::Idle;
-            }
+        if let AuthGateState::Authenticating(active) = &*state
+            && Arc::ptr_eq(&active.0, &completed.0)
+        {
+            *state = AuthGateState::Idle;
         }
     }
 }

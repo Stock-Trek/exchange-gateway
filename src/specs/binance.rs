@@ -729,10 +729,10 @@ mod tests {
                 .expect("mutex should not be poisoned")
                 .push(message.clone());
             if matches!(message.metadata.method, BinanceWebsocketMethodName::Logon) {
-                if let Some(gate) = &self.logon_gate {
-                    if gate.block.load(Ordering::SeqCst) {
-                        gate.release.notified().await;
-                    }
+                if let Some(gate) = &self.logon_gate
+                    && gate.block.load(Ordering::SeqCst)
+                {
+                    gate.release.notified().await;
                 }
                 let response = logon_response(message.metadata.id, 200, None);
                 self.listener.on_message(response).await?;
@@ -905,9 +905,8 @@ mod tests {
             block: Arc::new(AtomicBool::new(false)),
             release: Arc::new(tokio::sync::Notify::new()),
         };
-        let connector = Arc::new(
-            mock_session_connector(client_tx, Some(logon_gate.clone())).unwrap(),
-        );
+        let connector =
+            Arc::new(mock_session_connector(client_tx, Some(logon_gate.clone())).unwrap());
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
