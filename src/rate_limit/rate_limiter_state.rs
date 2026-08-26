@@ -34,7 +34,7 @@ impl RateLimiterState {
         }
     }
     pub fn refund(&mut self, cost: u32) {
-        self.current_capacity += cost;
+        self.current_capacity = (self.current_capacity + cost).min(self.capacity_per_interval);
     }
 
     fn did_quick_consume(&mut self, cost: u32) -> bool {

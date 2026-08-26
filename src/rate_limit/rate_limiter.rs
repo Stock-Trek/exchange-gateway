@@ -33,4 +33,46 @@ impl RateLimiter {
         }
         Ok(true)
     }
+    pub fn refund(&self, cost: u32) -> EGResult<()> {
+        let mut limiters_guard = self
+            .rate_limiters
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        for limiter in limiters_guard.iter_mut() {
+            limiter.refund(cost);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rate_limit::rate_limit_config::RateLimitConfig;
+    use std::time::Duration;
+
+    #[test]
+    fn refund_returns_consumed_capacity() {
+        let limiter = RateLimiter::new(vec![RateLimitConfig {
+            capacity_per_interval: 10,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]);
+        assert!(limiter.did_acquire(10).unwrap());
+        assert!(!limiter.did_acquire(1).unwrap());
+        limiter.refund(10).unwrap();
+        assert!(limiter.did_acquire(1).unwrap());
+    }
+
+    #[test]
+    fn refund_never_exceeds_capacity() {
+        let limiter = RateLimiter::new(vec![RateLimitConfig {
+            capacity_per_interval: 10,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]);
+        assert!(limiter.did_acquire(1).unwrap());
+        limiter.refund(10).unwrap();
+        limiter.refund(10).unwrap();
+        assert!(limiter.did_acquire(10).unwrap());
+        assert!(!limiter.did_acquire(1).unwrap());
+    }
 }
