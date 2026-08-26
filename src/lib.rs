@@ -19,6 +19,7 @@ pub mod prelude {
     pub use crate::transports::reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient};
     pub use crate::{
         connect::Connect,
+        connector::Connector,
         connector_impl::ConnectorImpl,
         credentials::{api_key_credential::ApiKeyCredentials, jwt_credential::JwtCredentials},
         error::{EGError, EGResult},
