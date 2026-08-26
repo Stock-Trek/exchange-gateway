@@ -277,11 +277,11 @@ mod tests {
     async fn wait_until_connected(
         client: &dyn WebsocketClientTrait<TransportReq = TestRequest, TransportRes = TestResponse>,
     ) {
-        for _ in 0..30 {
+        for _ in 0..100 {
             if client.is_connected() {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("client did not connect within timeout");
     }
@@ -376,27 +376,28 @@ mod tests {
         // The server replies, the handler blocks inside the listener's
         // `on_message`, and can no longer drain the outgoing message channel.
         client
-            .send_message(message.clone(), Duration::from_secs(5))
+            .send_message(message.clone(), Duration::from_secs(1))
             .await
             .expect("trigger send should succeed");
         entered_rx.await.expect("handler should enter on_message");
 
         // The single-slot channel is now full and the handler is stuck, so
-        // this send can only ever complete by honoring the timeout.
+        // this send can only ever complete by honoring the timeout. The
+        // timeout is deliberately small so the test finishes quickly.
         client
-            .send_message(message.clone(), Duration::from_secs(5))
+            .send_message(message.clone(), Duration::from_secs(1))
             .await
             .expect("message should be accepted into the channel");
 
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            client.send_message(message, Duration::from_millis(200)),
+            Duration::from_secs(1),
+            client.send_message(message, Duration::from_millis(100)),
         )
         .await
         .expect("send_message should return within the timeout");
         assert!(
-            result.is_err(),
-            "send on a wedged connection should time out, got: {result:?}"
+            matches!(result, Err(EGError::TimedOut)),
+            "send on a wedged connection should time out with TimedOut, got: {result:?}"
         );
     }
 }
