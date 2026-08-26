@@ -17,6 +17,10 @@ pub struct HttpRequest {
 }
 
 /// A transport-level HTTP response produced by the reqwest-backed client.
+///
+/// Only successful (2xx) responses are ever returned; error statuses (4xx,
+/// 429 and 5xx) are surfaced as [`EGError`] by
+/// [`ReqwestHttpClient::send_message`].
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
@@ -28,6 +32,11 @@ pub struct HttpResponse {
 /// Requests are sent to `{base_url}/{endpoint}` where `base_url` is fixed at
 /// construction time and `endpoint` is supplied per request by
 /// [`HttpTransport`](crate::transports::http::HttpTransport).
+///
+/// Non-success HTTP statuses are returned as errors: 429 maps to
+/// [`EGError::RateLimited`] and every other non-2xx status maps to
+/// [`EGError::HttpError`] (which carries the response body so the exchange's
+/// error message can be inspected).
 #[derive(Clone)]
 pub struct ReqwestHttpClient {
     client: reqwest::Client,
@@ -81,13 +90,25 @@ impl HttpClientTrait for ReqwestHttpClient {
             .send()
             .await
             .map_err(|e| EGError::External(Box::new(e)))?;
-        let status = response.status().as_u16();
+        let status = response.status();
         let body = response
             .bytes()
             .await
             .map_err(|e| EGError::External(Box::new(e)))?
             .to_vec();
-        Ok(HttpResponse { status, body })
+        if status.is_success() {
+            Ok(HttpResponse {
+                status: status.as_u16(),
+                body,
+            })
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            Err(EGError::RateLimited)
+        } else {
+            Err(EGError::HttpError {
+                status: status.as_u16(),
+                body,
+            })
+        }
     }
 }
 
@@ -136,7 +157,99 @@ mod tests {
         assert!(request.ends_with("hello"));
     }
 
+    #[tokio::test]
+    async fn send_message_maps_429_to_rate_limited() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url = spawn_mock_server_with_response(
+            request_log,
+            429,
+            br#"{"code":-1003,"msg":"Too many requests"}"#,
+        );
+        let client = ReqwestHttpClient::new(&base_url);
+        let error = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("429 should be returned as an error");
+        assert!(
+            matches!(error, EGError::RateLimited),
+            "expected RateLimited, got: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_maps_4xx_to_http_error() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url = spawn_mock_server_with_response(
+            request_log,
+            400,
+            br#"{"code":-2014,"msg":"API-key format invalid."}"#,
+        );
+        let client = ReqwestHttpClient::new(&base_url);
+        let error = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("400 should be returned as an error");
+        match error {
+            EGError::HttpError { status, body } => {
+                assert_eq!(status, 400);
+                assert_eq!(body, br#"{"code":-2014,"msg":"API-key format invalid."}"#);
+            }
+            other => panic!("expected HttpError, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_message_maps_5xx_to_http_error() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url =
+            spawn_mock_server_with_response(request_log, 503, br#"{"code":-1000,"msg":"down"}"#);
+        let client = ReqwestHttpClient::new(&base_url);
+        let error = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("503 should be returned as an error");
+        match error {
+            EGError::HttpError { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected HttpError, got: {other:?}"),
+        }
+    }
+
     fn spawn_mock_server(request_log: Arc<Mutex<String>>) -> String {
+        spawn_mock_server_with_response(request_log, 200, br#"{"ok":true}"#)
+    }
+
+    fn spawn_mock_server_with_response(
+        request_log: Arc<Mutex<String>>,
+        status: u16,
+        body: &'static [u8],
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("should bind to ephemeral port");
         let addr = listener.local_addr().expect("should have local address");
         std::thread::spawn(move || {
@@ -145,9 +258,15 @@ mod tests {
             let n = stream.read(&mut buf).expect("should read the request");
             *request_log.lock().expect("mutex should not be poisoned") =
                 String::from_utf8_lossy(&buf[..n]).into_owned();
-            let body = br#"{"ok":true}"#;
+            let reason = match status {
+                200 => "OK",
+                400 => "Bad Request",
+                429 => "Too Many Requests",
+                503 => "Service Unavailable",
+                _ => "Error",
+            };
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 String::from_utf8_lossy(body)
             );

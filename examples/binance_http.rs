@@ -107,19 +107,13 @@ mod binance {
 
     /// Converts a transport-level response into the exchange-types response.
     ///
-    /// The gateway does not check HTTP status codes: non-2xx responses must be
-    /// mapped to `BinanceHttpResponseResult::Error` here.
+    /// The transport rejects non-2xx HTTP statuses (4xx/429/5xx are returned
+    /// as [`EGError`]s), so only successful responses reach this converter.
     fn to_binance_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
-        if response.status == 200 {
-            Ok(BinanceHttpResponse::Result(
-                serde_json::from_slice(&response.body)
-                    .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?,
-            ))
-        } else {
-            let error = serde_json::from_slice(&response.body)
-                .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?;
-            Ok(BinanceHttpResponse::Error(error))
-        }
+        Ok(BinanceHttpResponse::Result(
+            serde_json::from_slice(&response.body)
+                .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?,
+        ))
     }
 
     fn to_external_response(response: BinanceHttpResponse) -> EGResult<MyResponse> {
