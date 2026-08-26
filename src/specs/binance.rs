@@ -257,7 +257,7 @@ fn create_http_signer_from_credentials(
         BinanceHttpUnsignedRequest,
         BinanceHttpRequest,
     >::new(
-        http_unsigned_request_to_bytes,
+        Arc::new(http_unsigned_request_to_bytes),
         data_signer(secret)?,
         ByteEncoding::HexLower,
         signature_appender_http(api_key.into()),
@@ -271,7 +271,7 @@ fn create_websocket_signer_from_credentials(
         BinanceWebsocketUnsignedRequest,
         BinanceWebsocketRequest,
     >::new(
-        websocket_unsigned_request_params_to_bytes,
+        Arc::new(websocket_unsigned_request_params_to_bytes),
         data_signer(secret)?,
         ByteEncoding::HexLower,
         signature_appender_websocket(api_key.into()),
