@@ -3,7 +3,7 @@ use crate::{
     connector::Connector,
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcCombineValues, ArcTryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
@@ -75,13 +75,16 @@ where
         request_to_http_endpoint,
         http_endpoints(),
     );
-    let signer = Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
-        create_http_signer_from_credentials(credentials)
-            .expect("Failed to create signer from credentials")
-    })));
+    let signer = match &credentials {
+        Some(credentials) => Arc::new(Mutex::new(Some(create_http_signer_from_credentials(
+            credentials,
+        )?))),
+        None => Arc::new(Mutex::new(None)),
+    };
     Ok(ConnectorImpl {
         rate_limits: rate_limits(),
         to_weight: http_request_weight,
+        to_order_count: http_order_count,
         to_unsigned_request,
         transport: Transport::Http(http_transport),
         null_signer: null_http_signer(),
@@ -127,26 +130,27 @@ where
         websocket_listener,
     );
     let (authenticate_legs, signer) = if use_session {
-        let api_key = credentials
-            .as_ref()
-            .map(|c| c.api_key.clone())
-            .expect("Websocket session requires credentials");
+        let api_key = match &credentials {
+            Some(credentials) => credentials.api_key.clone(),
+            None => return Err(EGError::NotAuthenticated),
+        };
         (
             vec![authenticate_websocket_leg(api_key)],
             Arc::new(Mutex::new(None)),
         )
     } else {
-        (
-            vec![],
-            Arc::new(Mutex::new(credentials.as_ref().map(|credentials| {
-                create_websocket_signer_from_credentials(credentials)
-                    .expect("Failed to create signer from credentials")
-            }))),
-        )
+        let signer = match &credentials {
+            Some(credentials) => Arc::new(Mutex::new(Some(
+                create_websocket_signer_from_credentials(credentials)?,
+            ))),
+            None => Arc::new(Mutex::new(None)),
+        };
+        (vec![], signer)
     };
     Ok(ConnectorImpl {
         rate_limits: rate_limits(),
         to_weight: websocket_request_weight,
+        to_order_count: websocket_order_count,
         to_unsigned_request,
         transport: Transport::Websocket(websocket_transport),
         null_signer: null_websocket_signer(),
@@ -292,9 +296,14 @@ fn http_unsigned_request_to_bytes(
 ) -> EGResult<Option<Vec<u8>>> {
     Ok(match request {
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
+            Some(order_params_to_bytes(params, false))
+        }
+        // `myFilters` is a signed (USER_DATA) endpoint; without a signature
+        // payload the request can never be authenticated.
+        BinanceHttpUnsignedRequest::AssetLimits(params) => {
             Some(params.query_params(true).into_bytes())
         }
-        _ => None,
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) => None,
     })
 }
 fn websocket_unsigned_request_params_to_bytes(
@@ -302,13 +311,33 @@ fn websocket_unsigned_request_params_to_bytes(
 ) -> EGResult<Option<Vec<u8>>> {
     Ok(match &request.params {
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
+            Some(order_params_to_bytes(params, true))
         }
         BinanceWebsocketUnsignedParams::Logon(params) => {
             Some(params.query_params(true).into_bytes())
         }
         BinanceWebsocketUnsignedParams::ExchangeInfo(_) => None,
     })
+}
+/// Builds the HMAC payload for a spot order.
+///
+/// `include_api_key` is `true` for the WebSocket API, where `apiKey` is part
+/// of the signed params per Binance's documented signing rules, and `false`
+/// for the REST API, where the api key travels in the `X-MBX-APIKEY` header
+/// and must not appear in the signed query string (including it would either
+/// invalidate the signature or be rejected as an unknown parameter).
+fn order_params_to_bytes(params: &BinanceSpotOrderParams, include_api_key: bool) -> Vec<u8> {
+    let mut params = params.clone();
+    if !include_api_key {
+        params.apiKey = None;
+    }
+    let mut query = params.query_params(true);
+    // The upstream `query-params` derive serializes the raw identifier
+    // `r#type` as `r%23type`; Binance expects `type`. Keep the signed payload
+    // canonical here. The request query string must be built the same way;
+    // see README.md for the workaround until the derive is fixed upstream.
+    query = query.replace("r%23type=", "type=");
+    query.into_bytes()
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::HmacSha256.signer(secret)
@@ -327,25 +356,53 @@ fn websocket_converter(
 
 fn rate_limits() -> RateLimits {
     RateLimits {
-        request: RateLimiter::new(vec![RateLimitConfig {
-            capacity_per_interval: 1200,
+        weight: RateLimiter::new(vec![RateLimitConfig {
+            // Binance `REQUEST_WEIGHT`: 6000 weight per minute (per IP).
+            capacity_per_interval: 6000,
             interval_nanos: Duration::from_mins(1).as_nanos(),
         }]),
+        orders: RateLimiter::new(vec![
+            // Binance `ORDERS`: 50 orders per 10 seconds and 160000 per day
+            // (per account).
+            RateLimitConfig {
+                capacity_per_interval: 50,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            },
+            RateLimitConfig {
+                capacity_per_interval: 160_000,
+                interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+            },
+        ]),
     }
 }
 
 fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
-        BinanceHttpUnsignedRequest::AssetLimits(..) => 1,
+        // GET /api/v3/myFilters has weight 40 per the official docs.
+        BinanceHttpUnsignedRequest::AssetLimits(..) => 40,
         BinanceHttpUnsignedRequest::ExchangeInfo(_) => 20,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
     }
 }
 fn websocket_request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     match &request.params {
-        BinanceWebsocketUnsignedParams::ExchangeInfo(_)
-        | BinanceWebsocketUnsignedParams::Logon(_) => 1,
+        // The WebSocket API `exchangeInfo` request carries no `symbol`/`symbols`
+        // params (weight 4) and `session.logon` has weight 2 per the docs.
+        BinanceWebsocketUnsignedParams::ExchangeInfo(_) => 4,
+        BinanceWebsocketUnsignedParams::Logon(_) => 2,
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
+    }
+}
+fn http_order_count(request: &BinanceHttpUnsignedRequest) -> u32 {
+    match request {
+        BinanceHttpUnsignedRequest::SpotOrderRequest(_) => 1,
+        _ => 0,
+    }
+}
+fn websocket_order_count(request: &BinanceWebsocketUnsignedRequest) -> u32 {
+    match &request.params {
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(_) => 1,
+        _ => 0,
     }
 }
 fn order_weight(params: &BinanceSpotOrderParams) -> u32 {
@@ -389,7 +446,18 @@ fn id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exchange_types::binance::error::BinanceError;
+    use exchange_types::binance::{
+        asset_limits::BinanceAssetLimitsParams,
+        error::BinanceError,
+        exchange_info::{
+            BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+            BinanceExchangeInfoSymbolStatus, BinanceOrderType,
+        },
+        spot::{
+            BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
+            BinanceTimeInForce,
+        },
+    };
 
     fn logon_response(
         id: String,
@@ -425,5 +493,154 @@ mod tests {
             200,
             None
         )));
+    }
+
+    fn spot_order_params() -> BinanceSpotOrderParams {
+        BinanceSpotOrderParams {
+            apiKey: Some("my-api-key".into()),
+            icebergQty: None,
+            newClientOrderId: "abc".into(),
+            newOrderRespType: BinanceNewOrderResponseType::ACK,
+            pegPriceType: None,
+            pegOffsetValue: None,
+            pegOffsetType: None,
+            price: Some("100".parse().unwrap()),
+            quantity: Some("1".parse().unwrap()),
+            quoteOrderQty: None,
+            recvWindow: None,
+            selfTradePreventionMode: BinanceSelfTradeProtection::NONE,
+            side: BinanceSide::BUY,
+            stopPrice: None,
+            strategyId: None,
+            strategyType: None,
+            symbol: "BTCUSDT".into(),
+            timeInForce: Some(BinanceTimeInForce::GTC),
+            timestamp: 1700000000000,
+            trailingDelta: None,
+            r#type: BinanceOrderType::LIMIT,
+        }
+    }
+
+    #[test]
+    fn http_order_signature_payload_matches_rest_rule() {
+        // REST signs the query string only: no `apiKey` (it goes in the
+        // X-MBX-APIKEY header) and `type` must not be mangled into `r%23type`
+        // by the upstream query-params derive.
+        let request = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()));
+        let payload =
+            String::from_utf8(http_unsigned_request_to_bytes(&request).unwrap().unwrap()).unwrap();
+        assert!(!payload.contains("apiKey"), "payload: {payload}");
+        assert!(payload.contains("type=LIMIT"), "payload: {payload}");
+        assert!(!payload.contains("r%23type"), "payload: {payload}");
+        assert!(
+            payload.contains("timestamp=1700000000000"),
+            "payload: {payload}"
+        );
+    }
+
+    #[test]
+    fn websocket_order_signature_payload_includes_api_key() {
+        // The WebSocket API signs all params except signature, including
+        // apiKey, sorted alphabetically.
+        let request = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "1".into(),
+                method: BinanceWebsocketMethodName::PlaceOrder,
+            },
+            params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
+        };
+        let payload = String::from_utf8(
+            websocket_unsigned_request_params_to_bytes(&request)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(payload.contains("apiKey=my-api-key"), "payload: {payload}");
+        assert!(payload.contains("type=LIMIT"), "payload: {payload}");
+        assert!(!payload.contains("r%23type"), "payload: {payload}");
+    }
+
+    #[test]
+    fn asset_limits_signature_payload_is_built() {
+        // `/api/v3/myFilters` is a signed endpoint; a payload must exist.
+        let request = BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            recvWindow: None,
+            symbols: None,
+            timestamp: 1700000000000,
+        });
+        let payload =
+            String::from_utf8(http_unsigned_request_to_bytes(&request).unwrap().unwrap()).unwrap();
+        assert_eq!(payload, "timestamp=1700000000000");
+    }
+
+    #[test]
+    fn http_exchange_info_is_unsigned() {
+        let request = BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            permissions: vec![BinanceExchangeInfoPermission::SPOT],
+            symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+        });
+        assert!(http_unsigned_request_to_bytes(&request).unwrap().is_none());
+    }
+
+    #[test]
+    fn request_weights_match_binance_docs() {
+        let exchange_info = BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            permissions: vec![BinanceExchangeInfoPermission::SPOT],
+            symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+        });
+        assert_eq!(http_request_weight(&exchange_info), 20);
+        let asset_limits = BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            recvWindow: None,
+            symbols: None,
+            timestamp: 0,
+        });
+        assert_eq!(http_request_weight(&asset_limits), 40);
+        let order = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()));
+        assert_eq!(http_request_weight(&order), 1);
+
+        let websocket_logon = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "1".into(),
+                method: BinanceWebsocketMethodName::Logon,
+            },
+            params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams {
+                apiKey: "k".into(),
+                timestamp: 0,
+            }),
+        };
+        assert_eq!(websocket_request_weight(&websocket_logon), 2);
+        let websocket_exchange_info = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "2".into(),
+                method: BinanceWebsocketMethodName::ExchangeInfo,
+            },
+            params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+        };
+        assert_eq!(websocket_request_weight(&websocket_exchange_info), 4);
+    }
+
+    #[test]
+    fn order_rate_limit_is_50_per_10_seconds() {
+        let limits = rate_limits();
+        for _ in 0..50 {
+            assert!(limits.orders.did_acquire(1).unwrap());
+        }
+        assert!(!limits.orders.did_acquire(1).unwrap());
+        limits.orders.refund(1).unwrap();
+        assert!(limits.orders.did_acquire(1).unwrap());
+    }
+
+    #[test]
+    fn weight_rate_limit_is_6000_per_minute() {
+        let limits = rate_limits();
+        for _ in 0..300 {
+            assert!(limits.weight.did_acquire(20).unwrap());
+        }
+        assert!(!limits.weight.did_acquire(1).unwrap());
+        limits.weight.refund(20).unwrap();
+        assert!(limits.weight.did_acquire(1).unwrap());
     }
 }
