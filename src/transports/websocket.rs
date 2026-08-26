@@ -103,12 +103,12 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(timeout));
         poll_fn(move |cx| {
-            if let Poll::Ready(()) = delay.as_mut().poll(cx) {
-                return Poll::Ready(Err(EGError::TimedOut));
-            }
             match waiter.as_mut().poll(cx) {
                 Poll::Ready(result) => Poll::Ready(result),
-                Poll::Pending => Poll::Pending,
+                Poll::Pending => match delay.as_mut().poll(cx) {
+                    Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                    Poll::Pending => Poll::Pending,
+                },
             }
         })
     }
