@@ -6,9 +6,10 @@ use crate::{
     transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
+use futures_timer::Delay;
 use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{sync::Arc, time::Duration};
+use std::{future::poll_fn, sync::Arc, task::Poll, time::Duration};
 
 /// A concrete [`WebsocketClientTrait`] implementation backed by the
 /// [`iris`] crate.
@@ -76,11 +77,17 @@ where
         self.client.is_connected()
     }
 
-    async fn send_message(&self, message: Self::TransportReq, _timeout: Duration) -> EGResult<()> {
-        self.client
-            .send(message)
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))
+    async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()> {
+        let mut send = Box::pin(self.client.send(message));
+        let mut delay = Box::pin(Delay::new(timeout));
+        poll_fn(move |cx| match send.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(result.map_err(|e| EGError::External(Box::new(e)))),
+            Poll::Pending => match delay.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Pending => Poll::Pending,
+            },
+        })
+        .await
     }
 
     async fn on_message(&self, message: Self::TransportRes) -> EGResult<()> {
@@ -177,6 +184,30 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .push(message);
+            Ok(())
+        }
+    }
+
+    /// A listener that signals when it enters `on_message` and then blocks
+    /// forever, wedging the connection handler.
+    struct BlockingListener {
+        entered: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+    }
+
+    #[async_trait]
+    impl ListenerTrait for BlockingListener {
+        type TMessage = TestResponse;
+
+        async fn on_message(&self, _message: TestResponse) -> EGResult<()> {
+            let sender = self
+                .entered
+                .lock()
+                .expect("mutex should not be poisoned")
+                .take();
+            if let Some(sender) = sender {
+                let _ = sender.send(());
+            }
+            std::future::pending::<()>().await;
             Ok(())
         }
     }
@@ -320,6 +351,52 @@ mod tests {
         assert!(
             result.is_err(),
             "send before connect should fail, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_respects_timeout_when_handler_is_wedged() {
+        let (port, _shutdown) = spawn_responder_server().await;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> =
+            Arc::new(BlockingListener {
+                entered: Arc::new(Mutex::new(Some(entered_tx))),
+            });
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let config = test_config().with_channel_buffer_size(1);
+        let client =
+            IrisWebsocketClient::<TestRequest, TestResponse>::with_config(&url, config, listener);
+        client.connect().await.expect("connect should succeed");
+        wait_until_connected(&client).await;
+
+        let message = TestRequest {
+            id: 1,
+            method: "ping".into(),
+        };
+        // The server replies, the handler blocks inside the listener's
+        // `on_message`, and can no longer drain the outgoing message channel.
+        client
+            .send_message(message.clone(), Duration::from_secs(5))
+            .await
+            .expect("trigger send should succeed");
+        entered_rx.await.expect("handler should enter on_message");
+
+        // The single-slot channel is now full and the handler is stuck, so
+        // this send can only ever complete by honoring the timeout.
+        client
+            .send_message(message.clone(), Duration::from_secs(5))
+            .await
+            .expect("message should be accepted into the channel");
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.send_message(message, Duration::from_millis(200)),
+        )
+        .await
+        .expect("send_message should return within the timeout");
+        assert!(
+            result.is_err(),
+            "send on a wedged connection should time out, got: {result:?}"
         );
     }
 }
