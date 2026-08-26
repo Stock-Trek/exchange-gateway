@@ -29,7 +29,7 @@ use crate::{
 use exchange_types::binance::{
     http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
     logon::BinanceLogonParams,
-    signed::{BinanceSignature, BinanceSignedParams},
+    signed::BinanceSignedParams,
     spot::BinanceSpotOrderParams,
     websocket::{
         BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
@@ -54,7 +54,7 @@ pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
-) -> impl Connector<ExternalReq, ExternalRes>
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
     ExternalReq: Send,
@@ -79,7 +79,7 @@ where
         create_http_signer_from_credentials(credentials)
             .expect("Failed to create signer from credentials")
     })));
-    ConnectorImpl {
+    Ok(ConnectorImpl {
         rate_limits: rate_limits(),
         to_weight: http_request_weight,
         to_unsigned_request,
@@ -89,7 +89,7 @@ where
         create_signer: create_http_signer_from_credentials,
         authenticate_legs: vec![],
         signer,
-    }
+    })
 }
 #[allow(clippy::too_many_arguments)]
 pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
@@ -102,7 +102,7 @@ pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, Ext
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
-) -> impl Connector<ExternalReq, ExternalRes>
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     TClient:
         WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes> + 'static,
@@ -127,8 +127,12 @@ where
         websocket_listener,
     );
     let (authenticate_legs, signer) = if use_session {
+        let api_key = credentials
+            .as_ref()
+            .map(|c| c.api_key.clone())
+            .expect("Websocket session requires credentials");
         (
-            vec![authenticate_websocket_leg()],
+            vec![authenticate_websocket_leg(api_key)],
             Arc::new(Mutex::new(None)),
         )
     } else {
@@ -140,7 +144,7 @@ where
             }))),
         )
     };
-    ConnectorImpl {
+    Ok(ConnectorImpl {
         rate_limits: rate_limits(),
         to_weight: websocket_request_weight,
         to_unsigned_request,
@@ -150,7 +154,7 @@ where
         create_signer: create_websocket_signer_from_credentials,
         authenticate_legs,
         signer,
-    }
+    })
 }
 
 fn exchange_urls() -> ExchangeUrls {
@@ -181,7 +185,9 @@ fn http_endpoints() -> HashMap<HttpEndpoint, String> {
     endpoints
 }
 
-fn authenticate_websocket_leg() -> AuthenticateLeg<
+fn authenticate_websocket_leg(
+    api_key: String,
+) -> AuthenticateLeg<
     BinanceWebsocketUnsignedRequest,
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
@@ -190,7 +196,8 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
     let id = Arc::new(id());
     let create_auth_message = {
         let id = id.clone();
-        Arc::new(move || create_auth_message(&id))
+        let api_key = api_key.clone();
+        Arc::new(move || create_auth_message(&id, &api_key))
     };
     let filter = {
         let id = id.clone();
@@ -205,14 +212,17 @@ fn authenticate_websocket_leg() -> AuthenticateLeg<
         timeout,
     }
 }
-fn create_auth_message(id: &str) -> BinanceWebsocketUnsignedRequest {
+fn create_auth_message(id: &str, api_key: &str) -> BinanceWebsocketUnsignedRequest {
     let timestamp: i64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Negative time since epoch")
         .as_millis()
         .try_into()
         .expect("Epoch too large");
-    let params = BinanceLogonParams { timestamp };
+    let params = BinanceLogonParams {
+        apiKey: api_key.to_string(),
+        timestamp,
+    };
     BinanceWebsocketUnsignedRequest {
         metadata: BinanceWebsocketMetadata {
             id: id.to_string(),
@@ -252,7 +262,7 @@ fn null_websocket_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, Bin
 fn create_http_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>> {
-    let ApiKeyCredentials { api_key, secret } = credentials;
+    let ApiKeyCredentials { secret, .. } = credentials;
     Ok(Box::new(MessageSigner::<
         BinanceHttpUnsignedRequest,
         BinanceHttpRequest,
@@ -260,13 +270,13 @@ fn create_http_signer_from_credentials(
         Arc::new(http_unsigned_request_to_bytes),
         data_signer(secret)?,
         ByteEncoding::HexLower,
-        signature_appender_http(api_key.into()),
+        signature_appender_http(),
     )))
 }
 fn create_websocket_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
-    let ApiKeyCredentials { api_key, secret } = credentials;
+    let ApiKeyCredentials { secret, .. } = credentials;
     Ok(Box::new(MessageSigner::<
         BinanceWebsocketUnsignedRequest,
         BinanceWebsocketRequest,
@@ -274,7 +284,7 @@ fn create_websocket_signer_from_credentials(
         Arc::new(websocket_unsigned_request_params_to_bytes),
         data_signer(secret)?,
         ByteEncoding::HexLower,
-        signature_appender_websocket(api_key.into()),
+        signature_appender_websocket(),
     )))
 }
 fn http_unsigned_request_to_bytes(
@@ -350,32 +360,20 @@ fn order_weight(params: &BinanceSpotOrderParams) -> u32 {
     }
 }
 
-fn signature_appender_http(
-    api_key: String,
-) -> ArcCombineValues<BinanceHttpUnsignedRequest, Option<String>, BinanceHttpRequest> {
-    Arc::new(move |unsigned, signature| {
-        let signature = signature.map(|signature| BinanceSignature {
-            apiKey: api_key.to_string(),
-            signature,
-        });
-        BinanceHttpRequest {
-            params: unsigned,
-            signature,
-        }
+fn signature_appender_http()
+-> ArcCombineValues<BinanceHttpUnsignedRequest, Option<String>, BinanceHttpRequest> {
+    Arc::new(move |unsigned, signature| BinanceHttpRequest {
+        params: unsigned,
+        signature,
     })
 }
-fn signature_appender_websocket(
-    api_key: String,
-) -> ArcCombineValues<BinanceWebsocketUnsignedRequest, Option<String>, BinanceWebsocketRequest> {
+fn signature_appender_websocket()
+-> ArcCombineValues<BinanceWebsocketUnsignedRequest, Option<String>, BinanceWebsocketRequest> {
     Arc::new(move |unsigned, signature| {
         let BinanceWebsocketUnsignedRequest {
             metadata,
             params: unsigned_params,
         } = unsigned;
-        let signature = signature.map(|signature| BinanceSignature {
-            apiKey: api_key.to_string(),
-            signature,
-        });
         let params = BinanceSignedParams {
             params: unsigned_params,
             signature,
@@ -409,14 +407,15 @@ mod tests {
 
     #[test]
     fn logon_filter_only_matches_successful_logon_response() {
-        let leg = authenticate_websocket_leg();
+        let api_key = "api-key";
+        let leg = authenticate_websocket_leg(api_key.into());
         let id = (leg.create_auth_message)().metadata.id;
         assert!((leg.filter)(&logon_response(id.clone(), 200, None)));
         assert!(!(leg.filter)(&logon_response(
             id.clone(),
             200,
             Some(BinanceError {
-                code: "-2014".into(),
+                code: -2014,
                 msg: "API-key format invalid.".into(),
             }),
         )));
