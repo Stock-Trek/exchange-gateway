@@ -84,13 +84,13 @@ mod run {
 
     fn to_external_response(response: BinanceHttpResponse) -> EGResult<String> {
         match response {
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) => Ok(
-                format!(
+            BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) => {
+                Ok(format!(
                     "exchangeInfo: {} symbols, serverTime {}",
                     info.symbols.len(),
                     info.serverTime
-                ),
-            ),
+                ))
+            }
             BinanceHttpResponse::Error(error) => Err(EGError::External(Box::new(
                 std::io::Error::other(format!("exchange error {}: {}", error.code, error.msg)),
             ))),
