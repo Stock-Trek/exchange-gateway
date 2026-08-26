@@ -26,16 +26,16 @@ pub struct ConnectorImpl<
     TransportRes,
     EGRes,
 > {
-    pub(crate) rate_limits: RateLimits,
-    pub(crate) to_weight: fn(&EGUnsignedReq) -> u32,
-    pub(crate) to_order_count: fn(&EGUnsignedReq) -> u32,
-    pub(crate) to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-    pub(crate) transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
-    pub(crate) null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
-    pub(crate) credentials: Option<TCredentials>,
-    pub(crate) create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
-    pub(crate) authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-    pub(crate) signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
+    rate_limits: RateLimits,
+    to_weight: fn(&EGUnsignedReq) -> u32,
+    to_order_count: fn(&EGUnsignedReq) -> u32,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
+    transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
+    null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
+    credentials: Option<TCredentials>,
+    create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
+    authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+    signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
 }
 
 #[async_trait]
@@ -137,6 +137,30 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         EGRes,
     >
 {
+    pub(crate) fn new(
+        rate_limits: RateLimits,
+        to_weight: fn(&EGUnsignedReq) -> u32,
+        to_order_count: fn(&EGUnsignedReq) -> u32,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
+        transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
+        null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
+        credentials: Option<TCredentials>,
+        create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
+        authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+    ) -> Self {
+        Self {
+            rate_limits,
+            to_weight,
+            to_order_count,
+            to_unsigned_request,
+            transport,
+            null_signer,
+            credentials,
+            create_signer,
+            authenticate_legs,
+            signer: Arc::new(Mutex::new(None)),
+        }
+    }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
             let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;

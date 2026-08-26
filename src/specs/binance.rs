@@ -38,8 +38,9 @@ use exchange_types::binance::{
 };
 use secrecy::SecretString;
 use std::{
+    borrow::Cow,
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
@@ -75,23 +76,17 @@ where
         request_to_http_endpoint,
         http_endpoints(),
     );
-    let wrapped_signer = match &credentials {
-        Some(credentials) => Some(create_http_signer_from_credentials(credentials)?),
-        None => None,
-    };
-    let signer = Arc::new(Mutex::new(wrapped_signer));
-    Ok(ConnectorImpl {
-        rate_limits: rate_limits(),
-        to_weight: http_request_weight,
-        to_order_count: http_order_count,
+    Ok(ConnectorImpl::new(
+        rate_limits(),
+        http_request_weight,
+        http_order_count,
         to_unsigned_request,
-        transport: Transport::Http(http_transport),
-        null_signer: null_http_signer(),
+        Transport::Http(http_transport),
+        null_http_signer(),
         credentials,
-        create_signer: create_http_signer_from_credentials,
-        authenticate_legs: vec![],
-        signer,
-    })
+        create_http_signer_from_credentials,
+        vec![],
+    ))
 }
 #[allow(clippy::too_many_arguments)]
 pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
@@ -128,31 +123,26 @@ where
         to_binance_response,
         websocket_listener,
     );
-    let (authenticate_legs, wrapped_signer) = if use_session {
+    let authenticate_legs = if use_session {
         let api_key = match &credentials {
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        (vec![authenticate_websocket_leg(api_key)], None)
+        vec![authenticate_websocket_leg(api_key)]
     } else {
-        let wrapped_signer = match &credentials {
-            Some(credentials) => Some(create_websocket_signer_from_credentials(credentials)?),
-            None => None,
-        };
-        (vec![], wrapped_signer)
+        vec![]
     };
-    Ok(ConnectorImpl {
-        rate_limits: rate_limits(),
-        to_weight: websocket_request_weight,
-        to_order_count: websocket_order_count,
+    Ok(ConnectorImpl::new(
+        rate_limits(),
+        websocket_request_weight,
+        websocket_order_count,
         to_unsigned_request,
-        transport: Transport::Websocket(websocket_transport),
-        null_signer: null_websocket_signer(),
+        Transport::Websocket(websocket_transport),
+        null_websocket_signer(),
         credentials,
-        create_signer: create_websocket_signer_from_credentials,
+        create_websocket_signer_from_credentials,
         authenticate_legs,
-        signer: Arc::new(Mutex::new(wrapped_signer)),
-    })
+    ))
 }
 
 fn exchange_urls() -> ExchangeUrls {
@@ -293,7 +283,14 @@ fn http_unsigned_request_to_bytes(
         }
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => None,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
+            let params_without_api_key = if params.apiKey.is_none() {
+                Cow::Borrowed(params)
+            } else {
+                let mut cloned = params.clone();
+                cloned.apiKey = None;
+                Cow::Owned(cloned)
+            };
+            Some(params_without_api_key.query_params(true).into_bytes())
         }
     })
 }
