@@ -347,9 +347,9 @@ mod tests {
                 let (mut stream, _) = listener.accept().expect("should accept a connection");
                 let mut buf = [0u8; 4096];
                 let n = stream.read(&mut buf).expect("should read the request");
-                log.lock().expect("mutex should not be poisoned").push(
-                    String::from_utf8_lossy(&buf[..n]).into_owned(),
-                );
+                log.lock()
+                    .expect("mutex should not be poisoned")
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
                 let mut head = format!("HTTP/1.1 {} X\r\n", response.status);
                 if let Some(seconds) = response.retry_after {
                     head.push_str(&format!("Retry-After: {seconds}\r\n"));
@@ -416,7 +416,10 @@ mod tests {
         assert_eq!(response.status, 200);
         assert_eq!(response.body, br#"{"ok":true}"#);
         assert_eq!(
-            request_log.lock().expect("mutex should not be poisoned").len(),
+            request_log
+                .lock()
+                .expect("mutex should not be poisoned")
+                .len(),
             3,
             "503s should be retried"
         );
@@ -448,7 +451,10 @@ mod tests {
             .expect("the last response should be returned");
         assert_eq!(response.status, 502);
         assert_eq!(
-            request_log.lock().expect("mutex should not be poisoned").len(),
+            request_log
+                .lock()
+                .expect("mutex should not be poisoned")
+                .len(),
             3,
             "retries should stop after max_attempts"
         );
@@ -468,7 +474,10 @@ mod tests {
             .expect("request should complete");
         assert_eq!(response.status, 400);
         assert_eq!(
-            request_log.lock().expect("mutex should not be poisoned").len(),
+            request_log
+                .lock()
+                .expect("mutex should not be poisoned")
+                .len(),
             1,
             "client errors should not be retried"
         );
@@ -495,7 +504,10 @@ mod tests {
             .expect("request should eventually succeed");
         assert_eq!(response.status, 200);
         assert_eq!(
-            request_log.lock().expect("mutex should not be poisoned").len(),
+            request_log
+                .lock()
+                .expect("mutex should not be poisoned")
+                .len(),
             2,
             "rate-limited responses should be retried"
         );
