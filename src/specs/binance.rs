@@ -878,6 +878,8 @@ mod tests {
             .send(exchange_info_request(), false, Duration::from_secs(5))
             .await;
         assert!(matches!(result, Err(EGError::RateLimited)));
+    }
+
     #[test]
     fn time_sync_applies_server_offset() {
         let time_sync = TimeSync::default();
