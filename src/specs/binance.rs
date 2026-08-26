@@ -267,11 +267,17 @@ fn create_websocket_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { api_key, secret } = credentials;
+    let to_bytes = {
+        let api_key = api_key.clone();
+        Arc::new(move |request: &BinanceWebsocketUnsignedRequest| {
+            websocket_unsigned_request_params_to_bytes(&api_key, request)
+        })
+    };
     Ok(Box::new(MessageSigner::<
         BinanceWebsocketUnsignedRequest,
         BinanceWebsocketRequest,
     >::new(
-        Arc::new(websocket_unsigned_request_params_to_bytes),
+        to_bytes,
         data_signer(secret)?,
         ByteEncoding::HexLower,
         signature_appender_websocket(api_key.into()),
@@ -288,17 +294,31 @@ fn http_unsigned_request_to_bytes(
     })
 }
 fn websocket_unsigned_request_params_to_bytes(
+    api_key: &str,
     request: &BinanceWebsocketUnsignedRequest,
 ) -> EGResult<Option<Vec<u8>>> {
     Ok(match &request.params {
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
+            Some(signed_payload(api_key, &params.query_params(true)))
         }
         BinanceWebsocketUnsignedParams::Logon(params) => {
-            Some(params.query_params(true).into_bytes())
+            Some(signed_payload(api_key, &params.query_params(true)))
         }
         BinanceWebsocketUnsignedParams::ExchangeInfo(_) => None,
     })
+}
+/// Binance's documented ws-api signing rule: the signature is the HMAC-SHA256 of
+/// all request params except `signature`, sorted by key and joined with `&`,
+/// **including `apiKey`** (unlike REST, where `apiKey` travels in a header).
+///
+/// See <https://developers.binance.com/docs/binance-spot-api-docs/web-socket-api/signed-request-security>
+/// for the canonical example: `apiKey=...&price=...&...&type=LIMIT`.
+fn signed_payload(api_key: &str, query: &str) -> Vec<u8> {
+    if query.is_empty() {
+        format!("apiKey={api_key}").into_bytes()
+    } else {
+        format!("apiKey={api_key}&{query}").into_bytes()
+    }
 }
 fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::HmacSha256.signer(secret)
@@ -333,8 +353,10 @@ fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
 }
 fn websocket_request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     match &request.params {
-        BinanceWebsocketUnsignedParams::ExchangeInfo(_)
-        | BinanceWebsocketUnsignedParams::Logon(_) => 1,
+        // `session.logon` is documented as weight 2; `exchangeInfo` as weight 20
+        // on the ws-api (previously both were counted as 1).
+        BinanceWebsocketUnsignedParams::Logon(_) => 2,
+        BinanceWebsocketUnsignedParams::ExchangeInfo(_) => 20,
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
     }
 }
@@ -408,6 +430,47 @@ mod tests {
     }
 
     #[test]
+    fn websocket_logon_signature_matches_binances_documented_example() {
+        // Values from Binance's official ws-api "Log in with API key" example:
+        // https://developers.binance.com/docs/binance-spot-api-docs/web-socket-api/signed-request-security
+        // The signature must be computed over `apiKey` AND `timestamp` (sorted),
+        // not over the params alone.
+        let credentials = ApiKeyCredentials {
+            api_key: "vmPUZE6mv9SD5VNHk4HlWFsOr6aKE2zvsw0MuIgwCIPy6utIco14y7Ju91duEh8A"
+                .into(),
+            secret: SecretString::from(
+                "NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j",
+            ),
+        };
+        let signer = create_websocket_signer_from_credentials(&credentials).unwrap();
+        let request = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "c174a2b1-3f51-4580-b200-8528bd237cb7".into(),
+                method: BinanceWebsocketMethodName::Logon,
+            },
+            params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams {
+                timestamp: 1649729878532,
+            }),
+        };
+        let BinanceWebsocketRequest { params, .. } = signer.sign(request).unwrap();
+        let signature = params.signature.expect("logon must be signed");
+        assert_eq!(signature.apiKey, credentials.api_key);
+        assert_eq!(
+            signature.signature,
+            "1cf54395b336b0a9727ef27d5d98987962bc47aca6e13fe978612d0adee066ed"
+        );
+    }
+
+    #[test]
+    fn signed_payload_prepends_api_key() {
+        assert_eq!(
+            signed_payload("KEY", "timestamp=123"),
+            b"apiKey=KEY&timestamp=123"
+        );
+        assert_eq!(signed_payload("KEY", ""), b"apiKey=KEY");
+    }
+
+    #[test]
     fn logon_filter_only_matches_successful_logon_response() {
         let leg = authenticate_websocket_leg();
         let id = (leg.create_auth_message)().metadata.id;
@@ -416,7 +479,7 @@ mod tests {
             id.clone(),
             200,
             Some(BinanceError {
-                code: "-2014".into(),
+                code: -2014,
                 msg: "API-key format invalid.".into(),
             }),
         )));
