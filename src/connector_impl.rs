@@ -33,6 +33,7 @@ pub struct ConnectorImpl<
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
+    sync_timestamp: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
@@ -97,6 +98,11 @@ where
         }
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
+            let unsigned = if signed {
+                (self.sync_timestamp)(unsigned)?
+            } else {
+                unsigned
+            };
             self.check_rate_limits(&unsigned)?;
             let weight = (self.to_weight)(&unsigned);
             let order_count = (self.to_order_count)(&unsigned);
@@ -142,6 +148,7 @@ where
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
+        sync_timestamp: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
@@ -153,6 +160,7 @@ where
             to_weight,
             to_order_count,
             to_unsigned_request,
+            sync_timestamp,
             transport,
             null_signer,
             credentials,
@@ -251,6 +259,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("to_weight", &"<function>")
             .field("to_order_count", &"<function>")
             .field("to_unsigned_request", &"<function>")
+            .field("sync_timestamp", &"<function>")
             .field("transport", &self.transport)
             .field("null_signer", &self.null_signer)
             .field("credentials", &"<redacted>")
