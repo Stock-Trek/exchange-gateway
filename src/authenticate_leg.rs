@@ -1,5 +1,5 @@
 use crate::{
-    functions::{ArcCreateAuthMessage, ArcPredicate, TryConvertValue},
+    functions::{ArcCreateAuthMessage, ArcPredicate, ArcTryConvertValue},
     sign::signer::Signer,
 };
 use std::time::Duration;
@@ -9,7 +9,7 @@ pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
     pub create_auth_message: ArcCreateAuthMessage<EGUnsignedReq>,
     pub timeout: Duration,
     pub filter: ArcPredicate<EGRes>,
-    pub create_signer: TryConvertValue<EGRes, Signer<EGUnsignedReq, EGReq>>,
+    pub create_signer: ArcTryConvertValue<EGRes, Signer<EGUnsignedReq, EGReq>>,
 }
 
 impl<EGUnsignedReq, EGReq, EGRes> std::fmt::Debug for AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
@@ -18,7 +18,7 @@ impl<EGUnsignedReq, EGReq, EGRes> std::fmt::Debug for AuthenticateLeg<EGUnsigned
             .field("create_auth_message", &"<function>")
             .field("timeout", &self.timeout)
             .field("filter_response", &"<function>")
-            .field("create_signer", &self.create_signer)
+            .field("create_signer", &"<function>")
             .finish()
     }
 }

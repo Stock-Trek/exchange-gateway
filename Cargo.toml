@@ -17,6 +17,7 @@ iris = { version = "1.0.0", registry = "shipyard", optional = true }
 p256 = "0.13"
 p384 = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+rust_decimal = "1.42"
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0.150", optional = true }

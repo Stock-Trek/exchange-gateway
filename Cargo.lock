@@ -510,6 +510,7 @@ dependencies = [
  "p256",
  "p384",
  "reqwest",
+ "rust_decimal",
  "rustls",
  "secrecy",
  "serde",
