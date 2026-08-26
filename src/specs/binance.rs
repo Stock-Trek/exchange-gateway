@@ -492,20 +492,16 @@ mod tests {
 
         #[test]
         fn binance_error_deserializes_numeric_code() {
-            let error: BinanceError = serde_json::from_str(
-                r#"{"code":-2014,"msg":"API-key format invalid."}"#,
-            )
-            .unwrap();
+            let error: BinanceError =
+                serde_json::from_str(r#"{"code":-2014,"msg":"API-key format invalid."}"#).unwrap();
             assert_eq!(error.code, -2014);
             assert_eq!(error.msg, "API-key format invalid.");
         }
 
         #[test]
         fn http_error_response_deserializes_cleanly() {
-            let response: BinanceHttpResponse = serde_json::from_str(
-                r#"{"code":-1121,"msg":"Invalid symbol."}"#,
-            )
-            .unwrap();
+            let response: BinanceHttpResponse =
+                serde_json::from_str(r#"{"code":-1121,"msg":"Invalid symbol."}"#).unwrap();
             match response {
                 BinanceHttpResponse::Error(error) => {
                     assert_eq!(error.code, -1121);
