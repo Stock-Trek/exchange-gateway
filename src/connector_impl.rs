@@ -173,9 +173,6 @@ where
             auth_gate,
         }
     }
-    /// Runs the authentication legs against the current connection and records
-    /// the connection epoch the resulting session belongs to. Only one task
-    /// may be inside this method at a time (see [`AuthGate`]).
     async fn authenticate(&self) -> EGResult<()> {
         let Some(credentials) = &self.credentials else {
             return Ok(());
@@ -189,7 +186,7 @@ where
                 AuthGateAcquisition::Waiting(on_complete) => {
                     // Another authentication is already in flight: wait for it
                     // to finish instead of starting a second one, then re-check
-                    // whether the session is still stale.
+                    // whether the session is still stale
                     on_complete.wait().await?;
                     continue;
                 }
@@ -198,7 +195,7 @@ where
             let result = self.run_authentication(credentials).await;
             // Clear the gate before waking waiters so a waiter that finds the
             // session stale can immediately become the next authenticator.
-            self.auth_gate.release(&on_complete);
+            self.auth_gate.release()?;
             on_complete.notify();
             match result {
                 Err(error) => return Err(error),
@@ -214,10 +211,8 @@ where
             }
         }
     }
-    /// Sends each authentication leg and, on success, installs the resulting
-    /// signer for `session`. If the connection reconnects part way through,
-    /// the signer is installed anyway (keyed to `session`) and the caller
-    /// detects the staleness via [`Self::session_is_stale`].
+
+    /// Sends each authentication leg and saves the resulting signer
     async fn run_authentication(&self, credentials: &TCredentials) -> EGResult<()> {
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
@@ -252,7 +247,7 @@ where
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             *guard = Some(signer);
         }
-        self.auth_gate.complete_authentication()
+        Ok(())
     }
     /// The session is stale while no signer is installed yet and, for
     /// session-based connectors, whenever the installed signer belongs to an

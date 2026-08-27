@@ -52,16 +52,13 @@ impl AuthGate {
         }
     }
 
-    pub fn release(&self, on_complete: &AuthOnComplete) {
-        let mut state = match self.state.lock() {
-            Ok(state) => state,
-            Err(_) => return,
+    pub fn release(&self) -> EGResult<()> {
+        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+        let Some(in_flight) = &state.in_flight.take() else {
+            return Err(EGError::NotAuthenticated);
         };
-        if let Some(in_flight) = &state.in_flight
-            && Arc::ptr_eq(&in_flight.on_complete.0, &on_complete.0)
-        {
-            state.in_flight = None;
-        }
+        state.authenticated_epoch = in_flight.epoch;
+        Ok(())
     }
 
     pub fn on_connection_established(&self) -> EGResult<()> {
@@ -75,15 +72,6 @@ impl AuthGate {
     pub fn is_stale(&self) -> EGResult<bool> {
         let state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
         Ok(state.connection_epoch != state.authenticated_epoch)
-    }
-
-    pub fn complete_authentication(&self) -> EGResult<()> {
-        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-        let Some(in_flight) = &state.in_flight else {
-            return Err(EGError::NotAuthenticated);
-        };
-        state.authenticated_epoch = in_flight.epoch;
-        Ok(())
     }
 }
 
@@ -137,8 +125,8 @@ mod tests {
         let AuthGateAcquisition::Authenticator(on_complete) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
-        gate.complete_authentication().unwrap();
-        gate.release(&on_complete);
+        gate.release().expect("Release must be Ok");
+        on_complete.notify();
         assert!(!gate.is_stale().unwrap());
 
         gate.on_connection_established().unwrap();
@@ -157,8 +145,8 @@ mod tests {
         // records the completion against the acquire-time epoch, not the
         // current one, so the session is detected as stale.
         gate.on_connection_established().unwrap();
-        gate.complete_authentication().unwrap();
-        gate.release(&on_complete);
+        gate.release().expect("Release must be Ok");
+        on_complete.notify();
         assert!(gate.is_stale().unwrap());
     }
 
@@ -173,7 +161,8 @@ mod tests {
             gate.acquire().unwrap(),
             AuthGateAcquisition::Waiting(_)
         ));
-        gate.release(&on_complete);
+        gate.release().expect("Release must be Ok");
+        on_complete.notify();
     }
 
     #[test]
@@ -182,10 +171,8 @@ mod tests {
         let AuthGateAcquisition::Authenticator(on_complete) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
-        gate.release(&on_complete);
-        assert!(matches!(
-            gate.complete_authentication(),
-            Err(EGError::NotAuthenticated)
-        ));
+        gate.release().expect("Release must be Ok");
+        on_complete.notify();
+        assert!(matches!(gate.release(), Err(EGError::NotAuthenticated)));
     }
 }

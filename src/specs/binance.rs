@@ -556,8 +556,22 @@ fn id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transports::{http::HttpClientTrait, websocket::WebsocketClientTrait};
-    use async_trait::async_trait;
+
+    #[cfg(feature = "iris")]
+    use {
+        crate::transports::websocket::WebsocketClientTrait,
+        std::sync::atomic::{AtomicBool, Ordering},
+    };
+
+    #[cfg(feature = "reqwest")]
+    use {
+        crate::transports::http::HttpClientTrait,
+        exchange_types::binance::http::BinanceHttpResponseResult,
+    };
+
+    #[cfg(any(feature = "iris", feature = "reqwest"))]
+    use {async_trait::async_trait, secrecy::SecretString, std::sync::Mutex};
+
     use exchange_types::binance::{
         asset_limits::BinanceAssetLimitsParams,
         error::BinanceError,
@@ -565,17 +579,11 @@ mod tests {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
-        http::BinanceHttpResponseResult,
         logon::BinanceSessionAuthenticationResult,
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
             BinanceTimeInForce,
         },
-    };
-    use secrecy::SecretString;
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
     };
 
     fn logon_response(
