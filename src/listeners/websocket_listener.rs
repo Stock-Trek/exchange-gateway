@@ -101,6 +101,8 @@ where
         };
         if let Some(msg) = state.filtered_response.take() {
             Poll::Ready(Ok(msg))
+        } else if let Some(error) = state.rate_limited.take() {
+            Poll::Ready(Err(error))
         } else {
             state.waker = Some(cx.waker().clone());
             Poll::Pending
@@ -139,7 +141,7 @@ where
         self.rate_limits.apply_feedback(&feedback)?;
         let response = (self.converter)(message)?;
         if remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone())
+            handler.clone().handle(response.clone(), &feedback)
         })? {
             return Ok(());
         }
@@ -174,11 +176,20 @@ struct ResponseHandler<EGRes> {
 }
 
 impl<EGRes> ResponseHandler<EGRes> {
-    fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool> {
+    fn handle(self: Arc<Self>, response: EGRes, feedback: &RateLimitFeedback) -> EGResult<bool> {
         let is_handled = (self.filter)(&response);
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-            state.filtered_response = Some(response);
+            if feedback.has_retry_feedback() {
+                // A response carrying retry feedback (429/418 or Retry-After)
+                // is an error, not a success: the waiter resolves with the
+                // server's feedback so callers know the request was rejected.
+                state.rate_limited = Some(EGError::RateLimited {
+                    feedback: feedback.clone(),
+                });
+            } else {
+                state.filtered_response = Some(response);
+            }
             if let Some(waker) = state.waker.take() {
                 waker.wake();
             }
@@ -192,6 +203,7 @@ impl<EGRes> ResponseHandler<EGRes> {
 
 struct WaiterState<EGRes> {
     filtered_response: Option<EGRes>,
+    rate_limited: Option<EGError>,
     waker: Option<Waker>,
 }
 
@@ -202,6 +214,7 @@ where
     fn default() -> Self {
         Self {
             filtered_response: None,
+            rate_limited: None,
             waker: None,
         }
     }
@@ -297,6 +310,53 @@ mod tests {
         // ... but its rate-limit feedback must still have been applied: the
         // bucket is trimmed to 100 - 60 = 40 remaining.
         assert!(limits.weight.did_acquire(40).unwrap());
+        assert!(!limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_matching_message_with_retry_feedback_is_error() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let delegate: Arc<dyn ListenerTrait<TMessage = TestMessage>> =
+            Arc::new(RecordingListener {
+                received: received.clone(),
+            });
+        let listener = WebsocketListener::new(
+            Arc::new(Ok),
+            |message: &TestMessage| {
+                Ok(RateLimitFeedback {
+                    retry_after: Some(Duration::from_secs(30)),
+                    usage: vec![RateLimitUsage {
+                        interval_nanos: Duration::from_secs(60).as_nanos(),
+                        used: message.used,
+                        limit: None,
+                    }],
+                    ..Default::default()
+                })
+            },
+            limits.clone(),
+            delegate,
+        );
+        let waiter = listener
+            .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
+            .unwrap();
+        assert!(limits.weight.did_acquire(10).unwrap());
+        listener
+            .on_message(TestMessage { id: 7, used: 60 })
+            .await
+            .unwrap();
+        // A response with retry feedback is an error, not a success: the
+        // waiter resolves with the server's feedback.
+        let error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter should resolve")
+            .expect_err("retry feedback should be an error");
+        let feedback = match error {
+            EGError::RateLimited { feedback } => feedback,
+            other => panic!("expected RateLimited, got: {other:?}"),
+        };
+        assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
+        // The retry feedback drained the bucket until Retry-After elapses.
         assert!(!limits.weight.did_acquire(1).unwrap());
     }
 

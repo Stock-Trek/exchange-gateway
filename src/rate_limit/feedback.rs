@@ -37,3 +37,12 @@ pub struct RateLimitFeedback {
     /// elapses (or a short default when the header is absent).
     pub throttled: bool,
 }
+
+impl RateLimitFeedback {
+    /// Whether the response signals that the request was rejected and must
+    /// be retried later: the server throttled us (429/418) or asked us to
+    /// wait (`Retry-After`).
+    pub(crate) fn has_retry_feedback(&self) -> bool {
+        self.throttled || self.retry_after.is_some()
+    }
+}

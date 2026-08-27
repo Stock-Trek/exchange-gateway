@@ -2,7 +2,6 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::websocket_listener::WebsocketListener,
-    rate_limit::feedback::RateLimitFeedback,
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
@@ -52,33 +51,29 @@ where
     fn is_connected(&self) -> bool {
         self.client.is_connected()
     }
-    async fn fire_and_forget(
-        &self,
-        request: EGReq,
-        timeout: Duration,
-    ) -> EGResult<RateLimitFeedback> {
+    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
         let transport_req = self.try_convert_request(request)?;
         self.client.send_message(transport_req, timeout).await?;
         // WebSocket responses arrive asynchronously through the listener,
-        // which reports rate-limit feedback per message.
-        Ok(RateLimitFeedback::default())
+        // which applies any rate-limit feedback per message (and surfaces
+        // retry feedback as an error to matching waiters).
+        Ok(())
     }
     async fn send_and_wait_for(
         &self,
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<(EGRes, RateLimitFeedback)> {
+    ) -> EGResult<EGRes> {
         let transport_req = self.try_convert_request(request)?;
         let waiter = self
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        let response = self.wait_for_response(waiter, timeout).await?;
-        // WebSocket responses arrive asynchronously through the listener,
-        // which applies rate-limit feedback to every message (including the
-        // one this waiter matched), so nothing extra to report here.
-        Ok((response, RateLimitFeedback::default()))
+        // The listener applies rate-limit feedback to every message and
+        // resolves the waiter with [`EGError::RateLimited`] when the matched
+        // response carries retry feedback.
+        self.wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.client.disconnect().await

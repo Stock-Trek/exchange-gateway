@@ -61,7 +61,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     error::EGError,
     listeners::convert_listener::ConvertListener,
-    listeners::{listener::ListenerTrait, rate_limit_listener::RateLimitFeedbackListener},
+    listeners::listener::ListenerTrait,
     transports::transport::Transport,
     urls::{ExchangeTransportType, TradingMode},
 };
@@ -87,11 +87,7 @@ where
     let client = Arc::new(ReqwestHttpClient::new(&url));
     let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(RateLimitFeedbackListener::new(
-            http_response_feedback,
-            rate_limits.clone(),
-            Arc::new(ConvertListener::new(to_external_response, listener)),
-        ));
+        Arc::new(ConvertListener::new(to_external_response, listener));
     let http_transport = HttpTransport::new(
         client,
         Arc::new(to_http_request),
@@ -99,6 +95,8 @@ where
         response_listener,
         request_to_http_endpoint,
         http_endpoints(),
+        rate_limits.clone(),
+        http_response_feedback,
     );
     let time_sync = Arc::new(TimeSync::default());
     Ok(ConnectorImpl::new(

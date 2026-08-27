@@ -1,7 +1,6 @@
 use crate::{
     error::EGResult,
     functions::ArcPredicate,
-    rate_limit::feedback::RateLimitFeedback,
     transports::{http::HttpTransport, websocket::WebsocketTransport},
 };
 use async_trait::async_trait;
@@ -18,17 +17,25 @@ pub(crate) trait TransportTrait<EGReq, TransportReq, TransportRes, EGRes> {
     fn try_convert_response(&self, response_dto: TransportRes) -> EGResult<EGRes>;
     async fn connect(&self) -> EGResult<()>;
     fn is_connected(&self) -> bool;
-    async fn fire_and_forget(
-        &self,
-        request: EGReq,
-        timeout: Duration,
-    ) -> EGResult<RateLimitFeedback>;
+    /// Sends the request without waiting for a response.
+    ///
+    /// Responses are delivered to the transport's listener as they arrive.
+    /// A response carrying retry feedback (429/418 or a `Retry-After`) is
+    /// surfaced as [`crate::error::EGError::RateLimited`]; the server-side
+    /// feedback is applied to the local limiter before the error is returned.
+    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()>;
+    /// Sends the request and waits for a response matching `filter`.
+    ///
+    /// A response carrying retry feedback (429/418 or a `Retry-After`) is
+    /// surfaced as [`crate::error::EGError::RateLimited`] rather than combined
+    /// with the response; the server-side feedback is applied to the local
+    /// limiter before the error is returned.
     async fn send_and_wait_for(
         &self,
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<(EGRes, RateLimitFeedback)>;
+    ) -> EGResult<EGRes>;
     async fn disconnect(&self) -> EGResult<()>;
 }
 
@@ -64,11 +71,7 @@ where
             Self::Websocket(transport) => transport.is_connected(),
         }
     }
-    async fn fire_and_forget(
-        &self,
-        request: EGReq,
-        timeout: Duration,
-    ) -> EGResult<RateLimitFeedback> {
+    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
         match self {
             Self::Http(transport) => transport.fire_and_forget(request, timeout).await,
             Self::Websocket(transport) => transport.fire_and_forget(request, timeout).await,
@@ -79,7 +82,7 @@ where
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<(EGRes, RateLimitFeedback)> {
+    ) -> EGResult<EGRes> {
         match self {
             Self::Http(transport) => transport.send_and_wait_for(request, timeout, filter).await,
             Self::Websocket(transport) => {

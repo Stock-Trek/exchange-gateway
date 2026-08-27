@@ -74,18 +74,13 @@ where
             for leg in &self.authenticate_legs {
                 let auth_message = (leg.create_auth_message)();
                 let signed_auth_message = signer.sign(auth_message)?;
-                let (authentication_response, feedback) = match self
+                // The transport applies any server-side feedback carried by
+                // the response (usage realignment, or a RateLimited rejection)
+                // before returning, so nothing to apply here.
+                let authentication_response = self
                     .transport
                     .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(error) => {
-                        let _ = self.rate_limits.apply_feedback_from_error(&error);
-                        return Err(error);
-                    }
-                };
-                let _ = self.rate_limits.apply_feedback(&feedback);
+                    .await?;
                 signer = (leg.create_signer)(authentication_response)?;
             }
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
@@ -132,19 +127,15 @@ where
             .fire_and_forget(signed_request, timeout)
             .await
         {
-            Ok(feedback) => {
-                let _ = self.rate_limits.apply_feedback(&feedback);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(error) => {
-                // A server-rejected 429/418 carries throttling + usage
-                // feedback that must still be applied: the request consumed
-                // server-side weight and the response reports the true usage.
-                // Other failures never reached the server, so give the
-                // capacity back.
-                if matches!(&error, EGError::RateLimited { .. }) {
-                    let _ = self.rate_limits.apply_feedback_from_error(&error);
-                } else {
+                // A server-rejected 429/418 travels back as RateLimited
+                // carrying throttling + usage feedback, which the transport
+                // has already applied to the local limiter: the request
+                // consumed server-side weight and the response reports the
+                // true usage. Other failures never reached the server, so
+                // give the locally-reserved capacity back.
+                if !matches!(&error, EGError::RateLimited { .. }) {
                     let _ = self.rate_limits.refund(weight, order_count);
                 }
                 Err(error)
