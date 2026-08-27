@@ -1,20 +1,24 @@
-#[cfg(any(feature = "reqwest", feature = "iris"))]
-use crate::{
-    connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
-    functions::ArcTryConvertValue, listeners::listener::ListenerTrait, urls::TradingMode,
+#[cfg(feature = "iris")]
+use {
+    crate::specs::binance::websocket_connector,
+    exchange_types::binance::websocket::{
+        BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+    },
 };
-#[cfg(any(feature = "reqwest", feature = "iris"))]
-use std::sync::Arc;
 
 #[cfg(feature = "reqwest")]
-use crate::specs::binance::http_connector;
-#[cfg(feature = "iris")]
-use crate::specs::binance::websocket_connector;
-#[cfg(feature = "reqwest")]
-use exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest};
-#[cfg(feature = "iris")]
-use exchange_types::binance::websocket::{
-    BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+use {
+    crate::specs::binance::http_connector,
+    exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
+};
+
+#[cfg(any(feature = "iris", feature = "reqwest"))]
+use {
+    crate::{
+        connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
+        functions::ArcTryConvertValue, listeners::listener::ListenerTrait, urls::TradingMode,
+    },
+    std::sync::Arc,
 };
 
 #[derive(Debug, Clone)]

@@ -65,7 +65,7 @@ const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
 
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "reqwest")]
-pub fn http_connector<ExternalReq, ExternalRes>(
+pub(crate) fn http_connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
@@ -158,9 +158,7 @@ where
     ))
 }
 
-/// Builds the transport-level HTTP request from the signed exchange-level
-/// request. The query string is exactly what the gateway signed plus the
-/// signature, so the two can never diverge.
+/// Builds the transport-level HTTP request from the signed exchange-level request
 #[cfg(feature = "reqwest")]
 fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
@@ -173,8 +171,6 @@ fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
         ),
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
             let mut params = *params;
-            // `apiKey` goes in the X-MBX-APIKEY header, never in the query
-            // string or the signed payload.
             if let Some(api_key) = params.apiKey.take() {
                 headers.push(("X-MBX-APIKEY".into(), api_key));
             }
@@ -200,8 +196,6 @@ fn signed_query(query: String, signature: Option<String>) -> String {
     }
 }
 
-/// Parses the transport-level HTTP response into the exchange-level response,
-/// mapping HTTP status to success/error as Binance does.
 #[cfg(feature = "reqwest")]
 fn from_http_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     if response.status == 200 {
