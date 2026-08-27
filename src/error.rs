@@ -1,3 +1,5 @@
+use crate::rate_limit::feedback::RateLimitFeedback;
+
 pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,7 +22,14 @@ pub enum EGError {
     #[error("Unknown endpoint")]
     UnknownEndpoint,
     #[error("Rate limit exceeded")]
-    RateLimited,
+    RateLimited {
+        /// Server-side rate-limit feedback observed on the rejected response
+        /// (e.g. Binance's 429/418 with a `Retry-After` header and `X-MBX-*`
+        /// usage headers). Callers feed this back into the local limiter so
+        /// the local model stays aligned with the server. Empty when the
+        /// request was rejected by a *local* limiter.
+        feedback: RateLimitFeedback,
+    },
     #[error("Request timed out waiting for a response")]
     TimedOut,
 }

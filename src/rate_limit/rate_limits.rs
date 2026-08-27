@@ -1,5 +1,5 @@
 use crate::{
-    error::EGResult,
+    error::{EGError, EGResult},
     rate_limit::{feedback::RateLimitFeedback, rate_limiter::RateLimiter},
 };
 
@@ -38,6 +38,18 @@ impl RateLimits {
         for usage in &feedback.usage {
             self.weight.apply_usage(usage)?;
             self.orders.apply_usage(usage)?;
+        }
+        Ok(())
+    }
+    /// Applies feedback carried by a rejected request's error, if any.
+    ///
+    /// A server-rejected 429/418 travels back as [`EGError::RateLimited`]
+    /// carrying the throttling + usage feedback observed on the response, so
+    /// the local model is realigned even though the request failed. Local
+    /// rejections carry no feedback and are a no-op here.
+    pub fn apply_feedback_from_error(&self, error: &EGError) -> EGResult<()> {
+        if let EGError::RateLimited { feedback } = error {
+            self.apply_feedback(feedback)?;
         }
         Ok(())
     }
@@ -121,5 +133,47 @@ mod tests {
             .unwrap();
         assert!(limits.weight.did_acquire(1000).unwrap());
         assert!(!limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[test]
+    fn rejected_request_error_applies_server_feedback() {
+        let limits = RateLimits {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    capacity_per_interval: 6000,
+                    interval_nanos: Duration::from_secs(60).as_nanos(),
+                },
+            ]),
+            orders: RateLimiter::new(vec![]),
+        };
+        // A 429 rejection travels back as RateLimited carrying the server's
+        // feedback; applying it must drain the buckets until Retry-After.
+        limits
+            .apply_feedback_from_error(&crate::error::EGError::RateLimited {
+                feedback: RateLimitFeedback {
+                    throttled: true,
+                    retry_after: Some(Duration::from_secs(30)),
+                    usage: vec![],
+                },
+            })
+            .unwrap();
+        assert!(!limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[test]
+    fn rejected_request_error_without_feedback_is_noop() {
+        let limits = RateLimits {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    capacity_per_interval: 6000,
+                    interval_nanos: Duration::from_secs(60).as_nanos(),
+                },
+            ]),
+            orders: RateLimiter::new(vec![]),
+        };
+        limits
+            .apply_feedback_from_error(&crate::error::EGError::BadResponse)
+            .unwrap();
+        assert!(limits.weight.did_acquire(1).unwrap());
     }
 }

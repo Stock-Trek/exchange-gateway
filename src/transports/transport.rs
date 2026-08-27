@@ -28,7 +28,7 @@ pub(crate) trait TransportTrait<EGReq, TransportReq, TransportRes, EGRes> {
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<EGRes>;
+    ) -> EGResult<(EGRes, RateLimitFeedback)>;
     async fn disconnect(&self) -> EGResult<()>;
 }
 
@@ -79,7 +79,7 @@ where
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<EGRes> {
+    ) -> EGResult<(EGRes, RateLimitFeedback)> {
         match self {
             Self::Http(transport) => transport.send_and_wait_for(request, timeout, filter).await,
             Self::Websocket(transport) => {

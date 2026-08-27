@@ -3,7 +3,7 @@ use crate::{
     connector::Connector,
     error::{EGError, EGResult},
     functions::{ArcTryConvertValue, TryConvertRef},
-    rate_limit::rate_limits::RateLimits,
+    rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner,
         signer::{Signer, SignerTrait},
@@ -74,10 +74,18 @@ where
             for leg in &self.authenticate_legs {
                 let auth_message = (leg.create_auth_message)();
                 let signed_auth_message = signer.sign(auth_message)?;
-                let authentication_response = self
+                let (authentication_response, feedback) = match self
                     .transport
                     .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
-                    .await?;
+                    .await
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let _ = self.rate_limits.apply_feedback_from_error(&error);
+                        return Err(error);
+                    }
+                };
+                let _ = self.rate_limits.apply_feedback(&feedback);
                 signer = (leg.create_signer)(authentication_response)?;
             }
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
@@ -129,7 +137,16 @@ where
                 Ok(())
             }
             Err(error) => {
-                let _ = self.rate_limits.refund(weight, order_count);
+                // A server-rejected 429/418 carries throttling + usage
+                // feedback that must still be applied: the request consumed
+                // server-side weight and the response reports the true usage.
+                // Other failures never reached the server, so give the
+                // capacity back.
+                if matches!(&error, EGError::RateLimited { .. }) {
+                    let _ = self.rate_limits.apply_feedback_from_error(&error);
+                } else {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                }
                 Err(error)
             }
         }
@@ -187,13 +204,17 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     fn check_rate_limits(&self, unsigned: &EGUnsignedReq) -> EGResult<()> {
         let weight = (self.to_weight)(unsigned);
         if !self.rate_limits.weight.did_acquire(weight)? {
-            return Err(EGError::RateLimited);
+            return Err(EGError::RateLimited {
+                feedback: RateLimitFeedback::default(),
+            });
         }
         let order_count = (self.to_order_count)(unsigned);
         if !self.rate_limits.orders.did_acquire(order_count)? {
             // Roll back the weight we already acquired for this request.
             let _ = self.rate_limits.weight.refund(weight);
-            return Err(EGError::RateLimited);
+            return Err(EGError::RateLimited {
+                feedback: RateLimitFeedback::default(),
+            });
         }
         Ok(())
     }

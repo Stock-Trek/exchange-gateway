@@ -131,13 +131,11 @@ where
     let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
     let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-        Arc::new(RateLimitFeedbackListener::new(
-            websocket_response_feedback,
-            rate_limits.clone(),
-            Arc::new(ConvertListener::new(to_external_response, listener)),
-        ));
+        Arc::new(ConvertListener::new(to_external_response, listener));
     let websocket_listener = Arc::new(WebsocketListener::new(
         Arc::new(from_websocket_response),
+        websocket_response_feedback,
+        rate_limits.clone(),
         response_listener,
     ));
     let client = Arc::new(IrisWebsocketClient::<

@@ -68,13 +68,17 @@ where
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<EGRes> {
+    ) -> EGResult<(EGRes, RateLimitFeedback)> {
         let transport_req = self.try_convert_request(request)?;
         let waiter = self
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        self.wait_for_response(waiter, timeout).await
+        let response = self.wait_for_response(waiter, timeout).await?;
+        // WebSocket responses arrive asynchronously through the listener,
+        // which applies rate-limit feedback to every message (including the
+        // one this waiter matched), so nothing extra to report here.
+        Ok((response, RateLimitFeedback::default()))
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.client.disconnect().await

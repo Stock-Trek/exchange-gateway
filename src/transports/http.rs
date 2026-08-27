@@ -97,10 +97,10 @@ where
         request: EGReq,
         timeout: Duration,
         filter: ArcPredicate<EGRes>,
-    ) -> EGResult<EGRes> {
-        let (response, _) = self.to_converted_response(request, timeout).await?;
+    ) -> EGResult<(EGRes, RateLimitFeedback)> {
+        let (response, feedback) = self.to_converted_response(request, timeout).await?;
         if (filter)(&response) {
-            Ok(response)
+            Ok((response, feedback))
         } else {
             Err(EGError::BadResponse)
         }
@@ -168,5 +168,116 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("to_http_endpoint", &self.to_http_endpoint)
             .field("action_endpoints", &self.endpoints)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        error::EGError, listeners::listener::ListenerTrait, rate_limit::feedback::RateLimitUsage,
+    };
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestReq {
+        id: u64,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestRes {
+        id: u64,
+        used: u32,
+    }
+
+    /// A client that answers with a usage report, mirroring Binance's
+    /// `X-MBX-*` headers.
+    struct UsageClient;
+
+    #[async_trait]
+    impl HttpClientTrait for UsageClient {
+        type TransportReq = TestReq;
+        type TransportRes = TestRes;
+
+        async fn send_message(
+            &self,
+            _endpoint: &str,
+            message: TestReq,
+            _timeout: Duration,
+        ) -> EGResult<TestRes> {
+            Ok(TestRes {
+                id: message.id,
+                used: 42,
+            })
+        }
+
+        fn rate_limit_feedback(&self, response: &TestRes) -> RateLimitFeedback {
+            RateLimitFeedback {
+                usage: vec![RateLimitUsage {
+                    interval_nanos: Duration::from_secs(60).as_nanos(),
+                    used: response.used,
+                    limit: None,
+                }],
+                ..Default::default()
+            }
+        }
+    }
+
+    struct NoopListener;
+
+    #[async_trait]
+    impl ListenerTrait for NoopListener {
+        type TMessage = TestRes;
+
+        async fn on_message(&self, _message: TestRes) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    fn transport() -> HttpTransport<TestReq, TestReq, TestRes, TestRes> {
+        let mut endpoints = HashMap::new();
+        endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
+        HttpTransport::new(
+            Arc::new(UsageClient),
+            Arc::new(Ok),
+            Arc::new(Ok),
+            Arc::new(NoopListener),
+            |_| HttpEndpoint::ExchangeInfo,
+            endpoints,
+        )
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_reports_feedback_with_the_response() {
+        let (response, feedback) = transport()
+            .send_and_wait_for(
+                TestReq { id: 1 },
+                Duration::from_secs(5),
+                Arc::new(|response: &TestRes| response.id == 1),
+            )
+            .await
+            .expect("matching response should be returned");
+        assert_eq!(response, TestRes { id: 1, used: 42 });
+        // The usage reported by the server travels back with the response so
+        // the connector can realign the local limiter (previously discarded).
+        assert_eq!(feedback.usage.len(), 1);
+        assert_eq!(
+            feedback.usage[0].interval_nanos,
+            Duration::from_secs(60).as_nanos()
+        );
+        assert_eq!(feedback.usage[0].used, 42);
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_rejects_non_matching_response() {
+        let error = transport()
+            .send_and_wait_for(
+                TestReq { id: 1 },
+                Duration::from_secs(5),
+                Arc::new(|response: &TestRes| response.id == 99),
+            )
+            .await
+            .expect_err("non-matching response should be an error");
+        assert!(matches!(error, EGError::BadResponse));
     }
 }

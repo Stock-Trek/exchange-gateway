@@ -107,8 +107,16 @@ impl HttpClientTrait for ReqwestHttpClient {
                 headers,
                 body,
             })
-        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            Err(EGError::RateLimited)
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+            || status == reqwest::StatusCode::IM_A_TEAPOT
+        {
+            // 429/418: the server throttled (or auto-banned) this IP. The
+            // request still consumed server-side weight, and the response
+            // carries the authoritative usage + Retry-After, so that feedback
+            // travels back with the error instead of being discarded.
+            Err(EGError::RateLimited {
+                feedback: rate_limit_feedback_from_status_and_headers(status.as_u16(), &headers),
+            })
         } else {
             Err(EGError::HttpError {
                 status: status.as_u16(),
@@ -118,44 +126,52 @@ impl HttpClientTrait for ReqwestHttpClient {
     }
 
     fn rate_limit_feedback(&self, response: &Self::TransportRes) -> RateLimitFeedback {
-        // Binance's REST API signals throttling via 429 (too many requests) /
-        // 418 (IP auto-banned) with an optional Retry-After header, and reports
-        // actual usage on every response via X-MBX-* headers. Feeding these
-        // into the local limiter keeps it aligned with the server.
-        let retry_after = response
-            .headers
-            .iter()
-            .find(|(name, _)| name == "retry-after")
-            .and_then(|(_, value)| value.trim().parse::<u64>().ok())
-            .map(Duration::from_secs);
-        let mut feedback = RateLimitFeedback {
-            retry_after,
-            throttled: matches!(response.status, 429 | 418),
-            ..Default::default()
-        };
-        if let Some(used) = Self::parse_header(&response.headers, "x-mbx-used-weight-1m") {
-            feedback.usage.push(RateLimitUsage {
-                interval_nanos: Duration::from_secs(60).as_nanos(),
-                used,
-                limit: None,
-            });
-        }
-        if let Some(used) = Self::parse_header(&response.headers, "x-mbx-order-count-10s") {
-            feedback.usage.push(RateLimitUsage {
-                interval_nanos: Duration::from_secs(10).as_nanos(),
-                used,
-                limit: None,
-            });
-        }
-        if let Some(used) = Self::parse_header(&response.headers, "x-mbx-order-count-1d") {
-            feedback.usage.push(RateLimitUsage {
-                interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                used,
-                limit: None,
-            });
-        }
-        feedback
+        rate_limit_feedback_from_status_and_headers(response.status, &response.headers)
     }
+}
+
+/// Extracts Binance's rate-limit feedback from a response status and headers.
+///
+/// Binance's REST API signals throttling via 429 (too many requests) / 418
+/// (IP auto-banned) with an optional `Retry-After` header, and reports actual
+/// usage on every response via `X-MBX-*` headers. Feeding these into the local
+/// limiter keeps it aligned with the server.
+fn rate_limit_feedback_from_status_and_headers(
+    status: u16,
+    headers: &[(String, String)],
+) -> RateLimitFeedback {
+    let retry_after = headers
+        .iter()
+        .find(|(name, _)| name == "retry-after")
+        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
+    let mut feedback = RateLimitFeedback {
+        retry_after,
+        throttled: matches!(status, 429 | 418),
+        ..Default::default()
+    };
+    if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-used-weight-1m") {
+        feedback.usage.push(RateLimitUsage {
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+            used,
+            limit: None,
+        });
+    }
+    if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-order-count-10s") {
+        feedback.usage.push(RateLimitUsage {
+            interval_nanos: Duration::from_secs(10).as_nanos(),
+            used,
+            limit: None,
+        });
+    }
+    if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-order-count-1d") {
+        feedback.usage.push(RateLimitUsage {
+            interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+            used,
+            limit: None,
+        });
+    }
+    feedback
 }
 
 impl std::fmt::Debug for ReqwestHttpClient {
@@ -180,7 +196,8 @@ mod tests {
     #[tokio::test]
     async fn send_message_round_trips_through_reqwest() {
         let request_log = Arc::new(Mutex::new(String::new()));
-        let base_url = spawn_mock_server_with_response(request_log.clone(), 200, "", b"");
+        let base_url =
+            spawn_mock_server_with_response(request_log.clone(), 200, "", br#"{"ok":true}"#);
         let client = ReqwestHttpClient::new(&base_url);
         let response = client
             .send_message(
@@ -287,8 +304,13 @@ mod tests {
                 503 => "Service Unavailable",
                 _ => "Error",
             };
+            let headers = if headers.is_empty() {
+                String::new()
+            } else {
+                format!("{headers}\r\n")
+            };
             let response = format!(
-                "HTTP/1.1 {status} {reason}\r\n{headers}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 {status} {reason}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -321,8 +343,11 @@ mod tests {
                 Duration::from_secs(5),
             )
             .await
-            .expect("request should succeed");
-        let feedback = client.rate_limit_feedback(&error);
+            .expect_err("429 should be returned as an error");
+        let feedback = match error {
+            EGError::RateLimited { feedback } => feedback,
+            other => panic!("expected RateLimited with feedback, got: {other:?}"),
+        };
         assert!(feedback.throttled);
         assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
         assert_eq!(feedback.usage.len(), 2);
@@ -337,5 +362,44 @@ mod tests {
             Duration::from_secs(10).as_nanos()
         );
         assert_eq!(feedback.usage[1].used, 3);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_feedback_parses_usage_on_success() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url = spawn_mock_server_with_response(
+            request_log.clone(),
+            200,
+            "X-MBX-USED-WEIGHT-1M: 1200\r\nX-MBX-ORDER-COUNT-1D: 12",
+            br#"{"ok":true}"#,
+        );
+        let client = ReqwestHttpClient::new(&base_url);
+        let response = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("200 should succeed");
+        let feedback = client.rate_limit_feedback(&response);
+        assert!(!feedback.throttled);
+        assert_eq!(feedback.retry_after, None);
+        assert_eq!(feedback.usage.len(), 2);
+        assert_eq!(
+            feedback.usage[0].interval_nanos,
+            Duration::from_secs(60).as_nanos()
+        );
+        assert_eq!(feedback.usage[0].used, 1200);
+        assert_eq!(
+            feedback.usage[1].interval_nanos,
+            Duration::from_secs(24 * 60 * 60).as_nanos()
+        );
+        assert_eq!(feedback.usage[1].used, 12);
     }
 }
