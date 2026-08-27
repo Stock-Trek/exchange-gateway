@@ -3,6 +3,7 @@
 // so only lint it once every transport is compiled in.
 #![cfg_attr(not(all(feature = "reqwest", feature = "iris")), allow(dead_code))]
 
+pub mod auth_gate;
 pub mod authenticate_leg;
 pub mod connect;
 pub mod connector;

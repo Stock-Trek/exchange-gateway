@@ -1,4 +1,5 @@
 use crate::{
+    auth_gate::AuthGate,
     error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertRef, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
@@ -22,6 +23,7 @@ pub(crate) struct WebsocketListener<TransportRes, EGRes> {
     delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
     next_handler_id: Arc<AtomicU64>,
+    auth_gate: Arc<AuthGate>,
 }
 
 impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EGRes> {
@@ -33,6 +35,7 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
             .field("delegate", &"<Listener>")
             .field("handlers", &"<Vec<ResponseHandler>>")
             .field("next_handler_id", &self.next_handler_id)
+            .field("auth_gate", &self.auth_gate)
             .finish()
     }
 }
@@ -46,6 +49,7 @@ where
         feedback: impl Fn(&TransportRes) -> EGResult<RateLimitFeedback> + Send + Sync + 'static,
         rate_limits: RateLimits,
         delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+        auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
             converter,
@@ -54,6 +58,7 @@ where
             delegate,
             handlers: Arc::new(Mutex::new(Vec::new())),
             next_handler_id: Arc::new(AtomicU64::new(0)),
+            auth_gate,
         }
     }
     pub fn waiter_for_filtered_response(
@@ -76,6 +81,37 @@ where
             handlers: self.handlers.clone(),
             handler_id,
         })
+    }
+}
+
+#[async_trait]
+impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
+where
+    EGRes: Clone + Send,
+    TransportRes: Send,
+{
+    type TMessage = TransportRes;
+
+    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
+        // Every incoming message carries the server's view of the rate-limit
+        // buckets (Binance's WebSocket API includes a `rateLimits` array on
+        // each response), so feedback is applied before handler dispatch.
+        // This covers both fire-and-forget messages (forwarded below) and
+        // send-and-wait responses (matched by a handler, which would
+        // otherwise short-circuit before the feedback listener).
+        let feedback = (self.feedback)(&message)?;
+        self.rate_limits.apply_feedback(&feedback)?;
+        let response = (self.converter)(message)?;
+        if remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone(), &feedback)
+        })? {
+            return Ok(());
+        }
+        self.delegate.on_message(response).await
+    }
+    async fn on_connected(&self) -> EGResult<()> {
+        self.auth_gate.on_connection_established()?;
+        self.delegate.on_connected().await
     }
 }
 
@@ -119,33 +155,6 @@ where
             &self.handlers,
             |handler| Ok(handler.id() == self.handler_id),
         );
-    }
-}
-
-#[async_trait]
-impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
-where
-    EGRes: Clone + Send,
-    TransportRes: Send,
-{
-    type TMessage = TransportRes;
-
-    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        // Every incoming message carries the server's view of the rate-limit
-        // buckets (Binance's WebSocket API includes a `rateLimits` array on
-        // each response), so feedback is applied before handler dispatch.
-        // This covers both fire-and-forget messages (forwarded below) and
-        // send-and-wait responses (matched by a handler, which would
-        // otherwise short-circuit before the feedback listener).
-        let feedback = (self.feedback)(&message)?;
-        self.rate_limits.apply_feedback(&feedback)?;
-        let response = (self.converter)(message)?;
-        if remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone(), &feedback)
-        })? {
-            return Ok(());
-        }
-        self.delegate.on_message(response).await
     }
 }
 
@@ -287,7 +296,9 @@ mod tests {
             Arc::new(RecordingListener {
                 received: received.clone(),
             });
-        let listener = WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate);
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener =
+            WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
         // A waiter (send-and-wait) is registered and the message matches its
         // filter, so the response is returned to the waiter rather than
         // forwarded to the delegate.
@@ -321,6 +332,7 @@ mod tests {
             Arc::new(RecordingListener {
                 received: received.clone(),
             });
+        let auth_gate = Arc::new(AuthGate::default());
         let listener = WebsocketListener::new(
             Arc::new(Ok),
             |message: &TestMessage| {
@@ -336,6 +348,7 @@ mod tests {
             },
             limits.clone(),
             delegate,
+            auth_gate,
         );
         let waiter = listener
             .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
@@ -368,7 +381,9 @@ mod tests {
             Arc::new(RecordingListener {
                 received: received.clone(),
             });
-        let listener = WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate);
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener =
+            WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
         assert!(limits.weight.did_acquire(10).unwrap());
         listener
             .on_message(TestMessage { id: 1, used: 60 })

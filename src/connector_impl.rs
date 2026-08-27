@@ -1,4 +1,5 @@
 use crate::{
+    auth_gate::{AuthGate, AuthGateAcquisition},
     authenticate_leg::AuthenticateLeg,
     connector::Connector,
     error::{EGError, EGResult},
@@ -37,6 +38,7 @@ pub struct ConnectorImpl<
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
+    auth_gate: Arc<AuthGate>,
 }
 
 #[async_trait]
@@ -69,31 +71,21 @@ where
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
-        if let Some(credentials) = &self.credentials {
-            let mut signer = (self.create_signer)(credentials)?;
-            for leg in &self.authenticate_legs {
-                let auth_message = (leg.create_auth_message)();
-                let signed_auth_message = signer.sign(auth_message)?;
-                // The transport applies any server-side feedback carried by
-                // the response (usage realignment, or a RateLimited rejection)
-                // before returning, so nothing to apply here.
-                let authentication_response = self
-                    .transport
-                    .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
-                    .await?;
-                signer = (leg.create_signer)(authentication_response)?;
-            }
-            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
-            (*guard) = Some(signer);
-        }
-        Ok(())
+        self.authenticate().await
     }
     fn is_connected(&self) -> EGResult<bool> {
         Ok(self.transport.is_connected())
     }
     fn is_authenticated(&self) -> EGResult<bool> {
-        let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
-        Ok((*guard).is_some())
+        if !self.transport.is_connected() {
+            return Ok(false);
+        }
+        let has_signer = self
+            .signer
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .is_some();
+        Ok(has_signer && !self.session_is_stale()?)
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
@@ -103,6 +95,9 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
+        if signed && self.session_is_stale()? {
+            self.authenticate().await?;
+        }
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             let unsigned = if signed {
@@ -153,6 +148,9 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         TransportRes,
         EGRes,
     >
+where
+    EGReq: Send,
+    EGRes: Send + Sync + 'static,
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -166,6 +164,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+        auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
             rate_limits,
@@ -179,7 +178,95 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             create_signer,
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
+            auth_gate,
         }
+    }
+    async fn authenticate(&self) -> EGResult<()> {
+        let Some(credentials) = &self.credentials else {
+            return Ok(());
+        };
+        loop {
+            // A concurrent caller may have re-authenticated while we waited.
+            if !self.session_is_stale()? {
+                return Ok(());
+            }
+            let on_complete = match self.auth_gate.acquire()? {
+                AuthGateAcquisition::Waiting(on_complete) => {
+                    // Another authentication is already in flight: wait for it
+                    // to finish instead of starting a second one, then re-check
+                    // whether the session is still stale
+                    on_complete.wait().await?;
+                    continue;
+                }
+                AuthGateAcquisition::Authenticator(on_complete) => on_complete,
+            };
+            let result = self.run_authentication(credentials).await;
+            // Clear the gate before waking waiters so a waiter that finds the
+            // session stale can immediately become the next authenticator.
+            self.auth_gate.release()?;
+            on_complete.notify();
+            match result {
+                Err(error) => return Err(error),
+                Ok(()) => {
+                    // The connection reconnected while we were authenticating:
+                    // the session was established on a connection that is no
+                    // longer current, so try again against the new one.
+                    if self.session_is_stale()? {
+                        continue;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    /// Sends each authentication leg and saves the resulting signer
+    async fn run_authentication(&self, credentials: &TCredentials) -> EGResult<()> {
+        let mut signer = (self.create_signer)(credentials)?;
+        for leg in &self.authenticate_legs {
+            let (signed_auth_message, weight, order_count) = {
+                let auth_message = (leg.create_auth_message)();
+                self.check_rate_limits(&auth_message)?;
+                let weight = (self.to_weight)(&auth_message);
+                let order_count = (self.to_order_count)(&auth_message);
+                let signed_auth_message = match signer.sign(auth_message) {
+                    Ok(signed_auth_message) => signed_auth_message,
+                    Err(error) => {
+                        let _ = self.rate_limits.refund(weight, order_count);
+                        return Err(error);
+                    }
+                };
+                (signed_auth_message, weight, order_count)
+            };
+            let authentication_response = match self
+                .transport
+                .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
+                .await
+            {
+                Ok(authentication_response) => authentication_response,
+                Err(error) => {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                    return Err(error);
+                }
+            };
+            signer = (leg.create_signer)(authentication_response)?;
+        }
+        {
+            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
+            *guard = Some(signer);
+        }
+        Ok(())
+    }
+    /// The session is stale while no signer is installed yet and, for
+    /// session-based connectors, whenever the installed signer belongs to an
+    /// older connection epoch.
+    fn session_is_stale(&self) -> EGResult<bool> {
+        let has_signer = self
+            .signer
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .is_some();
+        Ok(!has_signer || (!self.authenticate_legs.is_empty() && self.auth_gate.is_stale()?))
     }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
@@ -236,6 +323,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
             .field("signer", &"<redacted>")
+            .field("auth_gate", &self.auth_gate)
             .finish()
     }
 }
