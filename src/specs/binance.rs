@@ -21,6 +21,7 @@ use crate::{
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::{
+    exchange_info::BinanceExchangeInfoParams,
     http::{
         BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
         BinanceHttpUnsignedRequest,
@@ -181,7 +182,10 @@ fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
     let mut headers = Vec::new();
     let (method, query) = match params {
-        BinanceHttpUnsignedRequest::ExchangeInfo(_) => (Method::GET, None),
+        BinanceHttpUnsignedRequest::ExchangeInfo(params) => (
+            Method::GET,
+            Some(exchange_info_query(&params)),
+        ),
         BinanceHttpUnsignedRequest::AssetLimits(params) => (
             Method::GET,
             Some(signed_query(params.query_params(true), signature)),
@@ -211,6 +215,28 @@ fn signed_query(query: String, signature: Option<String>) -> String {
         Some(signature) => format!("{query}&signature={signature}"),
         None => query,
     }
+}
+
+/// Builds the query string for the unsigned `GET /api/v3/exchangeInfo`
+/// endpoint. The caller's `permissions`/`symbolStatus` filters are forwarded
+/// so they reach Binance (an empty `permissions` list is omitted, matching the
+/// REST API's "all symbols" default).
+#[cfg(feature = "reqwest")]
+fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
+    let mut pairs = Vec::new();
+    if !params.permissions.is_empty() {
+        pairs.push(format!(
+            "permissions={}",
+            params
+                .permissions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    pairs.push(format!("symbolStatus={}", params.symbolStatus));
+    pairs.join("&")
 }
 
 #[cfg(feature = "reqwest")]
@@ -761,6 +787,38 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_query_is_forwarded() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
+        };
+        let http_request = to_http_request(request).unwrap();
+        assert_eq!(http_request.method, Method::GET);
+        assert_eq!(
+            http_request.query.as_deref(),
+            Some("permissions=SPOT&symbolStatus=TRADING")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_omits_empty_permissions() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
+        };
+        let http_request = to_http_request(request).unwrap();
+        assert_eq!(http_request.query.as_deref(), Some("symbolStatus=TRADING"));
+    }
+
+    #[test]
     fn request_weights_match_binance_docs() {
         let exchange_info = BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
             permissions: vec![BinanceExchangeInfoPermission::SPOT],
@@ -1066,6 +1124,8 @@ mod tests {
             Arc::new(ConvertListener::new(to_external_response, listener));
         let websocket_listener = Arc::new(WebsocketListener::new(
             Arc::new(from_websocket_response),
+            websocket_response_feedback,
+            rate_limits(),
             response_listener,
             auth_gate.clone(),
         ));
@@ -1182,6 +1242,8 @@ mod tests {
             response_listener,
             request_to_http_endpoint,
             http_endpoints(),
+            rate_limits(),
+            http_response_feedback,
         );
         let time_sync = Arc::new(TimeSync::default());
         Ok(ConnectorImpl::new(
@@ -1305,7 +1367,7 @@ mod tests {
         let result = connector
             .send(exchange_info_request(), false, Duration::from_secs(5))
             .await;
-        assert!(matches!(result, Err(EGError::RateLimited)));
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
     }
 
     #[tokio::test]
