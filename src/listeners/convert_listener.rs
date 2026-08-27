@@ -32,6 +32,10 @@ where
         let converted = (self.converter)(message)?;
         self.delegate.on_message(converted).await
     }
+
+    async fn on_connected(&self) -> EGResult<()> {
+        self.delegate.on_connected().await
+    }
 }
 
 impl<TFrom, TTo> std::fmt::Display for ConvertListener<TFrom, TTo> {
