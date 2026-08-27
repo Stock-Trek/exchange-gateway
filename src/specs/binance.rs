@@ -768,6 +768,7 @@ mod tests {
     /// successful response, and every outgoing request is recorded. When a
     /// [`LogonGate`] is configured, logon responses can be held so an
     /// authentication can be observed mid-flight.
+    #[cfg(feature = "iris")]
     #[derive(Clone)]
     struct MockWebsocketClient {
         listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
@@ -778,12 +779,14 @@ mod tests {
 
     /// Holds logon responses (when `block` is set) until `release` notifies,
     /// letting a test keep an authentication in flight.
+    #[cfg(feature = "iris")]
     #[derive(Clone)]
     struct LogonGate {
         block: Arc<AtomicBool>,
         release: Arc<tokio::sync::Notify>,
     }
 
+    #[cfg(feature = "iris")]
     #[async_trait]
     impl WebsocketClientTrait for MockWebsocketClient {
         type TransportReq = BinanceWebsocketRequest;
@@ -816,18 +819,17 @@ mod tests {
             }
             Ok(())
         }
-        async fn on_message(&self, message: Self::TransportRes) -> EGResult<()> {
-            self.listener.on_message(message).await
-        }
         async fn disconnect(&self) -> EGResult<()> {
             self.connected.store(false, Ordering::SeqCst);
             Ok(())
         }
     }
 
+    #[cfg(feature = "iris")]
     struct IgnoreListener;
 
     #[async_trait]
+    #[cfg(feature = "iris")]
     impl ListenerTrait for IgnoreListener {
         type TMessage = BinanceWebsocketResponse;
 
@@ -836,9 +838,11 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     struct IgnoreHttpListener;
 
     #[async_trait]
+    #[cfg(feature = "reqwest")]
     impl ListenerTrait for IgnoreHttpListener {
         type TMessage = BinanceHttpResponse;
 
@@ -850,6 +854,7 @@ mod tests {
     /// Builds a session-based websocket connector backed by the scripted mock
     /// client, handing the caller a handle to the client so reconnects can be
     /// simulated.
+    #[cfg(feature = "iris")]
     fn mock_session_connector(
         client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
         logon_gate: Option<LogonGate>,
@@ -864,38 +869,55 @@ mod tests {
             BinanceWebsocketUnsignedRequest,
             BinanceWebsocketUnsignedRequest,
         > = Arc::new(Ok);
-        let to_transport_request: ArcTryConvertValue<
-            BinanceWebsocketRequest,
-            BinanceWebsocketRequest,
-        > = Arc::new(Ok);
-        let to_binance_response: ArcTryConvertValue<
-            BinanceWebsocketResponse,
-            BinanceWebsocketResponse,
-        > = Arc::new(Ok);
         let to_external_response: ArcTryConvertValue<
             BinanceWebsocketResponse,
             BinanceWebsocketResponse,
         > = Arc::new(Ok);
-        websocket_connector(
-            TradingMode::Paper,
-            move |_url, listener| {
-                let client = MockWebsocketClient {
-                    listener,
-                    connected: Arc::new(AtomicBool::new(false)),
-                    sent: Arc::new(Mutex::new(Vec::new())),
-                    logon_gate: logon_gate.clone(),
-                };
-                let _ = client_handle.send(client.clone());
-                client
-            },
+        let auth_gate = Arc::new(AuthGate::default());
+        let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+            Arc::new(ConvertListener::new(to_external_response, listener));
+        let websocket_listener = Arc::new(WebsocketListener::new(
+            Arc::new(from_websocket_response),
+            response_listener,
+            auth_gate.clone(),
+        ));
+        let mock_client = MockWebsocketClient {
+            listener: websocket_listener.clone(),
+            connected: Arc::new(AtomicBool::new(false)),
+            sent: Arc::new(Mutex::new(Vec::new())),
+            logon_gate,
+        };
+        let _ = client_handle.send(mock_client.clone());
+        let client: Arc<
+            dyn WebsocketClientTrait<
+                TransportReq = BinanceWebsocketRequest,
+                TransportRes = BinanceWebsocketResponse,
+            >,
+        > = Arc::new(mock_client);
+        let websocket_transport = WebsocketTransport::new(
+            client,
+            Arc::new(to_websocket_request),
+            Arc::new(from_websocket_response),
+            websocket_listener,
+        );
+        let time_sync = Arc::new(TimeSync::default());
+        let authenticate_legs = vec![authenticate_websocket_leg(
+            credentials.api_key.clone(),
+            time_sync.clone(),
+        )];
+        Ok(ConnectorImpl::new(
+            rate_limits(),
+            websocket_request_weight,
+            websocket_order_count,
             to_unsigned_request,
-            to_transport_request,
-            to_binance_response,
-            to_external_response,
-            listener,
+            sync_websocket_timestamp(time_sync),
+            Transport::Websocket(websocket_transport),
+            null_websocket_signer(),
             Some(credentials),
-            true,
-        )
+            create_websocket_signer_from_credentials,
+            authenticate_legs,
+            auth_gate,
+        ))
     }
 
     fn order_request() -> BinanceWebsocketUnsignedRequest {
@@ -910,11 +932,13 @@ mod tests {
 
     /// A scripted HTTP client: records every outgoing request and answers
     /// with a bare success so signed sends can complete without a network.
+    #[cfg(feature = "reqwest")]
     #[derive(Clone)]
     struct MockHttpClient {
         sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
     }
 
+    #[cfg(feature = "reqwest")]
     #[async_trait]
     impl HttpClientTrait for MockHttpClient {
         type TransportReq = BinanceHttpRequest;
@@ -935,6 +959,7 @@ mod tests {
 
     /// Builds an HTTP connector backed by the scripted mock client, handing
     /// the caller a handle to the client so sent requests can be inspected.
+    #[cfg(feature = "reqwest")]
     fn mock_http_connector(
         client_handle: std::sync::mpsc::Sender<MockHttpClient>,
     ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
@@ -948,28 +973,42 @@ mod tests {
             BinanceHttpUnsignedRequest,
             BinanceHttpUnsignedRequest,
         > = Arc::new(Ok);
-        let to_transport_request: ArcTryConvertValue<BinanceHttpRequest, BinanceHttpRequest> =
-            Arc::new(Ok);
-        let to_binance_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
-            Arc::new(Ok);
         let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
             Arc::new(Ok);
-        http_connector(
-            TradingMode::Paper,
-            move |_url| {
-                let client = MockHttpClient {
-                    sent: Arc::new(Mutex::new(Vec::new())),
-                };
-                let _ = client_handle.send(client.clone());
-                client
-            },
+        let mock_client = MockHttpClient {
+            sent: Arc::new(Mutex::new(Vec::new())),
+        };
+        let _ = client_handle.send(mock_client.clone());
+        let client: Arc<
+            dyn HttpClientTrait<
+                TransportReq = BinanceHttpRequest,
+                TransportRes = BinanceHttpResponse,
+            >,
+        > = Arc::new(mock_client);
+        let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(ConvertListener::new(to_external_response, listener));
+        let http_transport = HttpTransport::new(
+            client,
+            Arc::new(Ok),
+            Arc::new(Ok),
+            response_listener,
+            request_to_http_endpoint,
+            http_endpoints(),
+        );
+        let time_sync = Arc::new(TimeSync::default());
+        Ok(ConnectorImpl::new(
+            rate_limits(),
+            http_request_weight,
+            http_order_count,
             to_unsigned_request,
-            to_transport_request,
-            to_binance_response,
-            to_external_response,
-            listener,
+            sync_http_timestamp(time_sync),
+            Transport::Http(http_transport),
+            null_http_signer(),
             Some(credentials),
-        )
+            create_http_signer_from_credentials,
+            vec![],
+            Arc::new(AuthGate::default()),
+        ))
     }
 
     fn asset_limits_request() -> BinanceHttpUnsignedRequest {
@@ -981,6 +1020,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "reqwest")]
     async fn http_connector_installs_signer_on_connect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
         let connector = mock_http_connector(client_tx).unwrap();
@@ -1020,6 +1060,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "iris")]
     async fn reauthenticates_after_reconnect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
         let connector = mock_session_connector(client_tx, None).unwrap();
@@ -1057,6 +1098,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "iris")]
     async fn logon_weight_counts_against_weight_rate_limit() {
         let (client_tx, _client_rx) = std::sync::mpsc::channel();
         let connector = mock_session_connector(client_tx, None).unwrap();
@@ -1079,6 +1121,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "iris")]
     async fn concurrent_sends_wait_for_in_flight_authentication() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
         let logon_gate = LogonGate {

@@ -11,6 +11,10 @@ use std::{
 /// owns the connection epoch: the transport reports (re)connections to the
 /// gate, which bumps the epoch, and the session is stale whenever the epoch it
 /// was authenticated against no longer matches the current one.
+///
+/// The epoch itself is private to the gate: callers never see its value, only
+/// the opaque [`AuthSession`] handed out by [`acquire`](AuthGate::acquire) and
+/// consumed by [`complete_authentication`](AuthGate::complete_authentication).
 #[derive(Default)]
 pub struct AuthGate {
     state: Mutex<AuthGateState>,
@@ -29,10 +33,23 @@ pub struct AuthGateState {
 }
 
 pub enum AuthGateAcquisition {
-    /// This caller is now the only task running authentication.
-    Authenticator(AuthCompleted),
+    /// This caller is now the only task running authentication; `session` is
+    /// the opaque handle to the connection epoch the authentication must be
+    /// recorded against on success.
+    Authenticator {
+        completed: AuthCompleted,
+        session: AuthSession,
+    },
     /// Another caller is authenticating; wait for its completion signal.
     Waiting(AuthCompleted),
+}
+
+/// An opaque handle to the connection epoch an authentication runs against,
+/// captured by [`AuthGate::acquire`] and consumed by
+/// [`AuthGate::complete_authentication`]. Only the gate can observe or move
+/// the epoch: callers pass the handle through without ever seeing its value.
+pub struct AuthSession {
+    epoch: u64,
 }
 
 /// A one-shot signal that an in-flight authentication has finished, shared
@@ -47,16 +64,20 @@ struct AuthCompletedState {
 }
 
 impl AuthGate {
-    /// Atomically marks the gate as busy, returning the completion signal the
-    /// caller must notify when it finishes, or the in-flight signal to wait on
-    /// if another authentication is already running.
+    /// Atomically marks the gate as busy and snapshots the connection epoch
+    /// the authentication must run against, returning the completion signal
+    /// the caller must notify when it finishes (or the in-flight signal to
+    /// wait on if another authentication is already running).
     pub fn acquire(&self) -> EGResult<AuthGateAcquisition> {
         let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
         match &state.in_flight {
             None => {
                 let completed = AuthCompleted::default();
                 state.in_flight = Some(completed.clone());
-                Ok(AuthGateAcquisition::Authenticator(completed))
+                let session = AuthSession {
+                    epoch: state.connection_epoch,
+                };
+                Ok(AuthGateAcquisition::Authenticator { completed, session })
             }
             Some(completed) => Ok(AuthGateAcquisition::Waiting(completed.clone())),
         }
@@ -86,15 +107,6 @@ impl AuthGate {
         Ok(())
     }
 
-    /// The epoch of the current connection.
-    pub fn connection_epoch(&self) -> EGResult<u64> {
-        Ok(self
-            .state
-            .lock()
-            .map_err(|_| EGError::MutexPoisoned)?
-            .connection_epoch)
-    }
-
     /// Whether the authenticated session belongs to an older connection epoch
     /// than the current one.
     pub fn is_stale(&self) -> EGResult<bool> {
@@ -102,12 +114,14 @@ impl AuthGate {
         Ok(state.connection_epoch != state.authenticated_epoch)
     }
 
-    /// Records the connection epoch the just-completed authentication ran on.
-    pub fn set_authenticated_epoch(&self, epoch: u64) -> EGResult<()> {
+    /// Records that the authentication represented by `session` completed
+    /// successfully: the authenticated session now belongs to the connection
+    /// epoch the authentication began against.
+    pub fn complete_authentication(&self, session: AuthSession) -> EGResult<()> {
         self.state
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
-            .authenticated_epoch = epoch;
+            .authenticated_epoch = session.epoch;
         Ok(())
     }
 }
