@@ -182,10 +182,9 @@ fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
     let mut headers = Vec::new();
     let (method, query) = match params {
-        BinanceHttpUnsignedRequest::ExchangeInfo(params) => (
-            Method::GET,
-            Some(exchange_info_query(&params)),
-        ),
+        BinanceHttpUnsignedRequest::ExchangeInfo(params) => {
+            (Method::GET, Some(exchange_info_query(&params)))
+        }
         BinanceHttpUnsignedRequest::AssetLimits(params) => (
             Method::GET,
             Some(signed_query(params.query_params(true), signature)),
