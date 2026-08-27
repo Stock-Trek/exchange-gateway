@@ -1,83 +1,79 @@
-use crate::{
-    connector::Connector,
-    credentials::api_key_credential::ApiKeyCredentials,
-    error::EGResult,
-    functions::ArcTryConvertValue,
-    listeners::listener::ListenerTrait,
-    specs::binance::{http_connector, websocket_connector},
-    transports::{http::HttpClientTrait, websocket::WebsocketClientTrait},
-    urls::TradingMode,
+#[cfg(feature = "iris")]
+use {
+    crate::specs::binance::websocket_connector,
+    exchange_types::binance::websocket::{
+        BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+    },
 };
-use exchange_types::binance::http::{
-    BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest,
+
+#[cfg(feature = "reqwest")]
+use {
+    crate::specs::binance::http_connector,
+    exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
 };
-use exchange_types::binance::websocket::{
-    BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+
+#[cfg(any(feature = "iris", feature = "reqwest"))]
+use {
+    crate::{
+        connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
+        functions::ArcTryConvertValue, listeners::listener::ListenerTrait, urls::TradingMode,
+    },
+    std::sync::Arc,
 };
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Connect;
 
 impl Connect {
-    #[allow(clippy::too_many_arguments)]
-    pub fn binance_http<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
+    /// Builds a connector backed by the built-in [`reqwest`] HTTP transport.
+    ///
+    /// The transport is private to the crate: the gateway signs the request and
+    /// builds the transport-level HTTP request internally, so the signed query
+    /// string and the sent request can never diverge.
+    #[cfg(feature = "reqwest")]
+    pub fn binance_http<ExternalReq, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        create_client: impl Fn(&str) -> TClient,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-        to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
-        to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
         to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
-        TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
         ExternalReq: Send,
-        HttpReq: Send,
-        HttpRes: Send + 'static,
         ExternalRes: Clone + Send + Sync + 'static,
     {
         http_connector(
             trading_mode,
-            create_client,
             to_unsigned_request,
-            to_transport_request,
-            to_binance_response,
             to_external_response,
             listener,
             credentials,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn binance_websocket<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
+    /// Builds a connector backed by the built-in [`iris`] websocket transport.
+    ///
+    /// The transport is private to the crate: the gateway signs the request and
+    /// serializes the exchange-level request internally, so the signed payload
+    /// and the sent message can never diverge.
+    #[cfg(feature = "iris")]
+    pub fn binance_websocket<ExternalReq, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-        to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
-        to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
         to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
-        TClient: WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes>
-            + 'static,
         ExternalReq: Send + Sync,
-        WebsocketReq: Send,
-        WebsocketRes: Send + 'static,
         ExternalRes: Clone + Send + Sync + 'static,
     {
         websocket_connector(
             trading_mode,
-            create_client,
             to_unsigned_request,
-            to_transport_request,
-            to_binance_response,
             to_external_response,
             listener,
             credentials,
