@@ -4,23 +4,23 @@
 //! Run with:
 //!
 //! ```sh
-//! cargo run --example binance_http --features reqwest,serde
+//! cargo run --example binance_http --features reqwest
 //! ```
 //!
 //! The example needs no credentials because `exchangeInfo` is a public
 //! (MARKET_DATA) endpoint. Signed requests would additionally require
 //! [`ApiKeyCredentials`]
 
-#[cfg(not(all(feature = "reqwest", feature = "serde")))]
+#[cfg(not(feature = "reqwest"))]
 fn main() {}
 
-#[cfg(all(feature = "reqwest", feature = "serde"))]
+#[cfg(feature = "reqwest")]
 #[tokio::main]
 async fn main() -> exchange_gateway::error::EGResult<()> {
     binance::main().await
 }
 
-#[cfg(all(feature = "reqwest", feature = "serde"))]
+#[cfg(feature = "reqwest")]
 mod binance {
     use exchange_gateway::prelude::*;
     use exchange_gateway::urls::TradingMode;
@@ -29,10 +29,7 @@ mod binance {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
             BinanceExchangeInfoSymbolStatus,
         },
-        http::{
-            BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
-            BinanceHttpUnsignedRequest,
-        },
+        http::{BinanceHttpResponse, BinanceHttpResponseResult, BinanceHttpUnsignedRequest},
     };
     use std::{sync::Arc, time::Duration};
 
@@ -87,35 +84,6 @@ mod binance {
         }
     }
 
-    /// Converts the gateway's typed request into a transport-level request.
-    ///
-    /// The gateway only validates that the endpoint is known; the transport
-    /// request itself is entirely yours to build. For signed requests the query
-    /// string must exactly match what the gateway signed.
-    fn to_transport_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
-        let (_endpoint, query) = match request.params {
-            BinanceHttpUnsignedRequest::ExchangeInfo(_) => ("exchangeInfo", None),
-            _ => return Err(EGError::UnknownEndpoint),
-        };
-        Ok(HttpRequest {
-            method: reqwest::Method::GET,
-            query: query.map(str::to_string),
-            headers: vec![],
-            body: None,
-        })
-    }
-
-    /// Converts a transport-level response into the exchange-types response.
-    ///
-    /// The transport rejects non-2xx HTTP statuses (4xx/429/5xx are returned
-    /// as [`EGError`]s), so only successful responses reach this converter.
-    fn to_binance_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
-        Ok(BinanceHttpResponse::Result(
-            serde_json::from_slice(&response.body)
-                .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?,
-        ))
-    }
-
     fn to_external_response(response: BinanceHttpResponse) -> EGResult<MyResponse> {
         match response {
             BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) => {
@@ -140,10 +108,7 @@ mod binance {
 
         let connector = Connect.binance_http(
             TradingMode::Paper,
-            ReqwestHttpClient::new,
             Arc::new(to_unsigned_request),
-            Arc::new(to_transport_request),
-            Arc::new(to_binance_response),
             Arc::new(to_external_response),
             listener,
             None,
