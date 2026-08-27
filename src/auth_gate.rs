@@ -12,9 +12,13 @@ use std::{
 /// gate, which bumps the epoch, and the session is stale whenever the epoch it
 /// was authenticated against no longer matches the current one.
 ///
-/// The epoch itself is private to the gate: callers never see its value, only
-/// the opaque [`AuthSession`] handed out by [`acquire`](AuthGate::acquire) and
-/// consumed by [`complete_authentication`](AuthGate::complete_authentication).
+/// The epoch is entirely private to the gate and lives only in its state.
+/// [`acquire`](AuthGate::acquire) records the connection epoch the
+/// authentication must be recorded against in the gate's own in-flight record
+/// and hands out an opaque [`AuthSession`] token; on success the caller hands
+/// the token back to [`complete_authentication`](AuthGate::complete_authentication),
+/// and the gate applies the epoch it recorded itself. Outside code never sees
+/// an epoch value and can never supply one.
 #[derive(Default)]
 pub struct AuthGate {
     state: Mutex<AuthGateState>,
@@ -28,14 +32,25 @@ pub struct AuthGateState {
     /// The connection epoch the current authenticated session belongs to. The
     /// session is stale whenever this differs from `connection_epoch`.
     authenticated_epoch: u64,
-    /// The in-flight authentication's completion signal, if one is running.
-    in_flight: Option<AuthCompleted>,
+    /// The in-flight authentication, if one is running.
+    in_flight: Option<AuthInFlight>,
+}
+
+/// A running authentication: its completion signal together with the
+/// connection epoch it began against. The epoch is recorded here by the gate
+/// at [`acquire`](AuthGate::acquire) time so the completed session can be
+/// recorded against the same epoch even if the connection reconnects part way
+/// through the authentication.
+struct AuthInFlight {
+    completed: AuthCompleted,
+    epoch: u64,
 }
 
 pub enum AuthGateAcquisition {
     /// This caller is now the only task running authentication; `session` is
-    /// the opaque handle to the connection epoch the authentication must be
-    /// recorded against on success.
+    /// the opaque token that must be handed back to
+    /// [`complete_authentication`](AuthGate::complete_authentication) on
+    /// success.
     Authenticator {
         completed: AuthCompleted,
         session: AuthSession,
@@ -44,12 +59,12 @@ pub enum AuthGateAcquisition {
     Waiting(AuthCompleted),
 }
 
-/// An opaque handle to the connection epoch an authentication runs against,
-/// captured by [`AuthGate::acquire`] and consumed by
-/// [`AuthGate::complete_authentication`]. Only the gate can observe or move
-/// the epoch: callers pass the handle through without ever seeing its value.
+/// An opaque token handed out by [`AuthGate::acquire`] and consumed by
+/// [`AuthGate::complete_authentication`]. It carries no data: the gate keeps
+/// the connection epoch the authentication runs against in its own state, so
+/// no epoch value ever leaves the gate and outside code cannot supply one.
 pub struct AuthSession {
-    epoch: u64,
+    _private: (),
 }
 
 /// A one-shot signal that an in-flight authentication has finished, shared
@@ -64,22 +79,26 @@ struct AuthCompletedState {
 }
 
 impl AuthGate {
-    /// Atomically marks the gate as busy and snapshots the connection epoch
-    /// the authentication must run against, returning the completion signal
-    /// the caller must notify when it finishes (or the in-flight signal to
-    /// wait on if another authentication is already running).
+    /// Atomically marks the gate as busy and records the connection epoch the
+    /// authentication must be recorded against, returning the completion
+    /// signal the caller must notify when it finishes together with the opaque
+    /// session token to hand back on success (or the in-flight signal to wait
+    /// on if another authentication is already running).
     pub fn acquire(&self) -> EGResult<AuthGateAcquisition> {
         let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
         match &state.in_flight {
             None => {
                 let completed = AuthCompleted::default();
-                state.in_flight = Some(completed.clone());
-                let session = AuthSession {
+                state.in_flight = Some(AuthInFlight {
+                    completed: completed.clone(),
                     epoch: state.connection_epoch,
-                };
-                Ok(AuthGateAcquisition::Authenticator { completed, session })
+                });
+                Ok(AuthGateAcquisition::Authenticator {
+                    completed,
+                    session: AuthSession { _private: () },
+                })
             }
-            Some(completed) => Ok(AuthGateAcquisition::Waiting(completed.clone())),
+            Some(in_flight) => Ok(AuthGateAcquisition::Waiting(in_flight.completed.clone())),
         }
     }
 
@@ -89,8 +108,8 @@ impl AuthGate {
             Ok(state) => state,
             Err(_) => return,
         };
-        if let Some(active) = &state.in_flight
-            && Arc::ptr_eq(&active.0, &completed.0)
+        if let Some(in_flight) = &state.in_flight
+            && Arc::ptr_eq(&in_flight.completed.0, &completed.0)
         {
             state.in_flight = None;
         }
@@ -116,12 +135,14 @@ impl AuthGate {
 
     /// Records that the authentication represented by `session` completed
     /// successfully: the authenticated session now belongs to the connection
-    /// epoch the authentication began against.
-    pub fn complete_authentication(&self, session: AuthSession) -> EGResult<()> {
-        self.state
-            .lock()
-            .map_err(|_| EGError::MutexPoisoned)?
-            .authenticated_epoch = session.epoch;
+    /// epoch the authentication began against, as recorded by the gate itself
+    /// at [`acquire`](AuthGate::acquire) time.
+    pub fn complete_authentication(&self, _session: AuthSession) -> EGResult<()> {
+        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+        let Some(in_flight) = &state.in_flight else {
+            return Err(EGError::NotAuthenticated);
+        };
+        state.authenticated_epoch = in_flight.epoch;
         Ok(())
     }
 }
@@ -160,5 +181,77 @@ impl AuthCompleted {
         for waker in wakers {
             waker.wake();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_is_fully_controlled_by_the_gate() {
+        let gate = AuthGate::default();
+        assert!(!gate.is_stale().unwrap());
+
+        // First connection: authenticating against epoch 1 is fresh...
+        gate.on_connection_established().unwrap();
+        let AuthGateAcquisition::Authenticator { completed, session } = gate.acquire().unwrap()
+        else {
+            panic!("expected an authenticator acquisition");
+        };
+        gate.complete_authentication(session).unwrap();
+        gate.release(&completed);
+        assert!(!gate.is_stale().unwrap());
+
+        // ...but a reconnect bumps the epoch and invalidates the session even
+        // though the token was completed against the old one.
+        gate.on_connection_established().unwrap();
+        assert!(gate.is_stale().unwrap());
+    }
+
+    #[test]
+    fn reconnect_during_authentication_is_detected() {
+        let gate = AuthGate::default();
+        gate.on_connection_established().unwrap();
+        let AuthGateAcquisition::Authenticator { completed, session } = gate.acquire().unwrap()
+        else {
+            panic!("expected an authenticator acquisition");
+        };
+
+        // The connection reconnects while authentication is running: the gate
+        // records the completion against the acquire-time epoch, not the
+        // current one, so the session is detected as stale.
+        gate.on_connection_established().unwrap();
+        gate.complete_authentication(session).unwrap();
+        gate.release(&completed);
+        assert!(gate.is_stale().unwrap());
+    }
+
+    #[test]
+    fn second_acquire_waits_for_in_flight_authentication() {
+        let gate = AuthGate::default();
+        gate.on_connection_established().unwrap();
+        let AuthGateAcquisition::Authenticator { completed, .. } = gate.acquire().unwrap() else {
+            panic!("expected an authenticator acquisition");
+        };
+        assert!(matches!(
+            gate.acquire().unwrap(),
+            AuthGateAcquisition::Waiting(_)
+        ));
+        gate.release(&completed);
+    }
+
+    #[test]
+    fn completing_without_an_in_flight_authentication_is_an_error() {
+        let gate = AuthGate::default();
+        let AuthGateAcquisition::Authenticator { completed, session } = gate.acquire().unwrap()
+        else {
+            panic!("expected an authenticator acquisition");
+        };
+        gate.release(&completed);
+        assert!(matches!(
+            gate.complete_authentication(session),
+            Err(EGError::NotAuthenticated)
+        ));
     }
 }
