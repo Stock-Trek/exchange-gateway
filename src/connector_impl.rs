@@ -218,7 +218,11 @@ where
     /// signer for `session`. If the connection reconnects part way through,
     /// the signer is installed anyway (keyed to `session`) and the caller
     /// detects the staleness via [`Self::session_is_stale`].
-    async fn run_authentication(&self, credentials: &TCredentials, session: AuthSession) -> EGResult<()> {
+    async fn run_authentication(
+        &self,
+        credentials: &TCredentials,
+        session: AuthSession,
+    ) -> EGResult<()> {
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
             let (signed_auth_message, weight, order_count) = {

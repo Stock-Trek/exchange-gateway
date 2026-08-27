@@ -1,5 +1,4 @@
 use crate::{
-    auth_gate::AuthGate,
     authenticate_leg::AuthenticateLeg,
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
@@ -52,6 +51,7 @@ use {
 
 #[cfg(any(feature = "reqwest", feature = "iris"))]
 use crate::{
+    auth_gate::AuthGate,
     connector::Connector,
     connector_impl::ConnectorImpl,
     error::EGError,
@@ -890,9 +890,9 @@ mod tests {
         let _ = client_handle.send(mock_client.clone());
         let client: Arc<
             dyn WebsocketClientTrait<
-                TransportReq = BinanceWebsocketRequest,
-                TransportRes = BinanceWebsocketResponse,
-            >,
+                    TransportReq = BinanceWebsocketRequest,
+                    TransportRes = BinanceWebsocketResponse,
+                >,
         > = Arc::new(mock_client);
         let websocket_transport = WebsocketTransport::new(
             client,
@@ -981,9 +981,9 @@ mod tests {
         let _ = client_handle.send(mock_client.clone());
         let client: Arc<
             dyn HttpClientTrait<
-                TransportReq = BinanceHttpRequest,
-                TransportRes = BinanceHttpResponse,
-            >,
+                    TransportReq = BinanceHttpRequest,
+                    TransportRes = BinanceHttpResponse,
+                >,
         > = Arc::new(mock_client);
         let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
             Arc::new(ConvertListener::new(to_external_response, listener));
