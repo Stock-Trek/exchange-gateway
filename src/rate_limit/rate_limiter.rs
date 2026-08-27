@@ -1,8 +1,14 @@
 use crate::{
     error::{EGError, EGResult},
-    rate_limit::{rate_limit_config::RateLimitConfig, rate_limiter_state::RateLimiterState},
+    rate_limit::{
+        feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
+        rate_limiter_state::RateLimiterState,
+    },
 };
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiter {
@@ -40,6 +46,35 @@ impl RateLimiter {
             .map_err(|_| EGError::MutexPoisoned)?;
         for limiter in limiters_guard.iter_mut() {
             limiter.refund(cost);
+        }
+        Ok(())
+    }
+    /// Realigns every bucket with the given interval to server-reported usage.
+    ///
+    /// Buckets with a different interval are left untouched (e.g. the daily
+    /// request-weight bucket Binance reports is not modelled locally).
+    pub fn apply_usage(&self, usage: &RateLimitUsage) -> EGResult<()> {
+        let mut limiters_guard = self
+            .rate_limiters
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        for limiter in limiters_guard.iter_mut() {
+            if limiter.interval_nanos() == usage.interval_nanos {
+                limiter.sync_usage(usage.used, usage.limit);
+            }
+        }
+        Ok(())
+    }
+    /// Drains every bucket until `retry_after` elapses (a short default when
+    /// the server did not send a `Retry-After` header).
+    pub fn throttle(&self, retry_after: Option<Duration>) -> EGResult<()> {
+        let until = Instant::now() + retry_after.unwrap_or(Duration::from_secs(1));
+        let mut limiters_guard = self
+            .rate_limiters
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        for limiter in limiters_guard.iter_mut() {
+            limiter.throttle(until);
         }
         Ok(())
     }

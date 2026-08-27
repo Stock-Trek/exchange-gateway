@@ -4,7 +4,10 @@ use crate::{
     error::EGResult,
     functions::{ArcCombineValues, ArcTryConvertValue},
     rate_limit::{
-        rate_limit_config::RateLimitConfig, rate_limiter::RateLimiter, rate_limits::RateLimits,
+        feedback::{RateLimitFeedback, RateLimitUsage},
+        rate_limit_config::RateLimitConfig,
+        rate_limiter::RateLimiter,
+        rate_limits::RateLimits,
     },
     sign::{
         convert_signer::ConvertSigner,
@@ -18,8 +21,12 @@ use crate::{
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::{
-    http::{BinanceHttpRequest, BinanceHttpUnsignedRequest},
+    http::{
+        BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
+        BinanceHttpUnsignedRequest,
+    },
     logon::BinanceLogonParams,
+    rate_limits::{BinanceRateLimit, BinanceRateLimitInterval},
     signed::BinanceSignedParams,
     spot::BinanceSpotOrderParams,
     websocket::{
@@ -45,7 +52,6 @@ use {
         http::HttpTransport,
         reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
     },
-    exchange_types::binance::http::BinanceHttpResponse,
     reqwest::Method,
 };
 
@@ -80,6 +86,7 @@ where
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
     let client = Arc::new(ReqwestHttpClient::new(&url));
+    let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
     let http_transport = HttpTransport::new(
@@ -89,10 +96,12 @@ where
         response_listener,
         request_to_http_endpoint,
         http_endpoints(),
+        rate_limits.clone(),
+        http_response_feedback,
     );
     let time_sync = Arc::new(TimeSync::default());
     Ok(ConnectorImpl::new(
-        rate_limits(),
+        rate_limits,
         http_request_weight,
         http_order_count,
         to_unsigned_request,
@@ -120,11 +129,14 @@ where
 {
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
+    let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
     let auth_gate = Arc::new(AuthGate::default());
     let websocket_listener = Arc::new(WebsocketListener::new(
         Arc::new(from_websocket_response),
+        websocket_response_feedback,
+        rate_limits.clone(),
         response_listener,
         auth_gate.clone(),
     ));
@@ -149,7 +161,7 @@ where
         vec![]
     };
     Ok(ConnectorImpl::new(
-        rate_limits(),
+        rate_limits,
         websocket_request_weight,
         websocket_order_count,
         to_unsigned_request,
@@ -489,6 +501,44 @@ fn rate_limits() -> RateLimits {
     }
 }
 
+fn rate_limit_usage(limit: &BinanceRateLimit) -> Option<RateLimitUsage> {
+    let interval_nanos = rate_limit_interval_nanos(limit.interval)? * limit.intervalNum as u128;
+    Some(RateLimitUsage {
+        interval_nanos,
+        used: limit.count.unwrap_or(0).max(0) as u32,
+        limit: Some(limit.limit.max(0) as u32),
+    })
+}
+fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128> {
+    let secs = match interval {
+        BinanceRateLimitInterval::SECOND => 1,
+        BinanceRateLimitInterval::MINUTE => 60,
+        BinanceRateLimitInterval::HOUR => 60 * 60,
+        BinanceRateLimitInterval::DAY => 24 * 60 * 60,
+    };
+    Some(Duration::from_secs(secs).as_nanos())
+}
+/// `exchangeInfo` returns the rate-limit definitions Binance currently
+/// enforces, so the local capacity is updated from the response body rather
+/// than from a hard-coded value that may have drifted.
+fn http_response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
+    let mut feedback = RateLimitFeedback::default();
+    if let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
+        feedback
+            .usage
+            .extend(info.rateLimits.iter().filter_map(rate_limit_usage));
+    }
+    Ok(feedback)
+}
+/// Every WebSocket API response carries the current rate-limit usage, which
+/// realigns the local limiters with the server on each message.
+fn websocket_response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitFeedback> {
+    let mut feedback = RateLimitFeedback::default();
+    feedback
+        .usage
+        .extend(response.rateLimits.iter().filter_map(rate_limit_usage));
+    Ok(feedback)
+}
 fn http_request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
         BinanceHttpUnsignedRequest::AssetLimits(..) => 40,
@@ -576,10 +626,11 @@ mod tests {
         asset_limits::BinanceAssetLimitsParams,
         error::BinanceError,
         exchange_info::{
-            BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+            BinanceExchangeInfoParams, BinanceExchangeInfoPermission, BinanceExchangeInfoResult,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
         logon::BinanceSessionAuthenticationResult,
+        rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
             BinanceTimeInForce,
@@ -771,6 +822,135 @@ mod tests {
         assert!(limits.weight.did_acquire(1).unwrap());
     }
 
+    fn rate_limit(
+        rate_limit_type: BinanceRateLimitType,
+        interval: BinanceRateLimitInterval,
+        interval_num: i32,
+        limit: i64,
+        count: Option<i64>,
+    ) -> BinanceRateLimit {
+        BinanceRateLimit {
+            count,
+            interval,
+            intervalNum: interval_num,
+            limit,
+            rateLimitType: rate_limit_type,
+        }
+    }
+
+    fn exchange_info_result(rate_limits: Vec<BinanceRateLimit>) -> BinanceExchangeInfoResult {
+        BinanceExchangeInfoResult {
+            exchangeFilters: vec![],
+            rateLimits: rate_limits,
+            serverTime: 1700000000000,
+            symbols: vec![],
+            timezone: "UTC".into(),
+        }
+    }
+
+    #[test]
+    fn exchange_info_feedback_reports_limits_and_usage() {
+        let response = BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(
+            exchange_info_result(vec![
+                rate_limit(
+                    BinanceRateLimitType::REQUEST_WEIGHT,
+                    BinanceRateLimitInterval::MINUTE,
+                    1,
+                    6000,
+                    Some(1200),
+                ),
+                rate_limit(
+                    BinanceRateLimitType::ORDERS,
+                    BinanceRateLimitInterval::SECOND,
+                    10,
+                    50,
+                    Some(3),
+                ),
+            ]),
+        ));
+        let feedback = http_response_feedback(&response).unwrap();
+        assert_eq!(feedback.usage.len(), 2);
+        assert_eq!(
+            feedback.usage[0].interval_nanos,
+            Duration::from_secs(60).as_nanos()
+        );
+        assert_eq!(feedback.usage[0].used, 1200);
+        assert_eq!(feedback.usage[0].limit, Some(6000));
+        assert_eq!(
+            feedback.usage[1].interval_nanos,
+            Duration::from_secs(10).as_nanos()
+        );
+        assert_eq!(feedback.usage[1].used, 3);
+        assert_eq!(feedback.usage[1].limit, Some(50));
+    }
+
+    #[test]
+    fn websocket_feedback_reports_usage_on_every_response() {
+        let response = BinanceWebsocketResponse {
+            error: None,
+            id: "1".into(),
+            rateLimits: vec![
+                rate_limit(
+                    BinanceRateLimitType::REQUEST_WEIGHT,
+                    BinanceRateLimitInterval::MINUTE,
+                    1,
+                    6000,
+                    Some(2500),
+                ),
+                rate_limit(
+                    BinanceRateLimitType::ORDERS,
+                    BinanceRateLimitInterval::DAY,
+                    1,
+                    160_000,
+                    Some(12),
+                ),
+            ],
+            result: None,
+            status: 200,
+        };
+        let feedback = websocket_response_feedback(&response).unwrap();
+        assert_eq!(feedback.usage.len(), 2);
+        assert_eq!(
+            feedback.usage[0].interval_nanos,
+            Duration::from_secs(60).as_nanos()
+        );
+        assert_eq!(feedback.usage[0].used, 2500);
+        assert_eq!(feedback.usage[0].limit, Some(6000));
+        assert_eq!(
+            feedback.usage[1].interval_nanos,
+            Duration::from_secs(24 * 60 * 60).as_nanos()
+        );
+        assert_eq!(feedback.usage[1].used, 12);
+        assert_eq!(feedback.usage[1].limit, Some(160_000));
+    }
+
+    #[test]
+    fn rate_limit_usage_maps_binance_intervals() {
+        let usage = rate_limit_usage(&rate_limit(
+            BinanceRateLimitType::ORDERS,
+            BinanceRateLimitInterval::DAY,
+            1,
+            160_000,
+            Some(10),
+        ))
+        .unwrap();
+        assert_eq!(
+            usage.interval_nanos,
+            Duration::from_secs(24 * 60 * 60).as_nanos()
+        );
+        assert_eq!(usage.used, 10);
+        assert_eq!(usage.limit, Some(160_000));
+        assert!(
+            rate_limit_usage(&rate_limit(
+                BinanceRateLimitType::ORDERS,
+                BinanceRateLimitInterval::MINUTE,
+                1,
+                10,
+                None,
+            ))
+            .is_some()
+        );
+    }
     /// A scripted websocket client: connecting (and reconnecting) reports
     /// `on_connected` to its listener, logon requests are answered with a
     /// successful response, and every outgoing request is recorded. When a
