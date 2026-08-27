@@ -7,17 +7,20 @@ use std::{
 
 /// Serializes authentication so that at most one authentication runs at a
 /// time: a caller that finds the session stale while another authentication is
-/// in flight waits for it to finish instead of starting a second one.
+/// in flight waits for it to finish instead of starting a second one. It also
+/// records the connection epoch the current session was authenticated against.
 #[derive(Default)]
 pub struct AuthGate {
     state: Mutex<AuthGateState>,
 }
 
 #[derive(Default)]
-pub enum AuthGateState {
-    #[default]
-    Idle,
-    Authenticating(AuthCompleted),
+pub struct AuthGateState {
+    /// The connection epoch the current authenticated session belongs to. The
+    /// session is stale whenever the transport's current epoch differs.
+    authenticated_epoch: u64,
+    /// The in-flight authentication's completion signal, if one is running.
+    in_flight: Option<AuthCompleted>,
 }
 
 pub enum AuthGateAcquisition {
@@ -44,15 +47,13 @@ impl AuthGate {
     /// if another authentication is already running.
     pub fn acquire(&self) -> EGResult<AuthGateAcquisition> {
         let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-        match &*state {
-            AuthGateState::Idle => {
+        match &state.in_flight {
+            None => {
                 let completed = AuthCompleted::default();
-                *state = AuthGateState::Authenticating(completed.clone());
+                state.in_flight = Some(completed.clone());
                 Ok(AuthGateAcquisition::Authenticator(completed))
             }
-            AuthGateState::Authenticating(completed) => {
-                Ok(AuthGateAcquisition::Waiting(completed.clone()))
-            }
+            Some(completed) => Ok(AuthGateAcquisition::Waiting(completed.clone())),
         }
     }
 
@@ -62,11 +63,29 @@ impl AuthGate {
             Ok(state) => state,
             Err(_) => return,
         };
-        if let AuthGateState::Authenticating(active) = &*state
+        if let Some(active) = &state.in_flight
             && Arc::ptr_eq(&active.0, &completed.0)
         {
-            *state = AuthGateState::Idle;
+            state.in_flight = None;
         }
+    }
+
+    /// The connection epoch the current session was authenticated against.
+    pub fn authenticated_epoch(&self) -> EGResult<u64> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .authenticated_epoch)
+    }
+
+    /// Records the connection epoch the just-completed authentication ran on.
+    pub fn set_authenticated_epoch(&self, epoch: u64) -> EGResult<()> {
+        self.state
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .authenticated_epoch = epoch;
+        Ok(())
     }
 }
 

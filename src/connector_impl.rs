@@ -14,10 +14,7 @@ use crate::{
 use async_trait::async_trait;
 use std::{
     ops::Deref,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -41,7 +38,6 @@ pub struct ConnectorImpl<
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
-    authenticated_epoch: Arc<AtomicU64>,
     auth_gate: AuthGate,
 }
 
@@ -84,8 +80,12 @@ where
         if !self.transport.is_connected() {
             return Ok(false);
         }
-        let guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
-        Ok((*guard).is_some() && !self.session_is_stale())
+        let has_signer = self
+            .signer
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .is_some();
+        Ok(has_signer && !self.session_is_stale()?)
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
@@ -95,7 +95,7 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
-        if signed && self.session_is_stale() {
+        if signed && self.session_is_stale()? {
             self.authenticate().await?;
         }
         let (signed_request, weight, order_count) = {
@@ -169,7 +169,6 @@ where
             create_signer,
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
-            authenticated_epoch: Arc::new(AtomicU64::new(0)),
             auth_gate: AuthGate::default(),
         }
     }
@@ -182,7 +181,7 @@ where
         };
         loop {
             // A concurrent caller may have re-authenticated while we waited.
-            if !self.session_is_stale() {
+            if !self.session_is_stale()? {
                 return Ok(());
             }
             let completed = match self.auth_gate.acquire()? {
@@ -207,7 +206,7 @@ where
                     // The connection reconnected while we were authenticating:
                     // the session was established on a connection that is no
                     // longer current, so try again against the new one.
-                    if self.session_is_stale() {
+                    if self.session_is_stale()? {
                         continue;
                     }
                     return Ok(());
@@ -253,12 +252,21 @@ where
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
             *guard = Some(signer);
         }
-        self.authenticated_epoch.store(epoch, Ordering::Relaxed);
+        self.auth_gate.set_authenticated_epoch(epoch)?;
         Ok(())
     }
-    fn session_is_stale(&self) -> bool {
-        !self.authenticate_legs.is_empty()
-            && self.transport.connection_epoch() != self.authenticated_epoch.load(Ordering::Relaxed)
+    /// The session is stale while no signer is installed yet and, for
+    /// session-based connectors, whenever the installed signer belongs to an
+    /// older connection epoch.
+    fn session_is_stale(&self) -> EGResult<bool> {
+        let has_signer = self
+            .signer
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .is_some();
+        Ok(!has_signer
+            || (!self.authenticate_legs.is_empty()
+                && self.transport.connection_epoch() != self.auth_gate.authenticated_epoch()?))
     }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
@@ -311,7 +319,6 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
             .field("signer", &"<redacted>")
-            .field("authenticated_epoch", &self.authenticated_epoch)
             .field("auth_gate", &self.auth_gate)
             .finish()
     }

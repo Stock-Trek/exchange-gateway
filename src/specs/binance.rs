@@ -480,7 +480,9 @@ fn id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transports::websocket::WebsocketClientTrait;
+    use crate::transports::{
+        http::HttpClientTrait, websocket::WebsocketClientTrait,
+    };
     use async_trait::async_trait;
     use exchange_types::binance::{
         asset_limits::BinanceAssetLimitsParams,
@@ -489,6 +491,7 @@ mod tests {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
+        http::BinanceHttpResponseResult,
         logon::BinanceSessionAuthenticationResult,
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
@@ -759,6 +762,17 @@ mod tests {
         }
     }
 
+    struct IgnoreHttpListener;
+
+    #[async_trait]
+    impl ListenerTrait for IgnoreHttpListener {
+        type TMessage = BinanceHttpResponse;
+
+        async fn on_message(&self, _message: BinanceHttpResponse) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
     /// Builds a session-based websocket connector backed by the scripted mock
     /// client, handing the caller a handle to the client so reconnects can be
     /// simulated.
@@ -818,6 +832,102 @@ mod tests {
             },
             params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
         }
+    }
+
+    /// A scripted HTTP client: records every outgoing request and answers
+    /// with a bare success so signed sends can complete without a network.
+    #[derive(Clone)]
+    struct MockHttpClient {
+        sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
+    }
+
+    #[async_trait]
+    impl HttpClientTrait for MockHttpClient {
+        type TransportReq = BinanceHttpRequest;
+        type TransportRes = BinanceHttpResponse;
+
+        async fn send_message(
+            &self,
+            _endpoint: &str,
+            message: Self::TransportReq,
+            _timeout: Duration,
+        ) -> EGResult<Self::TransportRes> {
+            self.sent.lock().unwrap().push(message);
+            Ok(BinanceHttpResponse::Result(
+                BinanceHttpResponseResult::AssetLimits(vec![]),
+            ))
+        }
+    }
+
+    /// Builds an HTTP connector backed by the scripted mock client, handing
+    /// the caller a handle to the client so sent requests can be inspected.
+    fn mock_http_connector(
+        client_handle: std::sync::mpsc::Sender<MockHttpClient>,
+    ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
+        let credentials = ApiKeyCredentials {
+            api_key: "api-key".into(),
+            secret: SecretString::from("secret"),
+        };
+        let listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(IgnoreHttpListener);
+        let to_unsigned_request: ArcTryConvertValue<
+            BinanceHttpUnsignedRequest,
+            BinanceHttpUnsignedRequest,
+        > = Arc::new(Ok);
+        let to_transport_request: ArcTryConvertValue<BinanceHttpRequest, BinanceHttpRequest> =
+            Arc::new(Ok);
+        let to_binance_response: ArcTryConvertValue<
+            BinanceHttpResponse,
+            BinanceHttpResponse,
+        > = Arc::new(Ok);
+        let to_external_response: ArcTryConvertValue<
+            BinanceHttpResponse,
+            BinanceHttpResponse,
+        > = Arc::new(Ok);
+        http_connector(
+            TradingMode::Paper,
+            move |_url| {
+                let client = MockHttpClient {
+                    sent: Arc::new(Mutex::new(Vec::new())),
+                };
+                let _ = client_handle.send(client.clone());
+                client
+            },
+            to_unsigned_request,
+            to_transport_request,
+            to_binance_response,
+            to_external_response,
+            listener,
+            Some(credentials),
+        )
+    }
+
+    fn asset_limits_request() -> BinanceHttpUnsignedRequest {
+        BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            recvWindow: None,
+            symbols: None,
+            timestamp: 0,
+        })
+    }
+
+    #[tokio::test]
+    async fn http_connector_installs_signer_on_connect() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = mock_http_connector(client_tx).unwrap();
+        let client = client_rx.recv().unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(
+            connector.is_authenticated().unwrap(),
+            "connecting with credentials must install the request signer"
+        );
+
+        // A signed request must not fail with NotAuthenticated.
+        connector
+            .send(asset_limits_request(), true, Duration::from_secs(5))
+            .await
+            .expect("signed send should succeed");
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
     }
 
     fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
