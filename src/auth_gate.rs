@@ -62,6 +62,22 @@ impl AuthGate {
     }
 
     pub fn on_connection_established(&self) -> EGResult<()> {
+        self.bump_epoch()
+    }
+
+    /// Marks the current connection as lost, bumping the connection epoch so
+    /// any session bound to the lost connection is stale immediately.
+    ///
+    /// Bumping on disconnect as well as on (re)connect means staleness is
+    /// detected as soon as the connection drops rather than only after a
+    /// reconnect fires `on_connected`, so a signed request sent while the
+    /// connection is down cannot be queued in the transport's outbound
+    /// channel and delivered on the fresh connection before re-auth.
+    pub fn on_connection_lost(&self) -> EGResult<()> {
+        self.bump_epoch()
+    }
+
+    fn bump_epoch(&self) -> EGResult<()> {
         self.state
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
@@ -130,6 +146,24 @@ mod tests {
         assert!(!gate.is_stale().unwrap());
 
         gate.on_connection_established().unwrap();
+        assert!(gate.is_stale().unwrap());
+    }
+
+    #[test]
+    fn losing_the_connection_invalidates_the_session() {
+        let gate = AuthGate::default();
+        gate.on_connection_established().unwrap();
+        let AuthGateAcquisition::Authenticator(on_complete) = gate.acquire().unwrap() else {
+            panic!("expected an authenticator acquisition");
+        };
+        gate.release().expect("Release must be Ok");
+        on_complete.notify();
+        assert!(!gate.is_stale().unwrap());
+
+        // The connection is lost without a reconnect yet: the session bound
+        // to it must be stale immediately so sends queued during the drop
+        // cannot bypass re-authentication.
+        gate.on_connection_lost().unwrap();
         assert!(gate.is_stale().unwrap());
     }
 

@@ -7,7 +7,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_timer::Delay;
-use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
+use iris::{
+    Client as IrisClient, Config as IrisConfig, Listener as IrisListener, ServerCloseBehavior,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     future::{Future, poll_fn},
@@ -36,15 +38,6 @@ where
     TransportReq: Serialize + Send + 'static,
     TransportRes: DeserializeOwned + Send + 'static,
 {
-    /// Creates a client that connects to `url` using a default
-    /// [`IrisConfig`].
-    pub(crate) fn new(
-        url: &str,
-        listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
-    ) -> Self {
-        Self::with_config(url, IrisConfig::new(), listener)
-    }
-
     /// Creates a client that connects to `url` using a custom
     /// [`IrisConfig`].
     pub(crate) fn with_config(
@@ -81,6 +74,18 @@ where
         })
         .await
     }
+}
+
+/// The gateway's default [`IrisConfig`] for websocket transports.
+///
+/// `IrisConfig::new()` defaults [`ServerCloseBehavior`] to `Disconnect`, which
+/// permanently ends the iris connection task when the server closes the
+/// connection cleanly (maintenance, session expiry, ...). The gateway's
+/// reconnect/re-authentication machinery depends on `on_connected` firing
+/// again so the connection epoch can bump and the stale session can be
+/// detected, so the default must reconnect.
+pub(crate) fn default_config() -> IrisConfig {
+    IrisConfig::new().with_server_close_behavior(ServerCloseBehavior::Reconnect)
 }
 
 #[async_trait]
@@ -146,6 +151,10 @@ where
     async fn on_connected(&self) {
         let _ = self.delegate.on_connected().await;
     }
+
+    async fn on_disconnected(&self) {
+        let _ = self.delegate.on_disconnected().await;
+    }
 }
 
 impl<TransportRes> std::fmt::Debug for IrisListenerAdapter<TransportRes> {
@@ -163,7 +172,10 @@ mod tests {
     use iris::CircuitBreakerConfig;
     use serde::{Deserialize, Serialize};
     use std::{
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         task::Poll,
         time::Duration,
     };
@@ -282,7 +294,7 @@ mod tests {
     }
 
     fn test_config() -> IrisConfig {
-        IrisConfig::new()
+        default_config()
             .with_circuit_breaker_config(
                 CircuitBreakerConfig::new()
                     .with_initial_backoff(Duration::from_millis(50))
@@ -303,6 +315,170 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("client did not connect within timeout");
+    }
+
+    /// A listener that counts how often the connection was established and
+    /// records every received message.
+    struct ConnectionCountingListener {
+        connections: Arc<AtomicUsize>,
+        received: Arc<Mutex<Vec<TestResponse>>>,
+    }
+
+    #[async_trait]
+    impl ListenerTrait for ConnectionCountingListener {
+        type TMessage = TestResponse;
+
+        async fn on_connected(&self) -> EGResult<()> {
+            self.connections.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn on_message(&self, message: TestResponse) -> EGResult<()> {
+            self.received
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(message);
+            Ok(())
+        }
+    }
+
+    /// Spawns a server that cleanly closes the first connection it accepts
+    /// (as Binance does for maintenance or session expiry) and then behaves
+    /// like the responder server for every later connection.
+    async fn spawn_server_that_closes_first_connection() -> (u16, tokio::sync::oneshot::Sender<()>)
+    {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("should bind to ephemeral port");
+        let port = listener
+            .local_addr()
+            .expect("should have local address")
+            .port();
+        let connection_index = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            let mut shutdown_rx = Some(shutdown_rx);
+            loop {
+                tokio::select! {
+                    _ = async {
+                        if let Some(rx) = &mut shutdown_rx {
+                            rx.await.ok();
+                        }
+                    } => break,
+                    accept_result = listener.accept() => {
+                        let (stream, _) = accept_result.expect("should accept a connection");
+                        let index = connection_index.fetch_add(1, Ordering::SeqCst);
+                        tokio::spawn(async move {
+                            let builder = tokio_websockets::ServerBuilder::new();
+                            if let Ok((_request, mut ws_stream)) = builder.accept(stream).await {
+                                if index == 0 {
+                                    // First connection: graceful server close.
+                                    let _ = ws_stream
+                                        .send(tokio_websockets::Message::close(
+                                            Some(tokio_websockets::CloseCode::NORMAL_CLOSURE),
+                                            "maintenance",
+                                        ))
+                                        .await;
+                                    let _ = ws_stream.close().await;
+                                } else {
+                                    while let Some(Ok(message)) = ws_stream.next().await {
+                                        if message.is_ping() {
+                                            let payload = message.into_payload();
+                                            let _ = ws_stream
+                                                .send(tokio_websockets::Message::pong(payload))
+                                                .await;
+                                        } else if message.is_text() || message.is_binary() {
+                                            let _ = ws_stream
+                                                .send(tokio_websockets::Message::text(
+                                                    r#"{"id":1,"status":200}"#.to_string(),
+                                                ))
+                                                .await;
+                                        } else if message.is_close() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        (port, shutdown_tx)
+    }
+
+    async fn wait_until_connection_count(connections: &Arc<AtomicUsize>, expected: usize) {
+        for _ in 0..200 {
+            if connections.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "on_connected did not fire {expected} times, fired {} times",
+            connections.load(Ordering::SeqCst)
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnects_after_graceful_server_close() {
+        let (port, _shutdown) = spawn_server_that_closes_first_connection().await;
+        let connections = Arc::new(AtomicUsize::new(0));
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> =
+            Arc::new(ConnectionCountingListener {
+                connections: connections.clone(),
+                received: received.clone(),
+            });
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let config = test_config().with_circuit_breaker_config(
+            CircuitBreakerConfig::new()
+                .with_initial_backoff(Duration::from_millis(50))
+                .with_max_backoff(Duration::from_millis(200))
+                .with_no_reconnect_limit(),
+        );
+        let client =
+            IrisWebsocketClient::<TestRequest, TestResponse>::with_config(&url, config, listener);
+        client.connect().await.expect("connect should succeed");
+        wait_until_connection_count(&connections, 1).await;
+
+        // The server closes the first connection cleanly. With
+        // `ServerCloseBehavior::Reconnect` the client must come back and fire
+        // `on_connected` again, keeping the reconnect/re-auth machinery alive.
+        wait_until_connection_count(&connections, 2).await;
+        assert!(
+            client.is_connected(),
+            "client should reconnect after server close"
+        );
+
+        // The fresh connection must be usable for round trips.
+        let message = TestRequest {
+            id: 1,
+            method: "ping".into(),
+        };
+        client
+            .send_message(message, Duration::from_secs(5))
+            .await
+            .expect("send on the fresh connection should succeed");
+        let response = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = {
+                    let received = received.lock().expect("mutex should not be poisoned");
+                    received.first().cloned()
+                };
+                if let Some(response) = response {
+                    return response;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("should receive a response on the fresh connection");
+        assert_eq!(response, TestResponse { id: 1, status: 200 });
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
     }
 
     #[tokio::test]
@@ -357,7 +533,11 @@ mod tests {
             received: received.clone(),
         });
         let url = format!("ws://127.0.0.1:{port}/ws");
-        let client = IrisWebsocketClient::<TestRequest, TestResponse>::new(&url, listener);
+        let client = IrisWebsocketClient::<TestRequest, TestResponse>::with_config(
+            &url,
+            default_config(),
+            listener,
+        );
         let result = client
             .send_message(
                 TestRequest {

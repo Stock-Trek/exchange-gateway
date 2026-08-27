@@ -113,6 +113,10 @@ where
         self.auth_gate.on_connection_established()?;
         self.delegate.on_connected().await
     }
+    async fn on_disconnected(&self) -> EGResult<()> {
+        self.auth_gate.on_connection_lost()?;
+        self.delegate.on_disconnected().await
+    }
 }
 
 pub(crate) struct WaiterForResponse<EGRes>

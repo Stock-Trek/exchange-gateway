@@ -36,6 +36,10 @@ where
     async fn on_connected(&self) -> EGResult<()> {
         self.delegate.on_connected().await
     }
+
+    async fn on_disconnected(&self) -> EGResult<()> {
+        self.delegate.on_disconnected().await
+    }
 }
 
 impl<TFrom, TTo> std::fmt::Display for ConvertListener<TFrom, TTo> {
