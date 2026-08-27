@@ -76,6 +76,30 @@ where
     }
 }
 
+#[async_trait]
+impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
+where
+    EGRes: Clone + Send,
+    TransportRes: Send,
+{
+    type TMessage = TransportRes;
+
+    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
+        let response = (self.converter)(message)?;
+        if remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone())
+        })? {
+            return Ok(());
+        }
+        self.delegate.on_message(response).await
+    }
+
+    async fn on_connected(&self) -> EGResult<()> {
+        self.connection_epoch.fetch_add(1, Ordering::Relaxed);
+        self.delegate.on_connected().await
+    }
+}
+
 pub(crate) struct WaiterForResponse<EGRes>
 where
     EGRes: Send,
@@ -114,30 +138,6 @@ where
             &self.handlers,
             |handler| Ok(handler.id() == self.handler_id),
         );
-    }
-}
-
-#[async_trait]
-impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
-where
-    EGRes: Clone + Send,
-    TransportRes: Send,
-{
-    type TMessage = TransportRes;
-
-    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        let response = (self.converter)(message)?;
-        if remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone())
-        })? {
-            return Ok(());
-        }
-        self.delegate.on_message(response).await
-    }
-
-    async fn on_connected(&self) -> EGResult<()> {
-        self.connection_epoch.fetch_add(1, Ordering::Relaxed);
-        self.delegate.on_connected().await
     }
 }
 

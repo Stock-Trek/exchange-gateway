@@ -1,3 +1,4 @@
+pub mod auth_gate;
 pub mod authenticate_leg;
 pub mod connect;
 pub mod connector;
