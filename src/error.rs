@@ -8,6 +8,11 @@ pub enum EGError {
     CryptoKey(String),
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error(
+        "HTTP request failed with status {status}: {body}",
+        body = String::from_utf8_lossy(body)
+    )]
+    HttpError { status: u16, body: Vec<u8> },
     #[error("Internal mutex poisoned by a panicking operation")]
     MutexPoisoned,
     #[error("Connector is not authenticated")]

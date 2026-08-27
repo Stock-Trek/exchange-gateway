@@ -15,14 +15,13 @@ use std::{
 };
 
 #[async_trait]
-pub trait WebsocketClientTrait: Send + Sync {
+pub(crate) trait WebsocketClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
 
     async fn connect(&self) -> EGResult<()>;
     fn is_connected(&self) -> bool;
     async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()>;
-    async fn on_message(&self, message: Self::TransportRes) -> EGResult<()>;
     async fn disconnect(&self) -> EGResult<()>;
 }
 

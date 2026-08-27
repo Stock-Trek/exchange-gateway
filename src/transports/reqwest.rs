@@ -10,18 +10,14 @@ use std::time::Duration;
 ///
 /// `query` carries the raw query string and is appended to the request URL verbatim.
 #[derive(Debug, Clone)]
-pub struct HttpRequest {
-    pub method: reqwest::Method,
-    pub query: Option<String>,
-    pub headers: Vec<(String, String)>,
-    pub body: Option<Vec<u8>>,
+pub(crate) struct HttpRequest {
+    pub(crate) method: reqwest::Method,
+    pub(crate) query: Option<String>,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Option<Vec<u8>>,
 }
 
 /// A transport-level HTTP response produced by the reqwest-backed client.
-///
-/// `headers` preserves every response header (lower-cased names) so that
-/// exchange rate-limit feedback (`Retry-After`, `X-MBX-*`) survives the
-/// transport boundary.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
@@ -30,12 +26,8 @@ pub struct HttpResponse {
 }
 
 /// A concrete [`HttpClientTrait`] implementation backed by [`reqwest`].
-///
-/// Requests are sent to `{base_url}/{endpoint}` where `base_url` is fixed at
-/// construction time and `endpoint` is supplied per request by
-/// [`HttpTransport`](crate::transports::http::HttpTransport).
 #[derive(Clone)]
-pub struct ReqwestHttpClient {
+pub(crate) struct ReqwestHttpClient {
     client: reqwest::Client,
     base_url: String,
 }
@@ -43,12 +35,12 @@ pub struct ReqwestHttpClient {
 impl ReqwestHttpClient {
     /// Creates a client that sends requests to `base_url` using a default
     /// [`reqwest::Client`].
-    pub fn new(base_url: &str) -> Self {
+    pub(crate) fn new(base_url: &str) -> Self {
         Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
     }
     /// Creates a client that sends requests to `base_url` using a custom
     /// [`reqwest::Client`].
-    pub fn with_client(base_url: &str, client: reqwest::Client) -> Self {
+    pub(crate) fn with_client(base_url: &str, client: reqwest::Client) -> Self {
         Self {
             client,
             base_url: base_url.into(),
@@ -93,7 +85,7 @@ impl HttpClientTrait for ReqwestHttpClient {
             .send()
             .await
             .map_err(|e| EGError::External(Box::new(e)))?;
-        let status = response.status().as_u16();
+        let status = response.status();
         let headers = response
             .headers()
             .iter()
@@ -109,12 +101,22 @@ impl HttpClientTrait for ReqwestHttpClient {
             .await
             .map_err(|e| EGError::External(Box::new(e)))?
             .to_vec();
-        Ok(HttpResponse {
-            status,
-            body,
-            headers,
-        })
+        if status.is_success() {
+            Ok(HttpResponse {
+                status: status.as_u16(),
+                headers,
+                body,
+            })
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            Err(EGError::RateLimited)
+        } else {
+            Err(EGError::HttpError {
+                status: status.as_u16(),
+                body,
+            })
+        }
     }
+
     fn rate_limit_feedback(&self, response: &Self::TransportRes) -> RateLimitFeedback {
         // Binance's REST API signals throttling via 429 (too many requests) /
         // 418 (IP auto-banned) with an optional Retry-After header, and reports
@@ -178,7 +180,7 @@ mod tests {
     #[tokio::test]
     async fn send_message_round_trips_through_reqwest() {
         let request_log = Arc::new(Mutex::new(String::new()));
-        let base_url = spawn_mock_server(request_log.clone(), "200 OK", "");
+        let base_url = spawn_mock_server_with_response(request_log.clone(), 200, "", b"");
         let client = ReqwestHttpClient::new(&base_url);
         let response = client
             .send_message(
@@ -202,15 +204,112 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rate_limit_feedback_parses_usage_and_retry_after() {
+    async fn send_message_maps_4xx_to_http_error() {
         let request_log = Arc::new(Mutex::new(String::new()));
-        let base_url = spawn_mock_server(
-            request_log.clone(),
-            "429 Too Many Requests",
-            "Retry-After: 30\r\nX-MBX-USED-WEIGHT-1M: 6000\r\nX-MBX-ORDER-COUNT-10S: 3",
+        let base_url = spawn_mock_server_with_response(
+            request_log,
+            400,
+            "",
+            br#"{"code":-2014,"msg":"API-key format invalid."}"#,
         );
         let client = ReqwestHttpClient::new(&base_url);
-        let response = client
+        let error = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("400 should be returned as an error");
+        match error {
+            EGError::HttpError { status, body } => {
+                assert_eq!(status, 400);
+                assert_eq!(body, br#"{"code":-2014,"msg":"API-key format invalid."}"#);
+            }
+            other => panic!("expected HttpError, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_message_maps_5xx_to_http_error() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url = spawn_mock_server_with_response(
+            request_log,
+            503,
+            "",
+            br#"{"code":-1000,"msg":"down"}"#,
+        );
+        let client = ReqwestHttpClient::new(&base_url);
+        let error = client
+            .send_message(
+                "order",
+                HttpRequest {
+                    method: reqwest::Method::POST,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("503 should be returned as an error");
+        match error {
+            EGError::HttpError { status, .. } => assert_eq!(status, 503),
+            other => panic!("expected HttpError, got: {other:?}"),
+        }
+    }
+
+    fn spawn_mock_server_with_response(
+        request_log: Arc<Mutex<String>>,
+        status: u16,
+        headers: &str,
+        body: &'static [u8],
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("should bind to ephemeral port");
+        let addr = listener.local_addr().expect("should have local address");
+        let headers = headers.to_string();
+        let body = String::from_utf8_lossy(body);
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("should accept a connection");
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).expect("should read the request");
+            *request_log.lock().expect("mutex should not be poisoned") =
+                String::from_utf8_lossy(&buf[..n]).into_owned();
+            let reason = match status {
+                200 => "OK",
+                400 => "Bad Request",
+                429 => "Too Many Requests",
+                503 => "Service Unavailable",
+                _ => "Error",
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\n{headers}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("should write the response");
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn rate_limit_feedback_parses_usage_and_retry_after() {
+        let request_log = Arc::new(Mutex::new(String::new()));
+        let base_url = spawn_mock_server_with_response(
+            request_log.clone(),
+            429,
+            "Retry-After: 30\r\nX-MBX-USED-WEIGHT-1M: 6000\r\nX-MBX-ORDER-COUNT-10S: 3",
+            br#"{"code":-1003,"msg":"Too many requests"}"#,
+        );
+        let client = ReqwestHttpClient::new(&base_url);
+        let error = client
             .send_message(
                 "order",
                 HttpRequest {
@@ -223,7 +322,7 @@ mod tests {
             )
             .await
             .expect("request should succeed");
-        let feedback = client.rate_limit_feedback(&response);
+        let feedback = client.rate_limit_feedback(&error);
         assert!(feedback.throttled);
         assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
         assert_eq!(feedback.usage.len(), 2);
@@ -238,38 +337,5 @@ mod tests {
             Duration::from_secs(10).as_nanos()
         );
         assert_eq!(feedback.usage[1].used, 3);
-    }
-
-    fn spawn_mock_server(
-        request_log: Arc<Mutex<String>>,
-        status_line: &str,
-        headers: &str,
-    ) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("should bind to ephemeral port");
-        let addr = listener.local_addr().expect("should have local address");
-        let status_line = status_line.to_string();
-        let headers = headers.to_string();
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("should accept a connection");
-            let mut buf = [0u8; 4096];
-            let n = stream.read(&mut buf).expect("should read the request");
-            *request_log.lock().expect("mutex should not be poisoned") =
-                String::from_utf8_lossy(&buf[..n]).into_owned();
-            let body = br#"{"ok":true}"#;
-            let header_block = if headers.is_empty() {
-                String::new()
-            } else {
-                format!("{headers}\r\n")
-            };
-            let response = format!(
-                "HTTP/1.1 {status_line}\r\n{header_block}Content-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                String::from_utf8_lossy(body)
-            );
-            stream
-                .write_all(response.as_bytes())
-                .expect("should write the response");
-        });
-        format!("http://{addr}")
     }
 }

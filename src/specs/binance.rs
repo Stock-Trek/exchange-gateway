@@ -1,14 +1,8 @@
 use crate::{
     authenticate_leg::AuthenticateLeg,
-    connector::Connector,
-    connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::{EGError, EGResult},
+    error::EGResult,
     functions::{ArcCombineValues, ArcTryConvertValue},
-    listeners::{
-        convert_listener::ConvertListener, listener::ListenerTrait,
-        rate_limit_listener::RateLimitFeedbackListener, websocket_listener::WebsocketListener,
-    },
     rate_limit::{
         feedback::{RateLimitFeedback, RateLimitUsage},
         rate_limit_config::RateLimitConfig,
@@ -22,12 +16,9 @@ use crate::{
         message_signer::MessageSigner,
         signer::Signer,
     },
-    transports::{
-        http::{HttpClientTrait, HttpEndpoint, HttpTransport},
-        transport::Transport,
-        websocket::{WebsocketClientTrait, WebsocketTransport},
-    },
-    urls::{ExchangeTransportType, ExchangeTransportUrls, ExchangeUrls, TradingMode},
+    time_sync::TimeSync,
+    transports::http::HttpEndpoint,
+    urls::{ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::{
     http::{
@@ -40,39 +31,60 @@ use exchange_types::binance::{
     spot::BinanceSpotOrderParams,
     websocket::{
         BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
+        BinanceWebsocketUnsignedRequest,
     },
 };
+use rust_decimal::Decimal;
 use secrecy::SecretString;
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+#[cfg(feature = "iris")]
+use crate::{
+    listeners::websocket_listener::WebsocketListener, transports::iris::IrisWebsocketClient,
+    transports::websocket::WebsocketTransport,
+};
+
+#[cfg(feature = "reqwest")]
+use {
+    crate::transports::{
+        http::HttpTransport,
+        reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
+    },
+    reqwest::Method,
+};
+
+#[cfg(any(feature = "reqwest", feature = "iris"))]
+use crate::{
+    connector::Connector,
+    connector_impl::ConnectorImpl,
+    error::EGError,
+    listeners::convert_listener::ConvertListener,
+    listeners::{listener::ListenerTrait, rate_limit_listener::RateLimitFeedbackListener},
+    transports::transport::Transport,
+    urls::{ExchangeTransportType, TradingMode},
+};
+
+/// Binance's default `recvWindow`, used when the caller does not specify one.
+const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
+
 #[allow(clippy::too_many_arguments)]
-pub fn http_connector<TClient, ExternalReq, HttpReq, HttpRes, ExternalRes>(
+#[cfg(feature = "reqwest")]
+pub(crate) fn http_connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
-    create_client: impl Fn(&str) -> TClient,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_transport_request: ArcTryConvertValue<BinanceHttpRequest, HttpReq>,
-    to_binance_response: ArcTryConvertValue<HttpRes, BinanceHttpResponse>,
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
-    TClient: HttpClientTrait<TransportReq = HttpReq, TransportRes = HttpRes> + 'static,
     ExternalReq: Send,
-    HttpReq: Send,
-    HttpRes: Send + 'static,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let exchange_urls = exchange_urls();
     let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
-    let client = Arc::new((create_client)(&url));
+    let client = Arc::new(ReqwestHttpClient::new(&url));
     let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(RateLimitFeedbackListener::new(
@@ -82,17 +94,19 @@ where
         ));
     let http_transport = HttpTransport::new(
         client,
-        to_transport_request,
-        to_binance_response,
+        Arc::new(to_http_request),
+        Arc::new(from_http_response),
         response_listener,
         request_to_http_endpoint,
         http_endpoints(),
     );
+    let time_sync = Arc::new(TimeSync::default());
     Ok(ConnectorImpl::new(
         rate_limits,
         http_request_weight,
         http_order_count,
         to_unsigned_request,
+        sync_http_timestamp(time_sync),
         Transport::Http(http_transport),
         null_http_signer(),
         credentials,
@@ -100,24 +114,17 @@ where
         vec![],
     ))
 }
-#[allow(clippy::too_many_arguments)]
-pub fn websocket_connector<TClient, ExternalReq, WebsocketReq, WebsocketRes, ExternalRes>(
+#[cfg(feature = "iris")]
+pub(crate) fn websocket_connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
-    create_client: impl Fn(&str, Arc<dyn ListenerTrait<TMessage = WebsocketRes>>) -> TClient,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_transport_request: ArcTryConvertValue<BinanceWebsocketRequest, WebsocketReq>,
-    to_binance_response: ArcTryConvertValue<WebsocketRes, BinanceWebsocketResponse>,
     to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
-    TClient:
-        WebsocketClientTrait<TransportReq = WebsocketReq, TransportRes = WebsocketRes> + 'static,
-    ExternalReq: Send,
-    WebsocketReq: Send,
-    WebsocketRes: Send + 'static,
+    ExternalReq: Send + Sync,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let exchange_urls = exchange_urls();
@@ -130,22 +137,26 @@ where
             Arc::new(ConvertListener::new(to_external_response, listener)),
         ));
     let websocket_listener = Arc::new(WebsocketListener::new(
-        to_binance_response.clone(),
+        Arc::new(from_websocket_response),
         response_listener,
     ));
-    let client = Arc::new((create_client)(&url, websocket_listener.clone()));
+    let client = Arc::new(IrisWebsocketClient::<
+        BinanceWebsocketRequest,
+        BinanceWebsocketResponse,
+    >::new(&url, websocket_listener.clone()));
     let websocket_transport = WebsocketTransport::new(
         client,
-        to_transport_request,
-        to_binance_response,
+        Arc::new(to_websocket_request),
+        Arc::new(from_websocket_response),
         websocket_listener,
     );
+    let time_sync = Arc::new(TimeSync::default());
     let authenticate_legs = if use_session {
         let api_key = match &credentials {
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        vec![authenticate_websocket_leg(api_key)]
+        vec![authenticate_websocket_leg(api_key, time_sync.clone())]
     } else {
         vec![]
     };
@@ -154,12 +165,76 @@ where
         websocket_request_weight,
         websocket_order_count,
         to_unsigned_request,
+        sync_websocket_timestamp(time_sync),
         Transport::Websocket(websocket_transport),
         null_websocket_signer(),
         credentials,
         create_websocket_signer_from_credentials,
         authenticate_legs,
     ))
+}
+
+/// Builds the transport-level HTTP request from the signed exchange-level request
+#[cfg(feature = "reqwest")]
+fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
+    let BinanceSignedParams { params, signature } = request;
+    let mut headers = Vec::new();
+    let (method, query) = match params {
+        BinanceHttpUnsignedRequest::ExchangeInfo(_) => (Method::GET, None),
+        BinanceHttpUnsignedRequest::AssetLimits(params) => (
+            Method::GET,
+            Some(signed_query(params.query_params(true), signature)),
+        ),
+        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
+            let mut params = *params;
+            if let Some(api_key) = params.apiKey.take() {
+                headers.push(("X-MBX-APIKEY".into(), api_key));
+            }
+            (
+                Method::POST,
+                Some(signed_query(params.query_params(true), signature)),
+            )
+        }
+    };
+    Ok(HttpRequest {
+        method,
+        query,
+        headers,
+        body: None,
+    })
+}
+
+#[cfg(feature = "reqwest")]
+fn signed_query(query: String, signature: Option<String>) -> String {
+    match signature {
+        Some(signature) => format!("{query}&signature={signature}"),
+        None => query,
+    }
+}
+
+#[cfg(feature = "reqwest")]
+fn from_http_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
+    if response.status == 200 {
+        let result = serde_json::from_slice(&response.body)
+            .map_err(|error| EGError::External(Box::new(error)))?;
+        Ok(BinanceHttpResponse::Result(result))
+    } else {
+        let error = serde_json::from_slice(&response.body)
+            .map_err(|error| EGError::External(Box::new(error)))?;
+        Ok(BinanceHttpResponse::Error(error))
+    }
+}
+
+#[cfg(feature = "iris")]
+fn to_websocket_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {
+    Ok(request)
+}
+
+#[cfg(feature = "iris")]
+fn from_websocket_response(
+    response: BinanceWebsocketResponse,
+) -> EGResult<BinanceWebsocketResponse> {
+    Ok(response)
 }
 
 fn exchange_urls() -> ExchangeUrls {
@@ -192,6 +267,7 @@ fn http_endpoints() -> HashMap<HttpEndpoint, String> {
 
 fn authenticate_websocket_leg(
     api_key: String,
+    time_sync: Arc<TimeSync>,
 ) -> AuthenticateLeg<
     BinanceWebsocketUnsignedRequest,
     BinanceWebsocketRequest,
@@ -202,27 +278,38 @@ fn authenticate_websocket_leg(
     let create_auth_message = {
         let id = id.clone();
         let api_key = api_key.clone();
-        Arc::new(move || create_auth_message(&id, &api_key))
+        let time_sync = time_sync.clone();
+        Arc::new(move || websocket_auth_message(&id, &api_key, &time_sync))
     };
     let filter = {
         Arc::new(move |response: &BinanceWebsocketResponse| {
             response.id == *id && response.error.is_none() && response.status == 200
         })
     };
+    let create_signer = {
+        let time_sync = time_sync.clone();
+        Arc::new(
+            move |message: BinanceWebsocketResponse| -> EGResult<
+                Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>,
+            > {
+                sync_from_logon_response(&message, &time_sync)?;
+                Ok(Box::new(ConvertSigner::new(websocket_converter)))
+            },
+        )
+    };
     AuthenticateLeg {
         create_auth_message,
-        create_signer: create_signer_from_message,
+        create_signer,
         filter,
         timeout,
     }
 }
-fn create_auth_message(id: &str, api_key: &str) -> BinanceWebsocketUnsignedRequest {
-    let timestamp: i64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("Negative time since epoch")
-        .as_millis()
-        .try_into()
-        .expect("Epoch too large");
+fn websocket_auth_message(
+    id: &str,
+    api_key: &str,
+    time_sync: &TimeSync,
+) -> BinanceWebsocketUnsignedRequest {
+    let timestamp = time_sync.now_millis();
     let params = BinanceLogonParams {
         apiKey: api_key.to_string(),
         timestamp,
@@ -235,10 +322,14 @@ fn create_auth_message(id: &str, api_key: &str) -> BinanceWebsocketUnsignedReque
         params: BinanceWebsocketUnsignedParams::Logon(params),
     }
 }
-fn create_signer_from_message(
-    _message: BinanceWebsocketResponse,
-) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
-    Ok(Box::new(ConvertSigner::new(websocket_converter)))
+fn sync_from_logon_response(
+    message: &BinanceWebsocketResponse,
+    time_sync: &TimeSync,
+) -> EGResult<()> {
+    if let Some(BinanceWebsocketResponseResult::SessionAuthentication(result)) = &message.result {
+        time_sync.sync(result.serverTime);
+    }
+    Ok(())
 }
 
 fn null_http_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
@@ -261,6 +352,55 @@ fn null_websocket_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, Bin
             },
         })
     })
+}
+
+/// Fills in a fresh server-synced `timestamp` and a default `recvWindow` on
+/// every signed HTTP request before it is signed.
+fn sync_http_timestamp(
+    time_sync: Arc<TimeSync>,
+) -> ArcTryConvertValue<BinanceHttpUnsignedRequest, BinanceHttpUnsignedRequest> {
+    Arc::new(move |request| {
+        Ok(match request {
+            BinanceHttpUnsignedRequest::AssetLimits(mut params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+                BinanceHttpUnsignedRequest::AssetLimits(params)
+            }
+            BinanceHttpUnsignedRequest::SpotOrderRequest(mut params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+                BinanceHttpUnsignedRequest::SpotOrderRequest(params)
+            }
+            request @ BinanceHttpUnsignedRequest::ExchangeInfo(..) => request,
+        })
+    })
+}
+
+/// Fills in a fresh server-synced `timestamp` (and default `recvWindow` for
+/// orders) on every signed websocket request before it is signed.
+fn sync_websocket_timestamp(
+    time_sync: Arc<TimeSync>,
+) -> ArcTryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketUnsignedRequest> {
+    Arc::new(move |mut request| {
+        match &mut request.params {
+            BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+            }
+            BinanceWebsocketUnsignedParams::Logon(params) => {
+                params.timestamp = time_sync.now_millis();
+            }
+            BinanceWebsocketUnsignedParams::ExchangeInfo(..) => {}
+        }
+        Ok(request)
+    })
+}
+fn sync_timestamp_fields(
+    timestamp: &mut i64,
+    recv_window: &mut Option<Decimal>,
+    time_sync: &TimeSync,
+) {
+    *timestamp = time_sync.now_millis();
+    if recv_window.is_none() {
+        *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MILLIS));
+    }
 }
 
 fn create_http_signer_from_credentials(
@@ -472,6 +612,7 @@ mod tests {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission, BinanceExchangeInfoResult,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
+        logon::BinanceSessionAuthenticationResult,
         rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
@@ -496,7 +637,7 @@ mod tests {
     #[test]
     fn logon_filter_only_matches_successful_logon_response() {
         let api_key = "api-key";
-        let leg = authenticate_websocket_leg(api_key.into());
+        let leg = authenticate_websocket_leg(api_key.into(), Arc::new(TimeSync::default()));
         let id = (leg.create_auth_message)().metadata.id;
         assert!((leg.filter)(&logon_response(id.clone(), 200, None)));
         assert!(!(leg.filter)(&logon_response(
@@ -791,6 +932,114 @@ mod tests {
                 None,
             ))
             .is_some()
+        );
+    }
+
+    #[test]
+    fn time_sync_applies_server_offset() {
+        let time_sync = TimeSync::default();
+        let local = time_sync.now_millis();
+        time_sync.sync(local + 10_000);
+        let synced = time_sync.now_millis();
+        assert!(synced >= local + 10_000, "synced: {synced}");
+        assert!(synced < local + 10_000 + 60_000, "synced: {synced}");
+    }
+
+    #[test]
+    fn http_sync_timestamp_fills_fresh_timestamp_and_default_recv_window() {
+        let time_sync = Arc::new(TimeSync::default());
+        let before = time_sync.now_millis();
+        let sync = sync_http_timestamp(time_sync);
+        let request = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()));
+        let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) = sync(request).unwrap() else {
+            panic!("expected spot order request");
+        };
+        assert!(
+            synced.timestamp >= before,
+            "timestamp: {}",
+            synced.timestamp
+        );
+        assert_eq!(synced.recvWindow, Some(Decimal::from(5000u64)));
+    }
+
+    #[test]
+    fn http_sync_timestamp_preserves_caller_recv_window() {
+        let time_sync = Arc::new(TimeSync::default());
+        let sync = sync_http_timestamp(time_sync);
+        let mut params = spot_order_params();
+        params.recvWindow = Some(Decimal::from(10_000u64));
+        let request = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(params));
+        let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) = sync(request).unwrap() else {
+            panic!("expected spot order request");
+        };
+        assert_eq!(synced.recvWindow, Some(Decimal::from(10_000u64)));
+    }
+
+    #[test]
+    fn http_sync_timestamp_leaves_exchange_info_unchanged() {
+        let time_sync = Arc::new(TimeSync::default());
+        let sync = sync_http_timestamp(time_sync);
+        let request = BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            permissions: vec![BinanceExchangeInfoPermission::SPOT],
+            symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+        });
+        let synced = sync(request).unwrap();
+        assert!(matches!(
+            synced,
+            BinanceHttpUnsignedRequest::ExchangeInfo(..)
+        ));
+    }
+
+    #[test]
+    fn websocket_sync_timestamp_fills_fresh_timestamp_and_default_recv_window() {
+        let time_sync = Arc::new(TimeSync::default());
+        let before = time_sync.now_millis();
+        let sync = sync_websocket_timestamp(time_sync);
+        let request = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "1".into(),
+                method: BinanceWebsocketMethodName::PlaceOrder,
+            },
+            params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
+        };
+        let synced = sync(request).unwrap();
+        let BinanceWebsocketUnsignedParams::SpotOrderRequest(synced) = synced.params else {
+            panic!("expected spot order request");
+        };
+        assert!(
+            synced.timestamp >= before,
+            "timestamp: {}",
+            synced.timestamp
+        );
+        assert_eq!(synced.recvWindow, Some(Decimal::from(5000u64)));
+    }
+
+    #[test]
+    fn logon_response_syncs_server_time() {
+        let time_sync = Arc::new(TimeSync::default());
+        let leg = authenticate_websocket_leg("api-key".into(), time_sync.clone());
+        let local = time_sync.now_millis();
+        let response = BinanceWebsocketResponse {
+            error: None,
+            id: "id".into(),
+            rateLimits: vec![],
+            result: Some(BinanceWebsocketResponseResult::SessionAuthentication(
+                BinanceSessionAuthenticationResult {
+                    apiKey: "api-key".into(),
+                    authorizedSince: local,
+                    connectedSince: local,
+                    returnRateLimits: false,
+                    serverTime: local + 10_000,
+                    userDataStream: false,
+                },
+            )),
+            status: 200,
+        };
+        let _signer = (leg.create_signer)(response).unwrap();
+        assert!(
+            time_sync.now_millis() >= local + 10_000,
+            "now: {}",
+            time_sync.now_millis()
         );
     }
 }

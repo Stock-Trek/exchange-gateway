@@ -1,7 +1,7 @@
-pub mod http;
+pub(crate) mod http;
 #[cfg(feature = "iris")]
-pub mod iris;
+pub(crate) mod iris;
 #[cfg(feature = "reqwest")]
-pub mod reqwest;
-pub mod transport;
-pub mod websocket;
+pub(crate) mod reqwest;
+pub(crate) mod transport;
+pub(crate) mod websocket;
