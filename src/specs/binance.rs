@@ -480,9 +480,7 @@ fn id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transports::{
-        http::HttpClientTrait, websocket::WebsocketClientTrait,
-    };
+    use crate::transports::{http::HttpClientTrait, websocket::WebsocketClientTrait};
     use async_trait::async_trait;
     use exchange_types::binance::{
         asset_limits::BinanceAssetLimitsParams,
@@ -876,14 +874,10 @@ mod tests {
         > = Arc::new(Ok);
         let to_transport_request: ArcTryConvertValue<BinanceHttpRequest, BinanceHttpRequest> =
             Arc::new(Ok);
-        let to_binance_response: ArcTryConvertValue<
-            BinanceHttpResponse,
-            BinanceHttpResponse,
-        > = Arc::new(Ok);
-        let to_external_response: ArcTryConvertValue<
-            BinanceHttpResponse,
-            BinanceHttpResponse,
-        > = Arc::new(Ok);
+        let to_binance_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
+            Arc::new(Ok);
+        let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
+            Arc::new(Ok);
         http_connector(
             TradingMode::Paper,
             move |_url| {
