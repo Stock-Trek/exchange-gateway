@@ -6,9 +6,15 @@ use crate::{
     transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
+use futures_timer::Delay;
 use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{sync::Arc, time::Duration};
+use std::{
+    future::{Future, poll_fn},
+    sync::Arc,
+    task::Poll,
+    time::Duration,
+};
 
 /// A concrete [`WebsocketClientTrait`] implementation backed by the
 /// [`iris`] crate.
@@ -53,6 +59,28 @@ where
         );
         Self { client, listener }
     }
+
+    /// Sends `message`, failing with [`EGError::TimedOut`] once `delay` fires.
+    ///
+    /// [`send_message`](WebsocketClientTrait::send_message) uses a real
+    /// [`Delay`]; this variant accepts a caller-supplied timer so tests can
+    /// drive the timeout with a paused tokio clock instead of waiting on
+    /// wall-clock time.
+    async fn send_message_with_delay<D>(&self, message: TransportReq, delay: D) -> EGResult<()>
+    where
+        D: Future<Output = ()> + Send + 'static,
+    {
+        let mut send = Box::pin(self.client.send(message));
+        let mut delay = Box::pin(delay);
+        poll_fn(move |cx| match send.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(result.map_err(|e| EGError::External(Box::new(e)))),
+            Poll::Pending => match delay.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Pending => Poll::Pending,
+            },
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -77,10 +105,8 @@ where
     }
 
     async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()> {
-        tokio::time::timeout(timeout, self.client.send(message))
+        self.send_message_with_delay(message, Delay::new(timeout))
             .await
-            .map_err(|_| EGError::TimedOut)?
-            .map_err(|e| EGError::External(Box::new(e)))
     }
 
     async fn on_message(&self, message: Self::TransportRes) -> EGResult<()> {
@@ -383,10 +409,13 @@ mod tests {
             .expect("message should be accepted into the channel");
 
         // Pause the clock and jump it past the timeout so the wedged send is
-        // forced to time out without waiting real time.
+        // forced to time out without waiting real time. The production
+        // `send_message` uses a real [`Delay`], so drive the timeout with a
+        // tokio timer (fine in tests) that is registered against the paused
+        // clock.
         let timeout = Duration::from_secs(1);
         tokio::time::pause();
-        let send = client.send_message(message, timeout);
+        let send = client.send_message_with_delay(message, tokio::time::sleep(timeout));
         tokio::pin!(send);
         // Poll once so the internal timeout timer is registered against the
         // paused clock; the wedged send itself remains pending.
