@@ -54,6 +54,13 @@ jobs:
       - name: Run checks
         run: |
           cargo fmt --check
+          cargo clippy
+          cargo clippy --features iris
+          cargo clippy --features reqwest
+          cargo clippy --features serde
+          cargo clippy --features iris,reqwest
+          cargo clippy --features iris,serde
+          cargo clippy --features reqwest,serde
           cargo clippy --all-features
           cargo test
 
