@@ -1062,10 +1062,13 @@ mod tests {
             BinanceWebsocketResponse,
         > = Arc::new(Ok);
         let auth_gate = Arc::new(AuthGate::default());
+        let rate_limits = rate_limits();
         let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
             Arc::new(ConvertListener::new(to_external_response, listener));
         let websocket_listener = Arc::new(WebsocketListener::new(
             Arc::new(from_websocket_response),
+            websocket_response_feedback,
+            rate_limits.clone(),
             response_listener,
             auth_gate.clone(),
         ));
@@ -1094,7 +1097,7 @@ mod tests {
             time_sync.clone(),
         )];
         Ok(ConnectorImpl::new(
-            rate_limits(),
+            rate_limits,
             websocket_request_weight,
             websocket_order_count,
             to_unsigned_request,
@@ -1175,6 +1178,7 @@ mod tests {
         > = Arc::new(mock_client);
         let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
             Arc::new(ConvertListener::new(to_external_response, listener));
+        let rate_limits = rate_limits();
         let http_transport = HttpTransport::new(
             client,
             Arc::new(Ok),
@@ -1182,10 +1186,12 @@ mod tests {
             response_listener,
             request_to_http_endpoint,
             http_endpoints(),
+            rate_limits.clone(),
+            http_response_feedback,
         );
         let time_sync = Arc::new(TimeSync::default());
         Ok(ConnectorImpl::new(
-            rate_limits(),
+            rate_limits,
             http_request_weight,
             http_order_count,
             to_unsigned_request,
@@ -1226,6 +1232,199 @@ mod tests {
             .await
             .expect("signed send should succeed");
         assert_eq!(client.sent.lock().unwrap().len(), 1);
+    }
+
+    /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone)]
+    enum ScriptedOutcome {
+        /// A server-side 429/418 rejection (not counted against the budget).
+        RateLimited,
+        /// A 4xx/5xx business rejection, e.g. -2010 insufficient balance
+        /// (counted against the budget).
+        HttpError,
+    }
+
+    /// A scripted HTTP client: records every outgoing request and answers
+    /// with a fixed outcome, so send-failure budget behaviour can be tested
+    /// without a network.
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone)]
+    struct ScriptedHttpClient {
+        sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
+        outcome: ScriptedOutcome,
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[async_trait]
+    impl HttpClientTrait for ScriptedHttpClient {
+        type TransportReq = BinanceHttpRequest;
+        type TransportRes = BinanceHttpResponse;
+
+        async fn send_message(
+            &self,
+            _endpoint: &str,
+            message: Self::TransportReq,
+            _timeout: Duration,
+        ) -> EGResult<Self::TransportRes> {
+            self.sent.lock().unwrap().push(message);
+            match self.outcome {
+                ScriptedOutcome::RateLimited => Err(EGError::RateLimited {
+                    feedback: RateLimitFeedback {
+                        throttled: true,
+                        retry_after: Some(Duration::from_millis(50)),
+                        usage: vec![],
+                    },
+                }),
+                ScriptedOutcome::HttpError => Err(EGError::HttpError {
+                    status: 400,
+                    body: br#"{"code":-2010,"msg":"insufficient balance"}"#.to_vec(),
+                }),
+            }
+        }
+    }
+
+    /// Builds an HTTP connector backed by a scripted client answering with
+    /// `outcome`, using the given rate limits so the budget left after a
+    /// failed send can be observed.
+    #[cfg(feature = "reqwest")]
+    fn scripted_http_connector(
+        client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
+        outcome: ScriptedOutcome,
+        rate_limits: RateLimits,
+    ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
+        let credentials = ApiKeyCredentials {
+            api_key: "api-key".into(),
+            secret: SecretString::from("secret"),
+        };
+        let listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(IgnoreHttpListener);
+        let to_unsigned_request: ArcTryConvertValue<
+            BinanceHttpUnsignedRequest,
+            BinanceHttpUnsignedRequest,
+        > = Arc::new(Ok);
+        let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
+            Arc::new(Ok);
+        let scripted_client = ScriptedHttpClient {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            outcome,
+        };
+        let _ = client_handle.send(scripted_client.clone());
+        let client: Arc<
+            dyn HttpClientTrait<
+                    TransportReq = BinanceHttpRequest,
+                    TransportRes = BinanceHttpResponse,
+                >,
+        > = Arc::new(scripted_client);
+        let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(ConvertListener::new(to_external_response, listener));
+        let http_transport = HttpTransport::new(
+            client,
+            Arc::new(Ok),
+            Arc::new(Ok),
+            response_listener,
+            request_to_http_endpoint,
+            http_endpoints(),
+            rate_limits.clone(),
+            http_response_feedback,
+        );
+        let time_sync = Arc::new(TimeSync::default());
+        Ok(ConnectorImpl::new(
+            rate_limits,
+            http_request_weight,
+            http_order_count,
+            to_unsigned_request,
+            sync_http_timestamp(time_sync),
+            Transport::Http(http_transport),
+            null_http_signer(),
+            Some(credentials),
+            create_http_signer_from_credentials,
+            vec![],
+            Arc::new(AuthGate::default()),
+        ))
+    }
+
+    /// A one-slot budget for both weight and orders: a single consumed
+    /// request exhausts the budget until it is refunded.
+    #[cfg(feature = "reqwest")]
+    fn single_slot_rate_limits() -> RateLimits {
+        RateLimits {
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![RateLimitConfig {
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }]),
+        }
+    }
+
+    fn http_spot_order_request() -> BinanceHttpUnsignedRequest {
+        BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()))
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn http_send_keeps_local_reservation_on_business_rejection() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = scripted_http_connector(
+            client_tx,
+            ScriptedOutcome::HttpError,
+            single_slot_rate_limits(),
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+
+        // The order is rejected with a 4xx business error (-2010 etc.), but
+        // Binance counts its weight anyway: the locally-reserved capacity
+        // must not be refunded.
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(
+            result,
+            Err(EGError::HttpError { status: 400, .. })
+        ));
+
+        // The budget stays exhausted, so the next send is rejected locally
+        // and never reaches the transport.
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn http_send_refunds_local_reservation_on_rate_limited() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = scripted_http_connector(
+            client_tx,
+            ScriptedOutcome::RateLimited,
+            single_slot_rate_limits(),
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+
+        // A server-side 429 is not counted against the request-weight budget,
+        // so the locally-reserved capacity is refunded.
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
+
+        // Once the server's Retry-After has elapsed, the refunded budget
+        // admits the next request: it reaches the transport again instead of
+        // being rejected by the local limiter.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 2);
     }
 
     fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
@@ -1305,7 +1504,7 @@ mod tests {
         let result = connector
             .send(exchange_info_request(), false, Duration::from_secs(5))
             .await;
-        assert!(matches!(result, Err(EGError::RateLimited)));
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
     }
 
     #[tokio::test]
