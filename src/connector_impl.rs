@@ -185,21 +185,21 @@ where
             if !self.session_is_stale()? {
                 return Ok(());
             }
-            let completed = match self.auth_gate.acquire()? {
-                AuthGateAcquisition::Waiting(completed) => {
+            let on_complete = match self.auth_gate.acquire()? {
+                AuthGateAcquisition::Waiting(on_complete) => {
                     // Another authentication is already in flight: wait for it
                     // to finish instead of starting a second one, then re-check
                     // whether the session is still stale.
-                    completed.wait().await?;
+                    on_complete.wait().await?;
                     continue;
                 }
-                AuthGateAcquisition::Authenticator(completed) => completed,
+                AuthGateAcquisition::Authenticator(on_complete) => on_complete,
             };
             let result = self.run_authentication(credentials).await;
             // Clear the gate before waking waiters so a waiter that finds the
             // session stale can immediately become the next authenticator.
-            self.auth_gate.release(&completed);
-            completed.notify();
+            self.auth_gate.release(&on_complete);
+            on_complete.notify();
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
