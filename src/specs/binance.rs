@@ -1,4 +1,5 @@
 use crate::{
+    auth_gate::AuthGate,
     authenticate_leg::AuthenticateLeg,
     connector::Connector,
     connector_impl::ConnectorImpl,
@@ -89,6 +90,7 @@ where
         credentials,
         create_http_signer_from_credentials,
         vec![],
+        Arc::new(AuthGate::default()),
     ))
 }
 #[allow(clippy::too_many_arguments)]
@@ -115,9 +117,11 @@ where
     let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
+    let auth_gate = Arc::new(AuthGate::default());
     let websocket_listener = Arc::new(WebsocketListener::new(
         to_binance_response.clone(),
         response_listener,
+        auth_gate.clone(),
     ));
     let client = Arc::new((create_client)(&url, websocket_listener.clone()));
     let websocket_transport = WebsocketTransport::new(
@@ -147,6 +151,7 @@ where
         credentials,
         create_websocket_signer_from_credentials,
         authenticate_legs,
+        auth_gate,
     ))
 }
 

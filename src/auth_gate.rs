@@ -8,7 +8,9 @@ use std::{
 /// Serializes authentication so that at most one authentication runs at a
 /// time: a caller that finds the session stale while another authentication is
 /// in flight waits for it to finish instead of starting a second one. It also
-/// records the connection epoch the current session was authenticated against.
+/// owns the connection epoch: the transport reports (re)connections to the
+/// gate, which bumps the epoch, and the session is stale whenever the epoch it
+/// was authenticated against no longer matches the current one.
 #[derive(Default)]
 pub struct AuthGate {
     state: Mutex<AuthGateState>,
@@ -16,8 +18,11 @@ pub struct AuthGate {
 
 #[derive(Default)]
 pub struct AuthGateState {
+    /// The epoch of the current connection, bumped by [`AuthGate`] itself
+    /// whenever the transport reports a (re)connection.
+    connection_epoch: u64,
     /// The connection epoch the current authenticated session belongs to. The
-    /// session is stale whenever the transport's current epoch differs.
+    /// session is stale whenever this differs from `connection_epoch`.
     authenticated_epoch: u64,
     /// The in-flight authentication's completion signal, if one is running.
     in_flight: Option<AuthCompleted>,
@@ -70,13 +75,31 @@ impl AuthGate {
         }
     }
 
-    /// The connection epoch the current session was authenticated against.
-    pub fn authenticated_epoch(&self) -> EGResult<u64> {
+    /// Records that the transport established a (re)connection, bumping the
+    /// connection epoch and thereby invalidating any session that was
+    /// authenticated against an older one.
+    pub fn on_connection_established(&self) -> EGResult<()> {
+        self.state
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .connection_epoch += 1;
+        Ok(())
+    }
+
+    /// The epoch of the current connection.
+    pub fn connection_epoch(&self) -> EGResult<u64> {
         Ok(self
             .state
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
-            .authenticated_epoch)
+            .connection_epoch)
+    }
+
+    /// Whether the authenticated session belongs to an older connection epoch
+    /// than the current one.
+    pub fn is_stale(&self) -> EGResult<bool> {
+        let state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+        Ok(state.connection_epoch != state.authenticated_epoch)
     }
 
     /// Records the connection epoch the just-completed authentication ran on.

@@ -1,4 +1,5 @@
 use crate::{
+    auth_gate::AuthGate,
     error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
@@ -19,7 +20,7 @@ pub(crate) struct WebsocketListener<TransportRes, EGRes> {
     delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
     next_handler_id: Arc<AtomicU64>,
-    connection_epoch: Arc<AtomicU64>,
+    auth_gate: Arc<AuthGate>,
 }
 
 impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EGRes> {
@@ -29,7 +30,7 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
             .field("delegate", &"<Listener>")
             .field("handlers", &"<Vec<ResponseHandler>>")
             .field("next_handler_id", &self.next_handler_id)
-            .field("connection_epoch", &self.connection_epoch)
+            .field("auth_gate", &self.auth_gate)
             .finish()
     }
 }
@@ -41,17 +42,15 @@ where
     pub fn new(
         converter: ArcTryConvertValue<TransportRes, EGRes>,
         delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+        auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
             converter,
             delegate,
             handlers: Arc::new(Mutex::new(Vec::new())),
             next_handler_id: Arc::new(AtomicU64::new(0)),
-            connection_epoch: Arc::new(AtomicU64::new(0)),
+            auth_gate,
         }
-    }
-    pub fn connection_epoch(&self) -> u64 {
-        self.connection_epoch.load(Ordering::Relaxed)
     }
     pub fn waiter_for_filtered_response(
         &self,
@@ -95,7 +94,7 @@ where
     }
 
     async fn on_connected(&self) -> EGResult<()> {
-        self.connection_epoch.fetch_add(1, Ordering::Relaxed);
+        self.auth_gate.on_connection_established()?;
         self.delegate.on_connected().await
     }
 }

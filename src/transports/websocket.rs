@@ -52,9 +52,6 @@ where
     fn is_connected(&self) -> bool {
         self.client.is_connected()
     }
-    fn connection_epoch(&self) -> u64 {
-        self.websocket_listener.connection_epoch()
-    }
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
         let transport_req = self.try_convert_request(request)?;
         self.client.send_message(transport_req, timeout).await?;

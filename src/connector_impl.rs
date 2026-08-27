@@ -38,7 +38,7 @@ pub struct ConnectorImpl<
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
-    auth_gate: AuthGate,
+    auth_gate: Arc<AuthGate>,
 }
 
 #[async_trait]
@@ -156,6 +156,7 @@ where
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+        auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
             rate_limits,
@@ -169,7 +170,7 @@ where
             create_signer,
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
-            auth_gate: AuthGate::default(),
+            auth_gate,
         }
     }
     /// Runs the authentication legs against the current connection and records
@@ -194,7 +195,7 @@ where
                 }
                 AuthGateAcquisition::Authenticator(completed) => completed,
             };
-            let epoch = self.transport.connection_epoch();
+            let epoch = self.auth_gate.connection_epoch()?;
             let result = self.run_authentication(credentials, epoch).await;
             // Clear the gate before waking waiters so a waiter that finds the
             // session stale can immediately become the next authenticator.
@@ -264,9 +265,7 @@ where
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
             .is_some();
-        Ok(!has_signer
-            || (!self.authenticate_legs.is_empty()
-                && self.transport.connection_epoch() != self.auth_gate.authenticated_epoch()?))
+        Ok(!has_signer || (!self.authenticate_legs.is_empty() && self.auth_gate.is_stale()?))
     }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {
