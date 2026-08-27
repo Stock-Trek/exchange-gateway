@@ -1,3 +1,8 @@
+// The transports are optional features. When not all transports are enabled
+// the dormant transport machinery would otherwise be reported as dead code,
+// so only lint it once every transport is compiled in.
+#![cfg_attr(not(all(feature = "reqwest", feature = "iris")), allow(dead_code))]
+
 pub mod auth_gate;
 pub mod authenticate_leg;
 pub mod connect;
@@ -9,16 +14,12 @@ pub mod functions;
 pub mod listeners;
 pub mod rate_limit;
 pub mod sign;
-pub mod specs;
+mod specs;
 mod time_sync;
-pub mod transports;
+mod transports;
 pub mod urls;
 
 pub mod prelude {
-    #[cfg(feature = "iris")]
-    pub use crate::transports::iris::IrisWebsocketClient;
-    #[cfg(feature = "reqwest")]
-    pub use crate::transports::reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient};
     pub use crate::{
         connect::Connect,
         connector::Connector,
@@ -27,7 +28,6 @@ pub mod prelude {
         error::{EGError, EGResult},
         functions::ArcTryConvertValue,
         listeners::listener::ListenerTrait,
-        transports::{http::HttpClientTrait, websocket::WebsocketClientTrait},
         urls::TradingMode,
     };
 }
