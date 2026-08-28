@@ -171,11 +171,7 @@ where
         // still log on.
         vec![
             time_bootstrap_leg(time_sync.clone(), Duration::from_secs(20)),
-            authenticate_websocket_leg(
-                api_key,
-                time_sync.clone(),
-                Duration::from_secs(20),
-            ),
+            authenticate_websocket_leg(api_key, time_sync.clone(), Duration::from_secs(20)),
         ]
     } else {
         vec![]
@@ -451,9 +447,7 @@ fn time_bootstrap_leg(
         timeout,
     }
 }
-fn websocket_time_bootstrap_message(
-    id: &str,
-) -> BinanceWebsocketUnsignedRequest {
+fn websocket_time_bootstrap_message(id: &str) -> BinanceWebsocketUnsignedRequest {
     BinanceWebsocketUnsignedRequest {
         metadata: BinanceWebsocketMetadata {
             id: id.to_string(),
@@ -1533,7 +1527,11 @@ mod tests {
         // cannot prevent the logon from ever succeeding.
         let authenticate_legs = vec![
             time_bootstrap_leg(time_sync.clone(), logon_timeout),
-            authenticate_websocket_leg(credentials.api_key.clone(), time_sync.clone(), logon_timeout),
+            authenticate_websocket_leg(
+                credentials.api_key.clone(),
+                time_sync.clone(),
+                logon_timeout,
+            ),
         ];
         Ok(ConnectorImpl::new(
             rate_limits.clone(),
@@ -1587,10 +1585,8 @@ mod tests {
             message: Self::TransportReq,
             _timeout: Duration,
         ) -> EGResult<Self::TransportRes> {
-            let is_exchange_info = matches!(
-                message.params,
-                BinanceHttpUnsignedRequest::ExchangeInfo(..)
-            );
+            let is_exchange_info =
+                matches!(message.params, BinanceHttpUnsignedRequest::ExchangeInfo(..));
             self.sent.lock().unwrap().push(message);
             let body = if is_exchange_info {
                 let server_time = TimeSync::default().now_millis() + self.server_time_offset;
@@ -1643,10 +1639,7 @@ mod tests {
         };
         let _ = client_handle.send(mock_client.clone());
         let client: Arc<
-            dyn HttpClientTrait<
-                    TransportReq = BinanceHttpRequest,
-                    TransportRes = HttpResponse,
-                >,
+            dyn HttpClientTrait<TransportReq = BinanceHttpRequest, TransportRes = HttpResponse>,
         > = Arc::new(mock_client);
         let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
             Arc::new(ConvertListener::new(to_external_response, listener));
@@ -1825,12 +1818,7 @@ mod tests {
         let sent = client.sent.lock().unwrap();
         let signed = sent
             .iter()
-            .find(|request| {
-                matches!(
-                    request.params,
-                    BinanceHttpUnsignedRequest::AssetLimits(..)
-                )
-            })
+            .find(|request| matches!(request.params, BinanceHttpUnsignedRequest::AssetLimits(..)))
             .expect("the signed request should have been sent");
         let BinanceHttpUnsignedRequest::AssetLimits(params) = &signed.params else {
             panic!("expected asset limits params");
@@ -2533,14 +2521,9 @@ mod tests {
             // `exchangeInfo` before its logon, so the logons are not the
             // first messages on the wire: collect them by method.
             let sent = client.sent.lock().unwrap();
-            let mut logons = sent
-                .iter()
-                .filter(|message| {
-                    matches!(
-                        message.metadata.method,
-                        BinanceWebsocketMethodName::Logon
-                    )
-                });
+            let mut logons = sent.iter().filter(|message| {
+                matches!(message.metadata.method, BinanceWebsocketMethodName::Logon)
+            });
             (
                 logons.next().unwrap().metadata.id.clone(),
                 logons.next().unwrap().metadata.id.clone(),
