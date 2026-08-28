@@ -463,17 +463,31 @@ mod tests {
         (port, shutdown_tx)
     }
 
+    /// Waits until `connections` has reached `expected`, driving the runtime
+    /// clock forward with `pause`/`advance` instead of sleeping so the
+    /// client's reconnect backoff timers fire without spending wall-clock
+    /// time. The clock is resumed before returning, so the rest of the test
+    /// runs on real time.
     async fn wait_until_connection_count(connections: &Arc<AtomicUsize>, expected: usize) {
-        for _ in 0..200 {
-            if connections.load(Ordering::SeqCst) >= expected {
-                return;
+        tokio::time::pause();
+        let result = async {
+            for _ in 0..200 {
+                if connections.load(Ordering::SeqCst) >= expected {
+                    return Ok(());
+                }
+                // Fire any reconnect backoff timers due in the next window
+                // and let the client's tasks run; the fresh websocket
+                // handshake itself is real I/O and proceeds as usual.
+                tokio::time::advance(Duration::from_millis(10)).await;
+                tokio::task::yield_now().await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            Err(connections.load(Ordering::SeqCst))
         }
-        panic!(
-            "on_connected did not fire {expected} times, fired {} times",
-            connections.load(Ordering::SeqCst)
-        );
+        .await;
+        tokio::time::resume();
+        if let Err(actual) = result {
+            panic!("on_connected did not fire {expected} times, fired {actual} times");
+        }
     }
 
     #[tokio::test]
