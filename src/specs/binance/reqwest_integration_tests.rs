@@ -1,11 +1,9 @@
 use crate::{
-    auth_gate::AuthGate,
     connector::Connector,
-    connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::ArcTryConvertValue,
-    listeners::{convert_listener::ConvertListener, listener::ListenerTrait},
+    listeners::listener::ListenerTrait,
     rate_limit::{
         feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
@@ -13,25 +11,22 @@ use crate::{
     specs::binance::{
         common::rate_limits,
         http::{
-            create_signer_from_credentials, endpoints, null_signer, order_count,
-            request_to_endpoint, request_weight, response_feedback, sync_timestamp,
+            connector_with_client, create_signer_from_credentials, endpoints, null_signer,
+            order_count, request_to_endpoint, request_weight, response_feedback, sync_timestamp,
             time_bootstrap_leg,
         },
     },
     time_sync::TimeSync,
     transports::{
-        http::{HttpClientTrait, HttpTransport},
-        transport::Transport,
+        http::HttpClientTrait,
+        reqwest::{HttpRequest, HttpResponse},
     },
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
     asset_limits::BinanceAssetLimitsParams,
     exchange_info::BinanceOrderType,
-    http::{
-        BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
-        BinanceHttpUnsignedRequest,
-    },
+    http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
     spot::{
         BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
         BinanceSpotOrderParams, BinanceTimeInForce,
@@ -81,23 +76,16 @@ impl ListenerTrait for IgnoreHttpListener {
     }
 }
 
-/// A scripted HTTP client: records every outgoing request and answers `time`
-/// requests with a server clock (the local clock shifted by
-/// `server_time_offset`) and everything else with a bare success, so the
-/// production time bootstrap runs and signed sends can complete without a
-/// network.
 #[derive(Clone)]
 struct MockHttpClient {
-    sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
-    /// The server clock reported by `time` responses, as an offset from the
-    /// local clock, so a skewed server clock can be scripted.
+    sent: Arc<Mutex<Vec<HttpRequest>>>,
     server_time_offset: i64,
 }
 
 #[async_trait]
 impl HttpClientTrait for MockHttpClient {
-    type TransportReq = BinanceHttpRequest;
-    type TransportRes = BinanceHttpResponse;
+    type TransportReq = HttpRequest;
+    type TransportRes = HttpResponse;
 
     async fn send_message(
         &self,
@@ -107,14 +95,11 @@ impl HttpClientTrait for MockHttpClient {
     ) -> EGResult<Self::TransportRes> {
         let is_time = matches!(message.params, BinanceHttpUnsignedRequest::Time(..));
         self.sent.lock().unwrap().push(message);
-        let response = if is_time {
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(BinanceTimeResult {
-                serverTime: TimeSync::default().now_millis() + self.server_time_offset,
-            }))
-        } else {
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(vec![]))
-        };
-        Ok(response)
+        Ok(HttpResponse {
+            status: 200,
+            body: br#"[]"#.to_vec(),
+            headers: vec![],
+        })
     }
 }
 
@@ -144,43 +129,19 @@ fn mock_http_connector(
         server_time_offset,
     };
     let _ = client_handle.send(mock_client.clone());
-    let client: Arc<
-        dyn HttpClientTrait<TransportReq = BinanceHttpRequest, TransportRes = BinanceHttpResponse>,
-    > = Arc::new(mock_client);
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
-    let rate_limits = rate_limits();
-    let http_transport = HttpTransport::new(
+    let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
+        Arc::new(mock_client);
+    connector_with_client(
         client,
-        Arc::new(Ok),
-        Arc::new(Ok),
-        response_listener,
-        request_to_endpoint,
-        endpoints(),
-        rate_limits.clone(),
-        response_feedback,
-    );
-    let time_sync = Arc::new(TimeSync::default());
-    // Mirror the production connector: bootstrap the server clock with the
-    // unsigned GET /api/v3/time before any signed request, so a skewed
-    // server clock cannot produce -1021 rejections.
-    let authenticate_legs = vec![time_bootstrap_leg(
-        time_sync.clone(),
-        Duration::from_secs(20),
-    )];
-    Ok(ConnectorImpl::new(
-        rate_limits,
-        request_weight,
-        order_count,
+        rate_limits(),
         to_unsigned_request,
-        sync_timestamp(time_sync),
-        Transport::Http(http_transport),
-        null_signer(),
+        to_external_response,
+        listener,
         Some(credentials),
         create_signer_from_credentials,
         authenticate_legs,
         Arc::new(AuthGate::default()),
-    ))
+    )
 }
 
 fn asset_limits_request() -> BinanceHttpUnsignedRequest {
@@ -269,14 +230,14 @@ enum ScriptedOutcome {
 /// without a network.
 #[derive(Clone)]
 struct ScriptedHttpClient {
-    sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
+    sent: Arc<Mutex<Vec<HttpRequest>>>,
     outcome: ScriptedOutcome,
 }
 
 #[async_trait]
 impl HttpClientTrait for ScriptedHttpClient {
-    type TransportReq = BinanceHttpRequest;
-    type TransportRes = BinanceHttpResponse;
+    type TransportReq = HttpRequest;
+    type TransportRes = HttpResponse;
 
     async fn send_message(
         &self,
@@ -324,35 +285,16 @@ fn scripted_http_connector(
         outcome,
     };
     let _ = client_handle.send(scripted_client.clone());
-    let client: Arc<
-        dyn HttpClientTrait<TransportReq = BinanceHttpRequest, TransportRes = BinanceHttpResponse>,
-    > = Arc::new(scripted_client);
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
-    let transport = HttpTransport::new(
+    let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
+        Arc::new(scripted_client);
+    connector_with_client(
         client,
-        Arc::new(Ok),
-        Arc::new(Ok),
-        response_listener,
-        request_to_endpoint,
-        endpoints(),
-        rate_limits.clone(),
-        response_feedback,
-    );
-    let time_sync = Arc::new(TimeSync::default());
-    Ok(ConnectorImpl::new(
         rate_limits,
-        request_weight,
-        order_count,
         to_unsigned_request,
-        sync_timestamp(time_sync),
-        Transport::Http(transport),
-        null_signer(),
+        to_external_response,
+        listener,
         Some(credentials),
-        create_signer_from_credentials,
-        vec![],
-        Arc::new(AuthGate::default()),
-    ))
+    )
 }
 
 fn single_slot_rate_limits() -> RateLimits {

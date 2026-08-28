@@ -20,7 +20,10 @@ use crate::{
         sync_timestamp_fields,
     },
     time_sync::TimeSync,
-    transports::{iris::IrisWebsocketClient, transport::Transport, websocket::WebsocketTransport},
+    transports::{
+        iris::IrisWebsocketClient, transport::Transport, websocket::WebsocketClientTrait,
+        websocket::WebsocketTransport,
+    },
     urls::{ExchangeTransportType, TradingMode},
 };
 use exchange_types::binance::{
@@ -49,8 +52,60 @@ where
     ExternalReq: Send + Sync,
     ExternalRes: Clone + Send + Sync + 'static,
 {
-    let exchange_urls = exchange_urls();
-    let url = exchange_urls.url(ExchangeTransportType::Websocket, trading_mode);
+    let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
+    let client_factory = move |websocket_listener: Arc<
+        dyn ListenerTrait<TMessage = BinanceWebsocketResponse>,
+    >|
+          -> Arc<
+        dyn WebsocketClientTrait<
+                TransportReq = BinanceWebsocketRequest,
+                TransportRes = BinanceWebsocketResponse,
+            >,
+    > {
+        let client =
+            IrisWebsocketClient::<BinanceWebsocketRequest, BinanceWebsocketResponse>::with_config(
+                &url,
+                iris_config,
+                websocket_listener,
+            );
+        Arc::new(client)
+    };
+    connector_with_client_factory(
+        client_factory,
+        Duration::from_secs(20),
+        to_unsigned_request,
+        to_external_response,
+        listener,
+        credentials,
+        use_session,
+    )
+}
+
+/// Assembles the production WebSocket connector around an injected client
+/// factory and logon timeout. The client factory receives the internal
+/// response listener (which routes responses, applies rate-limit feedback
+/// and drives the auth gate) so a client can be scripted around the same
+/// wiring the production [`connector`] uses with [`IrisWebsocketClient`].
+pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
+    client_factory: impl FnOnce(
+        Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
+    ) -> Arc<
+        dyn WebsocketClientTrait<
+                TransportReq = BinanceWebsocketRequest,
+                TransportRes = BinanceWebsocketResponse,
+            >,
+    >,
+    logon_timeout: Duration,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+    to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    credentials: Option<ApiKeyCredentials>,
+    use_session: bool,
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
+where
+    ExternalReq: Send + Sync,
+    ExternalRes: Clone + Send + Sync + 'static,
+{
     let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
@@ -62,12 +117,7 @@ where
         response_listener,
         auth_gate.clone(),
     ));
-    let client = Arc::new(IrisWebsocketClient::<
-        BinanceWebsocketRequest,
-        BinanceWebsocketResponse,
-    >::with_config(
-        &url, iris_config, websocket_listener.clone()
-    ));
+    let client = client_factory(websocket_listener.clone());
     let transport = WebsocketTransport::new(
         client,
         Arc::new(to_request),
@@ -80,15 +130,9 @@ where
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        // The logon is signed with a server-synced timestamp, but on a
-        // machine whose clock is skewed beyond the recvWindow the first
-        // logon would itself be rejected with -1021 before any sync could
-        // happen. Bootstrap the sync first with the unsigned `time` method
-        // (which returns the server clock) so a skewed clock can still log
-        // on.
         vec![
             time_bootstrap_leg(time_sync.clone(), Duration::from_secs(20)),
-            authenticate_leg(api_key, time_sync.clone(), Duration::from_secs(20)),
+            authenticate_leg(api_key, time_sync.clone(), logon_timeout),
         ]
     } else {
         vec![]
@@ -108,20 +152,15 @@ where
     ))
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn to_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {
+fn to_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {
     Ok(request)
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn from_response(
-    response: BinanceWebsocketResponse,
-) -> EGResult<BinanceWebsocketResponse> {
+fn from_response(response: BinanceWebsocketResponse) -> EGResult<BinanceWebsocketResponse> {
     Ok(response)
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn authenticate_leg(
+fn authenticate_leg(
     api_key: String,
     time_sync: Arc<TimeSync>,
     timeout: Duration,
@@ -270,9 +309,7 @@ fn sync_from_time_response(
     Ok(())
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn null_signer()
--> ConvertSigner<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
+fn null_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest> {
     ConvertSigner::new(|unsigned| {
         let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
         Ok(BinanceWebsocketRequest {
@@ -285,8 +322,7 @@ pub(crate) fn null_signer()
     })
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn sync_timestamp(
+fn sync_timestamp(
     time_sync: Arc<TimeSync>,
 ) -> ArcTryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketUnsignedRequest> {
     Arc::new(move |mut request| {
@@ -314,8 +350,7 @@ pub(crate) fn sync_timestamp(
     })
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn create_signer_from_credentials(
+fn create_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     let ApiKeyCredentials { secret, .. } = credentials;
@@ -363,10 +398,7 @@ fn converter(unsigned: BinanceWebsocketUnsignedRequest) -> EGResult<BinanceWebso
     Ok(BinanceWebsocketRequest { metadata, params })
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn response_feedback(
-    response: &BinanceWebsocketResponse,
-) -> EGResult<RateLimitFeedback> {
+fn response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitFeedback> {
     let mut feedback = RateLimitFeedback::default();
     feedback
         .usage
@@ -374,8 +406,7 @@ pub(crate) fn response_feedback(
     Ok(feedback)
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
+fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     match &request.params {
         BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 4,
         BinanceWebsocketUnsignedParams::Logon(..) => 2,
@@ -388,16 +419,14 @@ pub(crate) fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     }
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn order_count(request: &BinanceWebsocketUnsignedRequest) -> u32 {
+fn order_count(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     match &request.params {
         BinanceWebsocketUnsignedParams::SpotOrderRequest(..) => 1,
         _ => 0,
     }
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn signature_appender()
+fn signature_appender()
 -> ArcCombineValues<BinanceWebsocketUnsignedRequest, Option<String>, BinanceWebsocketRequest> {
     Arc::new(move |unsigned, signature| {
         let BinanceWebsocketUnsignedRequest {
