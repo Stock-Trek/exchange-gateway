@@ -22,6 +22,7 @@ use crate::{
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::{
+    exchange_info::{BinanceExchangeInfoParams, BinanceExchangeInfoSymbolStatus},
     http::{
         BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
         BinanceHttpUnsignedRequest,
@@ -56,7 +57,6 @@ use {
         http::HttpTransport,
         reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
     },
-    exchange_types::binance::exchange_info::BinanceExchangeInfoParams,
     reqwest::Method,
 };
 
@@ -93,17 +93,17 @@ where
     let rate_limits = rate_limits();
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
+    let time_sync = Arc::new(TimeSync::default());
     let http_transport = HttpTransport::new(
         client,
         Arc::new(to_http_request),
-        Arc::new(from_http_response),
+        sync_from_http_response(time_sync.clone()),
         response_listener,
         request_to_http_endpoint,
         http_endpoints(),
         rate_limits.clone(),
         http_response_feedback,
     );
-    let time_sync = Arc::new(TimeSync::default());
     Ok(ConnectorImpl::new(
         rate_limits,
         http_request_weight,
@@ -163,11 +163,20 @@ where
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        vec![authenticate_websocket_leg(
-            api_key,
-            time_sync.clone(),
-            Duration::from_secs(20),
-        )]
+        // The logon is signed with a server-synced timestamp, but on a
+        // machine whose clock is skewed beyond the `recvWindow` the first
+        // logon would itself be rejected with -1021 before any sync could
+        // happen. Bootstrap the sync first with an unsigned `exchangeInfo`
+        // (whose `serverTime` is the server's clock) so a skewed clock can
+        // still log on.
+        vec![
+            time_bootstrap_leg(time_sync.clone(), Duration::from_secs(20)),
+            authenticate_websocket_leg(
+                api_key,
+                time_sync.clone(),
+                Duration::from_secs(20),
+            ),
+        ]
     } else {
         vec![]
     };
@@ -264,6 +273,25 @@ fn from_http_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     }
 }
 
+/// Parses the raw HTTP response and, whenever it is an `exchangeInfo` result,
+/// records the server's clock so subsequent signed requests are stamped with
+/// a server-accurate timestamp. `exchangeInfo` is unsigned, so it succeeds
+/// even when the local clock is skewed beyond the `recvWindow` — it is the
+/// REST path's bootstrap for time sync.
+#[cfg(feature = "reqwest")]
+fn sync_from_http_response(
+    time_sync: Arc<TimeSync>,
+) -> ArcTryConvertValue<HttpResponse, BinanceHttpResponse> {
+    Arc::new(move |response: HttpResponse| {
+        let parsed = from_http_response(response)?;
+        if let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) = &parsed
+        {
+            time_sync.sync(info.serverTime);
+        }
+        Ok(parsed)
+    })
+}
+
 #[cfg(feature = "iris")]
 fn to_websocket_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {
     Ok(request)
@@ -338,11 +366,11 @@ fn authenticate_websocket_leg(
         let time_sync = time_sync.clone();
         Arc::new(
             move |message: BinanceWebsocketResponse| -> EGResult<
-                Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>,
+                Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
             > {
-                logon_response_error(&message)?;
+                rejected_response_error(&message)?;
                 sync_from_logon_response(&message, &time_sync)?;
-                Ok(Box::new(ConvertSigner::new(websocket_converter)))
+                Ok(Some(Box::new(ConvertSigner::new(websocket_converter))))
             },
         )
     };
@@ -380,10 +408,79 @@ fn sync_from_logon_response(
     Ok(())
 }
 
-/// Converts a rejected logon response into the error the authenticating
-/// caller sees, so a failed `session.logon` surfaces as the exchange's actual
-/// error (e.g. `-2014 API-key format invalid.`) instead of a timeout.
-fn logon_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
+/// An authentication leg that fetches the server's clock over the unsigned
+/// `exchangeInfo` method before the logon, so the logon is signed with a
+/// server-synced timestamp even when the local clock is skewed beyond the
+/// `recvWindow` (a skewed logon would otherwise be rejected with -1021 and
+/// never sync). It does not establish a session, so its signer is left as-is
+/// (`Ok(None)` keeps the signer the previous leg installed).
+fn time_bootstrap_leg(
+    time_sync: Arc<TimeSync>,
+    timeout: Duration,
+) -> AuthenticateLeg<
+    BinanceWebsocketUnsignedRequest,
+    BinanceWebsocketRequest,
+    BinanceWebsocketResponse,
+> {
+    let create_auth_attempt = {
+        Arc::new(move || {
+            // A fresh id per attempt so a response to an earlier attempt
+            // (e.g. one arriving after a reconnect) never resolves a later
+            // attempt's waiter.
+            let id = id();
+            let message = websocket_time_bootstrap_message(&id);
+            let filter: ArcPredicate<BinanceWebsocketResponse> =
+                Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
+            (message, filter)
+        })
+    };
+    let create_signer = {
+        let time_sync = time_sync.clone();
+        Arc::new(
+            move |message: BinanceWebsocketResponse| -> EGResult<
+                Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
+            > {
+                sync_from_exchange_info_response(&message, &time_sync)?;
+                Ok(None)
+            },
+        )
+    };
+    AuthenticateLeg {
+        create_auth_attempt,
+        create_signer,
+        timeout,
+    }
+}
+fn websocket_time_bootstrap_message(
+    id: &str,
+) -> BinanceWebsocketUnsignedRequest {
+    BinanceWebsocketUnsignedRequest {
+        metadata: BinanceWebsocketMetadata {
+            id: id.to_string(),
+            method: BinanceWebsocketMethodName::ExchangeInfo,
+        },
+        params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
+            permissions: vec![],
+            symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+        }),
+    }
+}
+fn sync_from_exchange_info_response(
+    message: &BinanceWebsocketResponse,
+    time_sync: &TimeSync,
+) -> EGResult<()> {
+    rejected_response_error(message)?;
+    if let Some(BinanceWebsocketResponseResult::ExchangeInfo(info)) = &message.result {
+        time_sync.sync(info.serverTime);
+    }
+    Ok(())
+}
+
+/// Converts a rejected authentication response into the error the
+/// authenticating caller sees, so a failed leg (e.g. a `session.logon`
+/// rejected with `-2014 API-key format invalid.`) surfaces as the exchange's
+/// actual error instead of a timeout.
+fn rejected_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
     if let Some(error) = &message.error {
         return Err(EGError::ApiError {
             code: error.code,
@@ -393,7 +490,7 @@ fn logon_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
     if message.status != 200 {
         return Err(EGError::ApiError {
             code: message.status as i64,
-            message: format!("Logon rejected with status {}", message.status),
+            message: format!("Response rejected with status {}", message.status),
         });
     }
     Ok(())
@@ -1211,9 +1308,10 @@ mod tests {
     }
     /// A scripted websocket client: connecting (and reconnecting) reports
     /// `on_connected` to its listener, logon requests are answered with a
-    /// successful response, and every outgoing request is recorded. When a
-    /// [`LogonGate`] is configured, logon responses can be held so an
-    /// authentication can be observed mid-flight.
+    /// successful response, `exchangeInfo` requests with a server clock (the
+    /// local clock shifted by `server_time_offset`), and every outgoing
+    /// request is recorded. When a [`LogonGate`] is configured, logon
+    /// responses can be held so an authentication can be observed mid-flight.
     ///
     /// Like iris, a send while the connection is down (e.g. while the client
     /// is reconnecting) fails fast with `ConnectionClosed` instead of being
@@ -1227,6 +1325,10 @@ mod tests {
         sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
         logon_gate: Option<LogonGate>,
         logon_error: Option<BinanceError>,
+        /// The server clock reported by `exchangeInfo` responses, as an
+        /// offset from the local clock, so a skewed server clock can be
+        /// scripted.
+        server_time_offset: i64,
     }
 
     /// Holds logon responses (when `block` is set) until `release` notifies,
@@ -1271,20 +1373,44 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .push(message.clone());
-            if matches!(message.metadata.method, BinanceWebsocketMethodName::Logon) {
-                if let Some(gate) = &self.logon_gate {
-                    if gate.fail.load(Ordering::SeqCst) {
-                        return Err(EGError::TimedOut);
+            match message.metadata.method {
+                BinanceWebsocketMethodName::Logon => {
+                    if let Some(gate) = &self.logon_gate {
+                        if gate.fail.load(Ordering::SeqCst) {
+                            return Err(EGError::TimedOut);
+                        }
+                        if gate.block.load(Ordering::SeqCst) {
+                            gate.release.notified().await;
+                        }
                     }
-                    if gate.block.load(Ordering::SeqCst) {
-                        gate.release.notified().await;
-                    }
+                    let response = match &self.logon_error {
+                        Some(error) => {
+                            logon_response(message.metadata.id, 401, Some(error.clone()))
+                        }
+                        None => logon_response(message.metadata.id, 200, None),
+                    };
+                    self.listener.on_message(response).await?;
                 }
-                let response = match &self.logon_error {
-                    Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
-                    None => logon_response(message.metadata.id, 200, None),
-                };
-                self.listener.on_message(response).await?;
+                BinanceWebsocketMethodName::ExchangeInfo => {
+                    let response = BinanceWebsocketResponse {
+                        error: None,
+                        id: message.metadata.id,
+                        rateLimits: vec![],
+                        result: Some(BinanceWebsocketResponseResult::ExchangeInfo(
+                            BinanceExchangeInfoResult {
+                                exchangeFilters: vec![],
+                                rateLimits: vec![],
+                                serverTime: TimeSync::default().now_millis()
+                                    + self.server_time_offset,
+                                symbols: vec![],
+                                timezone: "UTC".into(),
+                            },
+                        )),
+                        status: 200,
+                    };
+                    self.listener.on_message(response).await?;
+                }
+                _ => {}
             }
             Ok(())
         }
@@ -1345,7 +1471,9 @@ mod tests {
 
     /// Builds a session-based websocket connector backed by the scripted mock
     /// client, handing the caller a handle to the client so reconnects can be
-    /// simulated.
+    /// simulated. `server_time_offset` shifts the clock the mock's
+    /// `exchangeInfo` responses report, mirroring the production bootstrap
+    /// (an `exchangeInfo` server-time sync before the logon).
     #[cfg(feature = "iris")]
     fn mock_session_connector(
         client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
@@ -1353,6 +1481,7 @@ mod tests {
         logon_error: Option<BinanceError>,
         logon_timeout: Duration,
         listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
+        server_time_offset: i64,
     ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
         let credentials = ApiKeyCredentials {
             api_key: "api-key".into(),
@@ -1383,6 +1512,7 @@ mod tests {
             sent: Arc::new(Mutex::new(Vec::new())),
             logon_gate,
             logon_error,
+            server_time_offset,
         };
         let _ = client_handle.send(mock_client.clone());
         let client: Arc<
@@ -1398,11 +1528,13 @@ mod tests {
             websocket_listener,
         );
         let time_sync = Arc::new(TimeSync::default());
-        let authenticate_legs = vec![authenticate_websocket_leg(
-            credentials.api_key.clone(),
-            time_sync.clone(),
-            logon_timeout,
-        )];
+        // Mirror the production connector: bootstrap the server clock with an
+        // unsigned `exchangeInfo` before the logon, so a skewed server clock
+        // cannot prevent the logon from ever succeeding.
+        let authenticate_legs = vec![
+            time_bootstrap_leg(time_sync.clone(), logon_timeout),
+            authenticate_websocket_leg(credentials.api_key.clone(), time_sync.clone(), logon_timeout),
+        ];
         Ok(ConnectorImpl::new(
             rate_limits.clone(),
             websocket_request_weight,
@@ -1428,19 +1560,26 @@ mod tests {
         }
     }
 
-    /// A scripted HTTP client: records every outgoing request and answers
-    /// with a bare success so signed sends can complete without a network.
+    /// A scripted HTTP client: records every outgoing request. `exchangeInfo`
+    /// requests are answered with a raw `exchangeInfo` body carrying a server
+    /// clock shifted by `server_time_offset`, everything else with a bare
+    /// success, so signed sends can complete without a network and the real
+    /// transport converter (which syncs the clock from `exchangeInfo`) runs.
     #[cfg(feature = "reqwest")]
     #[derive(Clone)]
     struct MockHttpClient {
         sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
+        /// The server clock reported by `exchangeInfo` responses, as an
+        /// offset from the local clock, so a skewed server clock can be
+        /// scripted.
+        server_time_offset: i64,
     }
 
     #[cfg(feature = "reqwest")]
     #[async_trait]
     impl HttpClientTrait for MockHttpClient {
         type TransportReq = BinanceHttpRequest;
-        type TransportRes = BinanceHttpResponse;
+        type TransportRes = HttpResponse;
 
         async fn send_message(
             &self,
@@ -1448,18 +1587,43 @@ mod tests {
             message: Self::TransportReq,
             _timeout: Duration,
         ) -> EGResult<Self::TransportRes> {
+            let is_exchange_info = matches!(
+                message.params,
+                BinanceHttpUnsignedRequest::ExchangeInfo(..)
+            );
             self.sent.lock().unwrap().push(message);
-            Ok(BinanceHttpResponse::Result(
-                BinanceHttpResponseResult::AssetLimits(vec![]),
-            ))
+            let body = if is_exchange_info {
+                let server_time = TimeSync::default().now_millis() + self.server_time_offset;
+                serde_json::to_vec(&BinanceHttpResponse::Result(
+                    BinanceHttpResponseResult::ExchangeInfo(BinanceExchangeInfoResult {
+                        exchangeFilters: vec![],
+                        rateLimits: vec![],
+                        serverTime: server_time,
+                        symbols: vec![],
+                        timezone: "UTC".into(),
+                    }),
+                ))
+                .unwrap()
+            } else {
+                br#"[]"#.to_vec()
+            };
+            Ok(HttpResponse {
+                status: 200,
+                body,
+                headers: vec![],
+            })
         }
     }
 
     /// Builds an HTTP connector backed by the scripted mock client, handing
     /// the caller a handle to the client so sent requests can be inspected.
+    /// `server_time_offset` shifts the clock the mock's `exchangeInfo`
+    /// responses report, mirroring the production converter that syncs the
+    /// server clock from every `exchangeInfo` response.
     #[cfg(feature = "reqwest")]
     fn mock_http_connector(
         client_handle: std::sync::mpsc::Sender<MockHttpClient>,
+        server_time_offset: i64,
     ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
         let credentials = ApiKeyCredentials {
             api_key: "api-key".into(),
@@ -1475,28 +1639,29 @@ mod tests {
             Arc::new(Ok);
         let mock_client = MockHttpClient {
             sent: Arc::new(Mutex::new(Vec::new())),
+            server_time_offset,
         };
         let _ = client_handle.send(mock_client.clone());
         let client: Arc<
             dyn HttpClientTrait<
                     TransportReq = BinanceHttpRequest,
-                    TransportRes = BinanceHttpResponse,
+                    TransportRes = HttpResponse,
                 >,
         > = Arc::new(mock_client);
         let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
             Arc::new(ConvertListener::new(to_external_response, listener));
         let rate_limits = rate_limits();
+        let time_sync = Arc::new(TimeSync::default());
         let http_transport = HttpTransport::new(
             client,
             Arc::new(Ok),
-            Arc::new(Ok),
+            sync_from_http_response(time_sync.clone()),
             response_listener,
             request_to_http_endpoint,
             http_endpoints(),
             rate_limits.clone(),
             http_response_feedback,
         );
-        let time_sync = Arc::new(TimeSync::default());
         Ok(ConnectorImpl::new(
             rate_limits,
             http_request_weight,
@@ -1554,11 +1719,59 @@ mod tests {
         }
     }
 
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_response_syncs_server_time() {
+        let time_sync = Arc::new(TimeSync::default());
+        let local = time_sync.now_millis();
+        let server_time = local + 10_000;
+        let convert = sync_from_http_response(time_sync.clone());
+        let response = HttpResponse {
+            status: 200,
+            body: serde_json::to_vec(&BinanceHttpResponse::Result(
+                BinanceHttpResponseResult::ExchangeInfo(BinanceExchangeInfoResult {
+                    exchangeFilters: vec![],
+                    rateLimits: vec![],
+                    serverTime: server_time,
+                    symbols: vec![],
+                    timezone: "UTC".into(),
+                }),
+            ))
+            .unwrap(),
+            headers: vec![],
+        };
+        let parsed = convert(response).expect("exchangeInfo should parse");
+        assert!(matches!(
+            parsed,
+            BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(..))
+        ));
+        // The server clock must now drive signed timestamps.
+        let synced = time_sync.now_millis();
+        assert!(synced >= server_time, "synced: {synced}");
+        assert!(synced < server_time + 60_000, "synced: {synced}");
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_non_exchange_info_responses_do_not_sync() {
+        let time_sync = Arc::new(TimeSync::default());
+        let convert = sync_from_http_response(time_sync.clone());
+        let response = HttpResponse {
+            status: 200,
+            body: br#"[]"#.to_vec(),
+            headers: vec![],
+        };
+        convert(response).expect("asset limits should parse");
+        // Only exchangeInfo carries the server clock; anything else must not
+        // move the offset.
+        assert_eq!(time_sync.now_millis(), TimeSync::default().now_millis());
+    }
+
     #[tokio::test]
     #[cfg(feature = "reqwest")]
     async fn http_connector_installs_signer_on_connect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
-        let connector = mock_http_connector(client_tx).unwrap();
+        let connector = mock_http_connector(client_tx, 0).unwrap();
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
@@ -1573,6 +1786,65 @@ mod tests {
             .await
             .expect("signed send should succeed");
         assert_eq!(client.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn http_exchange_info_syncs_subsequent_signed_requests() {
+        // The server clock is 10 s ahead of the local clock: without a sync,
+        // every signed request would fall outside the default 5 s recvWindow
+        // and be rejected with -1021 forever.
+        let offset = 10_000;
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = mock_http_connector(client_tx, offset).unwrap();
+        let client = client_rx.recv().unwrap();
+        let local = TimeSync::default().now_millis();
+
+        connector.connect().await.expect("connect should succeed");
+
+        // An unsigned exchangeInfo bootstraps the clock from its serverTime.
+        connector
+            .send(
+                BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                    permissions: vec![],
+                    symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+                }),
+                false,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("exchangeInfo send should succeed");
+
+        // The next signed request must be stamped with the synced clock, not
+        // the raw local clock.
+        connector
+            .send(asset_limits_request(), true, Duration::from_secs(5))
+            .await
+            .expect("signed send should succeed");
+
+        let sent = client.sent.lock().unwrap();
+        let signed = sent
+            .iter()
+            .find(|request| {
+                matches!(
+                    request.params,
+                    BinanceHttpUnsignedRequest::AssetLimits(..)
+                )
+            })
+            .expect("the signed request should have been sent");
+        let BinanceHttpUnsignedRequest::AssetLimits(params) = &signed.params else {
+            panic!("expected asset limits params");
+        };
+        assert!(
+            params.timestamp >= local + offset,
+            "timestamp must be server-synced: {}",
+            params.timestamp
+        );
+        assert!(
+            params.timestamp < local + offset + 60_000,
+            "timestamp must be server-synced: {}",
+            params.timestamp
+        );
     }
 
     /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
@@ -1799,6 +2071,7 @@ mod tests {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
+            0,
         )
         .unwrap();
         let client = client_rx.recv().unwrap();
@@ -1845,6 +2118,7 @@ mod tests {
                 None,
                 Duration::from_secs(20),
                 Arc::new(IgnoreListener),
+                0,
             )
             .unwrap(),
         );
@@ -1932,15 +2206,18 @@ mod tests {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
+            0,
         )
         .unwrap();
 
         connector.connect().await.expect("connect should succeed");
 
-        // The logon consumes 2 of the 6000 weight budget; exchangeInfo costs 4,
-        // so exactly 1499 more requests fit in the remaining 5998. If the logon
-        // weight were not counted, a 1500th request would still fit.
-        for _ in 0..1499 {
+        // Connect consumes 6 of the 6000 weight budget: the server-time
+        // bootstrap exchangeInfo costs 4 and the logon costs 2. exchangeInfo
+        // costs 4, so exactly 1498 more requests fit in the remaining 5994.
+        // If the bootstrap or logon weight were not counted, a 1499th
+        // request would still fit.
+        for _ in 0..1498 {
             connector
                 .send(exchange_info_request(), false, Duration::from_secs(5))
                 .await
@@ -1970,6 +2247,7 @@ mod tests {
             }),
             Duration::from_secs(20),
             listener,
+            0,
         )
         .unwrap();
 
@@ -2011,6 +2289,7 @@ mod tests {
                 None,
                 Duration::from_secs(20),
                 Arc::new(IgnoreListener),
+                0,
             )
             .unwrap(),
         );
@@ -2125,6 +2404,7 @@ mod tests {
                 None,
                 Duration::from_secs(20),
                 Arc::new(IgnoreListener),
+                0,
             )
             .unwrap(),
         );
@@ -2192,6 +2472,7 @@ mod tests {
                 None,
                 Duration::from_millis(50),
                 listener,
+                0,
             )
             .unwrap(),
         );
@@ -2248,8 +2529,22 @@ mod tests {
             .await
             .expect("the retried authentication should send its logon");
         let (initial_logon_id, retried_logon_id) = {
+            // Each authentication now sends a server-time bootstrap
+            // `exchangeInfo` before its logon, so the logons are not the
+            // first messages on the wire: collect them by method.
             let sent = client.sent.lock().unwrap();
-            (sent[0].metadata.id.clone(), sent[1].metadata.id.clone())
+            let mut logons = sent
+                .iter()
+                .filter(|message| {
+                    matches!(
+                        message.metadata.method,
+                        BinanceWebsocketMethodName::Logon
+                    )
+                });
+            (
+                logons.next().unwrap().metadata.id.clone(),
+                logons.next().unwrap().metadata.id.clone(),
+            )
         };
         assert_ne!(
             initial_logon_id, retried_logon_id,
@@ -2382,6 +2677,117 @@ mod tests {
             time_sync.now_millis() >= local + 10_000,
             "now: {}",
             time_sync.now_millis()
+        );
+    }
+
+    #[test]
+    fn time_bootstrap_leg_syncs_server_time_and_keeps_the_signer() {
+        let time_sync = Arc::new(TimeSync::default());
+        let leg = time_bootstrap_leg(time_sync.clone(), Duration::from_secs(20));
+
+        // The attempt is an unsigned `exchangeInfo` whose filter matches only
+        // its own id.
+        let (message, filter) = (leg.create_auth_attempt)();
+        assert!(matches!(
+            message.params,
+            BinanceWebsocketUnsignedParams::ExchangeInfo(..)
+        ));
+        let local = time_sync.now_millis();
+        let response = BinanceWebsocketResponse {
+            error: None,
+            id: message.metadata.id.clone(),
+            rateLimits: vec![],
+            result: Some(BinanceWebsocketResponseResult::ExchangeInfo(
+                BinanceExchangeInfoResult {
+                    exchangeFilters: vec![],
+                    rateLimits: vec![],
+                    serverTime: local + 10_000,
+                    symbols: vec![],
+                    timezone: "UTC".into(),
+                },
+            )),
+            status: 200,
+        };
+        assert!(filter(&response), "the filter must match its own id");
+        let other = BinanceWebsocketResponse {
+            id: "some-other-id".into(),
+            ..response.clone()
+        };
+        assert!(!filter(&other), "the filter must not match other ids");
+
+        // The response syncs the clock and leaves the signer untouched: the
+        // bootstrap must not clobber the credentials signer the logon needs.
+        let signer = (leg.create_signer)(response).expect("bootstrap should be accepted");
+        assert!(signer.is_none(), "bootstrap must not replace the signer");
+        assert!(
+            time_sync.now_millis() >= local + 10_000,
+            "now: {}",
+            time_sync.now_millis()
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "iris")]
+    async fn logon_bootstraps_server_time_before_signing() {
+        // The server clock is 10 s ahead of the local clock: an unsynced
+        // logon would land outside the default 5 s recvWindow and be rejected
+        // with -1021 forever, so the bootstrap must sync the clock before the
+        // logon is signed.
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = mock_session_connector(
+            client_tx,
+            None,
+            None,
+            Duration::from_secs(20),
+            Arc::new(IgnoreListener),
+            10_000,
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+        let local = TimeSync::default().now_millis();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(connector.is_authenticated().unwrap());
+
+        let sent = client.sent.lock().unwrap();
+        // The very first message is the unsigned time bootstrap.
+        assert!(matches!(
+            sent.first().unwrap().metadata.method,
+            BinanceWebsocketMethodName::ExchangeInfo
+        ));
+        let bootstrap_index = sent
+            .iter()
+            .position(|message| {
+                matches!(
+                    message.metadata.method,
+                    BinanceWebsocketMethodName::ExchangeInfo
+                )
+            })
+            .expect("the bootstrap exchangeInfo should be sent");
+        let logon_index = sent
+            .iter()
+            .position(|message| {
+                matches!(message.metadata.method, BinanceWebsocketMethodName::Logon)
+            })
+            .expect("the logon should be sent");
+        assert!(
+            bootstrap_index < logon_index,
+            "the bootstrap must precede the logon"
+        );
+
+        // The logon must be stamped with the server-synced clock.
+        let BinanceWebsocketUnsignedParams::Logon(params) = &sent[logon_index].params.params else {
+            panic!("expected logon params");
+        };
+        assert!(
+            params.timestamp >= local + 10_000,
+            "timestamp: {}",
+            params.timestamp
+        );
+        assert!(
+            params.timestamp < local + 10_000 + 60_000,
+            "timestamp: {}",
+            params.timestamp
         );
     }
 }

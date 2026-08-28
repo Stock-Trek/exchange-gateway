@@ -265,7 +265,12 @@ where
                     return Err(error);
                 }
             };
-            signer = (leg.create_signer)(authentication_response)?;
+            signer = match (leg.create_signer)(authentication_response)? {
+                // A leg that only gathers information (e.g. a server-time
+                // bootstrap) keeps the signer the previous leg installed.
+                Some(next_signer) => next_signer,
+                None => signer,
+            };
         }
         {
             let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
