@@ -124,13 +124,13 @@ where
         {
             Ok(()) => Ok(()),
             Err(error) => {
-                // A server-rejected 429/418 travels back as RateLimited
-                // carrying throttling + usage feedback, which the transport
-                // has already applied to the local limiter: the request
-                // consumed server-side weight and the response reports the
-                // true usage. Other failures never reached the server, so
-                // give the locally-reserved capacity back.
-                if !matches!(&error, EGError::RateLimited { .. }) {
+                // Binance counts request weight even for rejected requests
+                // (-2010/-2015/-1100 etc. surface as HttpError), so a 4xx/5xx
+                // business rejection consumed server-side capacity: keep the
+                // local reservation so the budget tracks true server usage.
+                // Only a server-side 429/418 (RateLimited) is not counted by
+                // the server, so give the locally-reserved capacity back then.
+                if matches!(&error, EGError::RateLimited { .. }) {
                     let _ = self.rate_limits.refund(weight, order_count);
                 }
                 Err(error)

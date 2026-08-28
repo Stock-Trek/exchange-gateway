@@ -1,7 +1,7 @@
 use crate::{
     authenticate_leg::AuthenticateLeg,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::EGResult,
+    error::{EGError, EGResult},
     functions::{ArcCombineValues, ArcTryConvertValue},
     rate_limit::{
         feedback::{RateLimitFeedback, RateLimitUsage},
@@ -63,7 +63,6 @@ use crate::{
     auth_gate::AuthGate,
     connector::Connector,
     connector_impl::ConnectorImpl,
-    error::EGError,
     listeners::convert_listener::ConvertListener,
     listeners::listener::ListenerTrait,
     transports::transport::Transport,
@@ -187,7 +186,9 @@ fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
     let mut headers = Vec::new();
     let (method, query) = match params {
-        BinanceHttpUnsignedRequest::ExchangeInfo(_) => (Method::GET, None),
+        BinanceHttpUnsignedRequest::ExchangeInfo(params) => {
+            (Method::GET, Some(exchange_info_query(&params)))
+        }
         BinanceHttpUnsignedRequest::AssetLimits(params) => (
             Method::GET,
             Some(signed_query(params.query_params(true), signature)),
@@ -217,6 +218,28 @@ fn signed_query(query: String, signature: Option<String>) -> String {
         Some(signature) => format!("{query}&signature={signature}"),
         None => query,
     }
+}
+
+/// Builds the query string for the unsigned `GET /api/v3/exchangeInfo`
+/// endpoint. The caller's `permissions`/`symbolStatus` filters are forwarded
+/// so they reach Binance (an empty `permissions` list is omitted, matching the
+/// REST API's "all symbols" default).
+#[cfg(feature = "reqwest")]
+fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
+    let mut pairs = Vec::new();
+    if !params.permissions.is_empty() {
+        pairs.push(format!(
+            "permissions={}",
+            params
+                .permissions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    pairs.push(format!("symbolStatus={}", params.symbolStatus));
+    pairs.join("&")
 }
 
 #[cfg(feature = "reqwest")]
@@ -289,9 +312,12 @@ fn authenticate_websocket_leg(
         Arc::new(move || websocket_auth_message(&id, &api_key, &time_sync))
     };
     let filter = {
-        Arc::new(move |response: &BinanceWebsocketResponse| {
-            response.id == *id && response.error.is_none() && response.status == 200
-        })
+        // Match any response for this logon id, success or rejection: a
+        // rejected logon must be consumed by the authentication waiter so it
+        // neither leaks to the user's listener nor forces the authenticating
+        // caller to wait out the full timeout. The rejection itself is
+        // surfaced by `create_signer` below.
+        Arc::new(move |response: &BinanceWebsocketResponse| response.id == *id)
     };
     let create_signer = {
         let time_sync = time_sync.clone();
@@ -299,6 +325,7 @@ fn authenticate_websocket_leg(
             move |message: BinanceWebsocketResponse| -> EGResult<
                 Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>,
             > {
+                logon_response_error(&message)?;
                 sync_from_logon_response(&message, &time_sync)?;
                 Ok(Box::new(ConvertSigner::new(websocket_converter)))
             },
@@ -335,6 +362,25 @@ fn sync_from_logon_response(
 ) -> EGResult<()> {
     if let Some(BinanceWebsocketResponseResult::SessionAuthentication(result)) = &message.result {
         time_sync.sync(result.serverTime);
+    }
+    Ok(())
+}
+
+/// Converts a rejected logon response into the error the authenticating
+/// caller sees, so a failed `session.logon` surfaces as the exchange's actual
+/// error (e.g. `-2014 API-key format invalid.`) instead of a timeout.
+fn logon_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
+    if let Some(error) = &message.error {
+        return Err(EGError::ApiError {
+            code: error.code,
+            message: error.msg.clone(),
+        });
+    }
+    if message.status != 200 {
+        return Err(EGError::ApiError {
+            code: message.status as i64,
+            message: format!("Logon rejected with status {}", message.status),
+        });
     }
     Ok(())
 }
@@ -658,12 +704,15 @@ mod tests {
     }
 
     #[test]
-    fn logon_filter_only_matches_successful_logon_response() {
+    fn logon_filter_matches_any_response_for_the_logon_id() {
         let api_key = "api-key";
         let leg = authenticate_websocket_leg(api_key.into(), Arc::new(TimeSync::default()));
         let id = (leg.create_auth_message)().metadata.id;
+        // Success and rejection are both matched, so a rejected logon is
+        // consumed by the authentication waiter instead of leaking to the
+        // user's listener. The rejection itself is surfaced by `create_signer`.
         assert!((leg.filter)(&logon_response(id.clone(), 200, None)));
-        assert!(!(leg.filter)(&logon_response(
+        assert!((leg.filter)(&logon_response(
             id.clone(),
             200,
             Some(BinanceError {
@@ -671,12 +720,42 @@ mod tests {
                 msg: "API-key format invalid.".into(),
             }),
         )));
-        assert!(!(leg.filter)(&logon_response(id.clone(), 401, None)));
+        assert!((leg.filter)(&logon_response(id.clone(), 401, None)));
+        // Responses for other requests do not match.
         assert!(!(leg.filter)(&logon_response(
             "some-other-id".into(),
             200,
             None
         )));
+    }
+
+    #[test]
+    fn logon_signer_surfaces_rejected_logon_error() {
+        let api_key = "api-key";
+        let leg = authenticate_websocket_leg(api_key.into(), Arc::new(TimeSync::default()));
+        let id = (leg.create_auth_message)().metadata.id;
+        // A successful logon response yields a signer.
+        assert!((leg.create_signer)(logon_response(id.clone(), 200, None)).is_ok());
+        // A rejected logon surfaces the exchange's actual error.
+        match (leg.create_signer)(logon_response(
+            id.clone(),
+            401,
+            Some(BinanceError {
+                code: -2014,
+                msg: "API-key format invalid.".into(),
+            }),
+        )) {
+            Err(EGError::ApiError { code, message }) => {
+                assert_eq!(code, -2014);
+                assert_eq!(message, "API-key format invalid.");
+            }
+            _ => panic!("expected ApiError"),
+        }
+        // A non-200 status without an error object is also a rejection.
+        assert!(matches!(
+            (leg.create_signer)(logon_response(id, 503, None)),
+            Err(EGError::ApiError { .. })
+        ));
     }
 
     fn spot_order_params() -> BinanceSpotOrderParams {
@@ -764,6 +843,38 @@ mod tests {
             symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
         });
         assert!(http_unsigned_request_to_bytes(&request).unwrap().is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_query_is_forwarded() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
+        };
+        let http_request = to_http_request(request).unwrap();
+        assert_eq!(http_request.method, Method::GET);
+        assert_eq!(
+            http_request.query.as_deref(),
+            Some("permissions=SPOT&symbolStatus=TRADING")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_omits_empty_permissions() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
+        };
+        let http_request = to_http_request(request).unwrap();
+        assert_eq!(http_request.query.as_deref(), Some("symbolStatus=TRADING"));
     }
 
     #[test]
@@ -974,6 +1085,7 @@ mod tests {
         sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
         logon_gate: Option<LogonGate>,
         pending_logons: Arc<Mutex<Vec<BinanceWebsocketResponse>>>,
+        logon_error: Option<BinanceError>,
     }
 
     /// Holds logon responses (when `block` is set) until `release` notifies,
@@ -1032,19 +1144,25 @@ mod tests {
                         gate.release.notified().await;
                     }
                 }
-                let response = logon_response(message.metadata.id, 200, None);
-                if self.connected.load(Ordering::SeqCst) {
-                    self.listener.on_message(response).await?;
-                } else {
-                    // While the connection is down iris queues the request
-                    // and delivers it on the fresh connection; hold the
-                    // response until the client reconnects so the waiter
-                    // stays pending, as it would on a live socket.
-                    self.pending_logons
-                        .lock()
-                        .expect("mutex should not be poisoned")
-                        .push(response);
-                }
+                let response = match &self.logon_error {
+                    Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
+                    None => {
+                        let response = logon_response(message.metadata.id, 200, None);
+                        if self.connected.load(Ordering::SeqCst) {
+                            self.listener.on_message(response).await?;
+                        } else {
+                            // While the connection is down iris queues the request
+                            // and delivers it on the fresh connection; hold the
+                            // response until the client reconnects so the waiter
+                            // stays pending, as it would on a live socket.
+                            self.pending_logons
+                                .lock()
+                                .expect("mutex should not be poisoned")
+                                .push(response);
+                        }
+                    }
+                };
+                self.listener.on_message(response).await?;
             }
             Ok(())
         }
@@ -1063,6 +1181,29 @@ mod tests {
         type TMessage = BinanceWebsocketResponse;
 
         async fn on_message(&self, _message: BinanceWebsocketResponse) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    /// Records every message forwarded to it, so tests can assert that
+    /// internal traffic (e.g. a rejected logon) is not leaked to the user's
+    /// listener.
+    #[cfg(feature = "iris")]
+    #[derive(Clone)]
+    struct RecordingListener {
+        received: Arc<Mutex<Vec<BinanceWebsocketResponse>>>,
+    }
+
+    #[async_trait]
+    #[cfg(feature = "iris")]
+    impl ListenerTrait for RecordingListener {
+        type TMessage = BinanceWebsocketResponse;
+
+        async fn on_message(&self, message: BinanceWebsocketResponse) -> EGResult<()> {
+            self.received
+                .lock()
+                .map_err(|_| EGError::MutexPoisoned)?
+                .push(message);
             Ok(())
         }
     }
@@ -1087,13 +1228,13 @@ mod tests {
     fn mock_session_connector(
         client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
         logon_gate: Option<LogonGate>,
+        logon_error: Option<BinanceError>,
+        listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
     ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
         let credentials = ApiKeyCredentials {
             api_key: "api-key".into(),
             secret: SecretString::from("secret"),
         };
-        let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-            Arc::new(IgnoreListener);
         let to_unsigned_request: ArcTryConvertValue<
             BinanceWebsocketUnsignedRequest,
             BinanceWebsocketUnsignedRequest,
@@ -1119,6 +1260,7 @@ mod tests {
             sent: Arc::new(Mutex::new(Vec::new())),
             logon_gate,
             pending_logons: Arc::new(Mutex::new(Vec::new())),
+            logon_error,
         };
         let _ = client_handle.send(mock_client.clone());
         let client: Arc<
@@ -1276,6 +1418,199 @@ mod tests {
         assert_eq!(client.sent.lock().unwrap().len(), 1);
     }
 
+    /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone)]
+    enum ScriptedOutcome {
+        /// A server-side 429/418 rejection (not counted against the budget).
+        RateLimited,
+        /// A 4xx/5xx business rejection, e.g. -2010 insufficient balance
+        /// (counted against the budget).
+        HttpError,
+    }
+
+    /// A scripted HTTP client: records every outgoing request and answers
+    /// with a fixed outcome, so send-failure budget behaviour can be tested
+    /// without a network.
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone)]
+    struct ScriptedHttpClient {
+        sent: Arc<Mutex<Vec<BinanceHttpRequest>>>,
+        outcome: ScriptedOutcome,
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[async_trait]
+    impl HttpClientTrait for ScriptedHttpClient {
+        type TransportReq = BinanceHttpRequest;
+        type TransportRes = BinanceHttpResponse;
+
+        async fn send_message(
+            &self,
+            _endpoint: &str,
+            message: Self::TransportReq,
+            _timeout: Duration,
+        ) -> EGResult<Self::TransportRes> {
+            self.sent.lock().unwrap().push(message);
+            match self.outcome {
+                ScriptedOutcome::RateLimited => Err(EGError::RateLimited {
+                    feedback: RateLimitFeedback {
+                        throttled: true,
+                        retry_after: Some(Duration::from_millis(50)),
+                        usage: vec![],
+                    },
+                }),
+                ScriptedOutcome::HttpError => Err(EGError::HttpError {
+                    status: 400,
+                    body: br#"{"code":-2010,"msg":"insufficient balance"}"#.to_vec(),
+                }),
+            }
+        }
+    }
+
+    /// Builds an HTTP connector backed by a scripted client answering with
+    /// `outcome`, using the given rate limits so the budget left after a
+    /// failed send can be observed.
+    #[cfg(feature = "reqwest")]
+    fn scripted_http_connector(
+        client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
+        outcome: ScriptedOutcome,
+        rate_limits: RateLimits,
+    ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
+        let credentials = ApiKeyCredentials {
+            api_key: "api-key".into(),
+            secret: SecretString::from("secret"),
+        };
+        let listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(IgnoreHttpListener);
+        let to_unsigned_request: ArcTryConvertValue<
+            BinanceHttpUnsignedRequest,
+            BinanceHttpUnsignedRequest,
+        > = Arc::new(Ok);
+        let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
+            Arc::new(Ok);
+        let scripted_client = ScriptedHttpClient {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            outcome,
+        };
+        let _ = client_handle.send(scripted_client.clone());
+        let client: Arc<
+            dyn HttpClientTrait<
+                    TransportReq = BinanceHttpRequest,
+                    TransportRes = BinanceHttpResponse,
+                >,
+        > = Arc::new(scripted_client);
+        let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+            Arc::new(ConvertListener::new(to_external_response, listener));
+        let http_transport = HttpTransport::new(
+            client,
+            Arc::new(Ok),
+            Arc::new(Ok),
+            response_listener,
+            request_to_http_endpoint,
+            http_endpoints(),
+            rate_limits.clone(),
+            http_response_feedback,
+        );
+        let time_sync = Arc::new(TimeSync::default());
+        Ok(ConnectorImpl::new(
+            rate_limits,
+            http_request_weight,
+            http_order_count,
+            to_unsigned_request,
+            sync_http_timestamp(time_sync),
+            Transport::Http(http_transport),
+            null_http_signer(),
+            Some(credentials),
+            create_http_signer_from_credentials,
+            vec![],
+            Arc::new(AuthGate::default()),
+        ))
+    }
+
+    /// A one-slot budget for both weight and orders: a single consumed
+    /// request exhausts the budget until it is refunded.
+    #[cfg(feature = "reqwest")]
+    fn single_slot_rate_limits() -> RateLimits {
+        RateLimits {
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![RateLimitConfig {
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }]),
+        }
+    }
+
+    fn http_spot_order_request() -> BinanceHttpUnsignedRequest {
+        BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()))
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn http_send_keeps_local_reservation_on_business_rejection() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = scripted_http_connector(
+            client_tx,
+            ScriptedOutcome::HttpError,
+            single_slot_rate_limits(),
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+
+        // The order is rejected with a 4xx business error (-2010 etc.), but
+        // Binance counts its weight anyway: the locally-reserved capacity
+        // must not be refunded.
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(
+            result,
+            Err(EGError::HttpError { status: 400, .. })
+        ));
+
+        // The budget stays exhausted, so the next send is rejected locally
+        // and never reaches the transport.
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn http_send_refunds_local_reservation_on_rate_limited() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = scripted_http_connector(
+            client_tx,
+            ScriptedOutcome::RateLimited,
+            single_slot_rate_limits(),
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+
+        // A server-side 429 is not counted against the request-weight budget,
+        // so the locally-reserved capacity is refunded.
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
+
+        // Once the server's Retry-After has elapsed, the refunded budget
+        // admits the next request: it reaches the transport again instead of
+        // being rejected by the local limiter.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let result = connector
+            .send(http_spot_order_request(), false, Duration::from_secs(5))
+            .await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 2);
+    }
+
     fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
         BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
@@ -1299,7 +1634,8 @@ mod tests {
     #[cfg(feature = "iris")]
     async fn reauthenticates_after_reconnect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
-        let connector = mock_session_connector(client_tx, None).unwrap();
+        let connector =
+            mock_session_connector(client_tx, None, None, Arc::new(IgnoreListener)).unwrap();
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
@@ -1432,7 +1768,8 @@ mod tests {
     #[cfg(feature = "iris")]
     async fn logon_weight_counts_against_weight_rate_limit() {
         let (client_tx, _client_rx) = std::sync::mpsc::channel();
-        let connector = mock_session_connector(client_tx, None).unwrap();
+        let connector =
+            mock_session_connector(client_tx, None, None, Arc::new(IgnoreListener)).unwrap();
 
         connector.connect().await.expect("connect should succeed");
 
@@ -1448,7 +1785,49 @@ mod tests {
         let result = connector
             .send(exchange_info_request(), false, Duration::from_secs(5))
             .await;
-        assert!(matches!(result, Err(EGError::RateLimited { feedback: _ })));
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "iris")]
+    async fn rejected_logon_fails_connect_and_does_not_leak_to_listener() {
+        let (client_tx, _client_rx) = std::sync::mpsc::channel();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+            Arc::new(RecordingListener {
+                received: received.clone(),
+            });
+        let connector = mock_session_connector(
+            client_tx,
+            None,
+            Some(BinanceError {
+                code: -2014,
+                msg: "API-key format invalid.".into(),
+            }),
+            listener,
+        )
+        .unwrap();
+
+        // The rejected logon must surface as the exchange's actual error
+        // (not EGError::TimedOut after the full 20 s logon timeout) and fail
+        // promptly.
+        let error = tokio::time::timeout(Duration::from_secs(1), connector.connect())
+            .await
+            .expect("rejected logon should fail quickly, not time out")
+            .expect_err("connect should fail");
+        match error {
+            EGError::ApiError { code, message } => {
+                assert_eq!(code, -2014);
+                assert_eq!(message, "API-key format invalid.");
+            }
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+        // The internal session.logon rejection must not be forwarded to the
+        // user's delegate listener.
+        assert!(
+            received.lock().unwrap().is_empty(),
+            "rejected logon must not leak to the delegate listener"
+        );
     }
 
     #[tokio::test]
@@ -1460,8 +1839,15 @@ mod tests {
             release: Arc::new(tokio::sync::Notify::new()),
             fail: Arc::new(AtomicBool::new(false)),
         };
-        let connector =
-            Arc::new(mock_session_connector(client_tx, Some(logon_gate.clone())).unwrap());
+        let connector = Arc::new(
+            mock_session_connector(
+                client_tx,
+                Some(logon_gate.clone()),
+                None,
+                Arc::new(IgnoreListener),
+            )
+            .unwrap(),
+        );
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
