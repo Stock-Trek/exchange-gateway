@@ -60,10 +60,21 @@ impl RateLimiterState {
     /// when the locally hard-coded weight or limit has drifted. The refill
     /// window restarts from now. An absent limit keeps the configured limit
     /// and only trims remaining capacity down to `limit - used`.
+    ///
+    /// While a throttle is pending the bucket stays empty: usage feedback
+    /// must not repopulate it, or a limit-carrying response arriving inside
+    /// the throttle window (e.g. a concurrent `exchangeInfo` or WebSocket
+    /// `rateLimits` while a 429/`Retry-After` is active) would instantly
+    /// grant `limit - used` once the deadline elapses instead of refilling
+    /// from zero. The new limit is still adopted so the refill uses it.
     pub fn sync_usage(&mut self, used: u32, limit: Option<u32>) {
         if let Some(limit) = limit {
             self.capacity_per_interval = limit;
-            self.current_capacity = self.capacity_per_interval.saturating_sub(used.min(limit));
+            if self.throttled_until.is_some() {
+                self.current_capacity = 0;
+            } else {
+                self.current_capacity = self.capacity_per_interval.saturating_sub(used.min(limit));
+            }
         } else {
             let remaining = self
                 .capacity_per_interval
@@ -177,6 +188,33 @@ mod tests {
         state.throttle(Instant::now() + Duration::from_secs(60));
         state.sync_usage(0, Some(10));
         assert!(!state.did_consume(10));
+    }
+
+    #[test]
+    fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
+        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 6000);
+        state.throttle(Instant::now() + Duration::from_millis(20));
+        // Limit-carrying usage arriving inside the throttle window (e.g. a
+        // concurrent exchangeInfo response while a 429/Retry-After is active)
+        // must not repopulate the bucket: it stays empty and refills from
+        // zero after the deadline instead of instantly granting limit - used.
+        state.sync_usage(1200, Some(6000));
+        std::thread::sleep(Duration::from_millis(30));
+        // Throttle elapsed, but the 60s refill window has barely started:
+        // the bucket must not grant the full remaining quota at once.
+        assert!(!state.did_consume(4800));
+        assert!(!state.did_consume(1));
+    }
+
+    #[test]
+    fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
+        let mut state = RateLimiterState::new(Duration::from_millis(10).as_nanos(), 6000);
+        state.throttle(Instant::now() + Duration::from_millis(20));
+        state.sync_usage(1200, Some(6000));
+        std::thread::sleep(Duration::from_millis(50));
+        // The bucket refills from the throttle deadline up to the newly
+        // reported limit rather than staying stuck at zero.
+        assert!(state.did_consume(6000));
     }
 
     #[test]
