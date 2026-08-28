@@ -20,15 +20,17 @@ impl DataSignerTrait for Ed25519Signer {
 
 #[cfg(test)]
 mod tests {
-    use ed25519_compact::{KeyPair, Seed};
+    use crate::sign::encrypt::{data_signer::DataSignerTrait, ed25519::Ed25519Signer};
+    use ed25519_compact::{KeyPair, Seed, Signature};
 
     #[test]
-    fn ed25519() {
-        let seed = Seed::generate();
-        let key_pair = KeyPair::from_seed(seed);
+    fn signature_verifies_with_the_public_key() {
+        let key_pair = KeyPair::from_seed(Seed::generate());
+        let signer = Ed25519Signer::new(key_pair.sk);
         let msg = b"hello world";
-        let sig = key_pair.sk.sign(msg, None);
+        let sig = signer.sign(msg).unwrap();
         assert_eq!(sig.len(), 64);
-        key_pair.pk.verify(msg, &sig).unwrap();
+        let parsed = Signature::from_slice(&sig).unwrap();
+        key_pair.pk.verify(msg, &parsed).unwrap();
     }
 }
