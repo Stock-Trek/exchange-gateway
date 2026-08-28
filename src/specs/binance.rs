@@ -225,7 +225,9 @@ fn signed_query(query: String, signature: Option<String>) -> String {
 /// so they reach Binance (an empty `permissions` list is omitted, matching the
 /// REST API's "all symbols" default).
 #[cfg(feature = "reqwest")]
-fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
+fn exchange_info_query(
+    params: &exchange_types::binance::exchange_info::BinanceExchangeInfoParams,
+) -> String {
     let mut pairs = Vec::new();
     if !params.permissions.is_empty() {
         pairs.push(format!(
@@ -1146,23 +1148,20 @@ mod tests {
                 }
                 let response = match &self.logon_error {
                     Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
-                    None => {
-                        let response = logon_response(message.metadata.id, 200, None);
-                        if self.connected.load(Ordering::SeqCst) {
-                            self.listener.on_message(response).await?;
-                        } else {
-                            // While the connection is down iris queues the request
-                            // and delivers it on the fresh connection; hold the
-                            // response until the client reconnects so the waiter
-                            // stays pending, as it would on a live socket.
-                            self.pending_logons
-                                .lock()
-                                .expect("mutex should not be poisoned")
-                                .push(response);
-                        }
-                    }
+                    None => logon_response(message.metadata.id, 200, None),
                 };
-                self.listener.on_message(response).await?;
+                if self.connected.load(Ordering::SeqCst) {
+                    self.listener.on_message(response).await?;
+                } else {
+                    // While the connection is down iris queues the request
+                    // and delivers it on the fresh connection; hold the
+                    // response until the client reconnects so the waiter
+                    // stays pending, as it would on a live socket.
+                    self.pending_logons
+                        .lock()
+                        .expect("mutex should not be poisoned")
+                        .push(response);
+                }
             }
             Ok(())
         }
@@ -1673,7 +1672,9 @@ mod tests {
     #[cfg(feature = "iris")]
     async fn sends_during_a_drop_reauthenticate_before_the_order_is_queued() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
-        let connector = Arc::new(mock_session_connector(client_tx, None).unwrap());
+        let connector = Arc::new(
+            mock_session_connector(client_tx, None, None, Arc::new(IgnoreListener)).unwrap(),
+        );
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
@@ -1952,8 +1953,15 @@ mod tests {
             release: Arc::new(tokio::sync::Notify::new()),
             fail: Arc::new(AtomicBool::new(false)),
         };
-        let connector =
-            Arc::new(mock_session_connector(client_tx, Some(logon_gate.clone())).unwrap());
+        let connector = Arc::new(
+            mock_session_connector(
+                client_tx,
+                Some(logon_gate.clone()),
+                None,
+                Arc::new(IgnoreListener),
+            )
+            .unwrap(),
+        );
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
