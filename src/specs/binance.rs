@@ -1022,12 +1022,14 @@ mod tests {
     }
 
     /// Holds logon responses (when `block` is set) until `release` notifies,
-    /// letting a test keep an authentication in flight.
+    /// letting a test keep an authentication in flight. When `fail` is set,
+    /// logon requests fail immediately instead of being answered.
     #[cfg(feature = "iris")]
     #[derive(Clone)]
     struct LogonGate {
         block: Arc<AtomicBool>,
         release: Arc<tokio::sync::Notify>,
+        fail: Arc<AtomicBool>,
     }
 
     #[cfg(feature = "iris")]
@@ -1053,10 +1055,13 @@ mod tests {
                 .expect("mutex should not be poisoned")
                 .push(message.clone());
             if matches!(message.metadata.method, BinanceWebsocketMethodName::Logon) {
-                if let Some(gate) = &self.logon_gate
-                    && gate.block.load(Ordering::SeqCst)
-                {
-                    gate.release.notified().await;
+                if let Some(gate) = &self.logon_gate {
+                    if gate.fail.load(Ordering::SeqCst) {
+                        return Err(EGError::TimedOut);
+                    }
+                    if gate.block.load(Ordering::SeqCst) {
+                        gate.release.notified().await;
+                    }
                 }
                 let response = match &self.logon_error {
                     Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
@@ -1180,7 +1185,7 @@ mod tests {
             time_sync.clone(),
         )];
         Ok(ConnectorImpl::new(
-            rate_limits,
+            rate_limits.clone(),
             websocket_request_weight,
             websocket_order_count,
             to_unsigned_request,
@@ -1448,6 +1453,7 @@ mod tests {
         let logon_gate = LogonGate {
             block: Arc::new(AtomicBool::new(false)),
             release: Arc::new(tokio::sync::Notify::new()),
+            fail: Arc::new(AtomicBool::new(false)),
         };
         let connector = Arc::new(
             mock_session_connector(
@@ -1551,6 +1557,57 @@ mod tests {
             })
             .count();
         assert_eq!(order_count, 3);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "iris")]
+    async fn failed_reauthentication_keeps_the_session_stale() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let logon_gate = LogonGate {
+            block: Arc::new(AtomicBool::new(false)),
+            release: Arc::new(tokio::sync::Notify::new()),
+            fail: Arc::new(AtomicBool::new(false)),
+        };
+        let connector =
+            Arc::new(mock_session_connector(client_tx, Some(logon_gate.clone())).unwrap());
+        let client = client_rx.recv().unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(connector.is_authenticated().unwrap());
+
+        // Simulate the connection dropping and the iris client reconnecting.
+        client.connected.store(false, Ordering::SeqCst);
+        client.connect().await.expect("reconnect should succeed");
+        assert!(!connector.is_authenticated().unwrap());
+
+        // Make the next logon fail (e.g. expired/bad key or a transient
+        // timeout).
+        logon_gate.fail.store(true, Ordering::SeqCst);
+
+        // The failed re-authentication must not mark the session as
+        // authenticated: the connector stays unauthenticated and the next
+        // signed send retries the logon instead of going out on a connection
+        // that was never logged in.
+        let error = connector
+            .send(order_request(), true, Duration::from_secs(5))
+            .await
+            .expect_err("send must fail when re-authentication fails");
+        assert!(matches!(error, EGError::TimedOut));
+        assert!(!connector.is_authenticated().unwrap());
+
+        // Once the logon succeeds again, the next signed send re-authenticates
+        // and goes out normally.
+        logon_gate.fail.store(false, Ordering::SeqCst);
+        connector
+            .send(order_request(), true, Duration::from_secs(5))
+            .await
+            .expect("send should succeed once re-authentication succeeds");
+        assert!(connector.is_authenticated().unwrap());
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 3);
+        assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
+            message.metadata.method,
+            BinanceWebsocketMethodName::PlaceOrder
+        )));
     }
 
     #[test]
