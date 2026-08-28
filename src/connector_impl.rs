@@ -236,8 +236,12 @@ where
     async fn run_authentication(&self, credentials: &TCredentials) -> EGResult<()> {
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
-            let (signed_auth_message, weight, order_count) = {
-                let auth_message = (leg.create_auth_message)();
+            // Each attempt creates its message and response filter together,
+            // so a retry binds its waiter to a fresh request id instead of
+            // reusing the previous attempt's (which may still be queued in
+            // the transport's outbound channel after a timeout).
+            let (signed_auth_message, weight, order_count, filter) = {
+                let (auth_message, filter) = (leg.create_auth_attempt)();
                 self.check_rate_limits(&auth_message)?;
                 let weight = (self.to_weight)(&auth_message);
                 let order_count = (self.to_order_count)(&auth_message);
@@ -248,11 +252,11 @@ where
                         return Err(error);
                     }
                 };
-                (signed_auth_message, weight, order_count)
+                (signed_auth_message, weight, order_count, filter)
             };
             let authentication_response = match self
                 .transport
-                .send_and_wait_for(signed_auth_message, leg.timeout, leg.filter.clone())
+                .send_and_wait_for(signed_auth_message, leg.timeout, filter)
                 .await
             {
                 Ok(authentication_response) => authentication_response,
