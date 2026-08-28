@@ -1,5 +1,5 @@
 use crate::rate_limit::rate_limit_type::RateLimitType;
-use std::time::Instant;
+use tokio::time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiterState {
@@ -109,7 +109,7 @@ impl RateLimiterState {
             self.throttled_until = None;
             self.last_calculation = throttled_until;
         }
-        let elapsed_nanos = now.duration_since(self.last_calculation).as_nanos();
+        let elapsed_nanos = (now - self.last_calculation).as_nanos();
         let total_nanos = self.excess_interval_nanos + elapsed_nanos;
         let complete_intervals = total_nanos / self.interval_nanos;
         if complete_intervals > 0 {
@@ -141,15 +141,15 @@ mod tests {
         assert!(!state.did_consume(1));
     }
 
-    #[test]
-    fn throttle_expires_and_refills_from_deadline() {
+    #[tokio::test(start_paused = true)]
+    async fn throttle_expires_and_refills_from_deadline() {
         let mut state = RateLimiterState::new(
             RateLimitType::RequestWeight,
             Duration::from_millis(10).as_nanos(),
             10,
         );
         state.throttle(Instant::now() + Duration::from_millis(20));
-        std::thread::sleep(Duration::from_millis(30));
+        tokio::time::advance(Duration::from_millis(30)).await;
         // Bucket refills from the throttle deadline, so capacity returns.
         assert!(state.did_consume(10));
     }
@@ -210,8 +210,8 @@ mod tests {
         assert!(!state.did_consume(10));
     }
 
-    #[test]
-    fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
+    #[tokio::test(start_paused = true)]
+    async fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
         let mut state = RateLimiterState::new(
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
@@ -223,15 +223,15 @@ mod tests {
         // must not repopulate the bucket: it stays empty and refills from
         // zero after the deadline instead of instantly granting limit - used.
         state.sync_usage(Some(1200), Some(6000));
-        std::thread::sleep(Duration::from_millis(30));
+        tokio::time::advance(Duration::from_millis(30)).await;
         // Throttle elapsed, but the 60s refill window has barely started:
         // the bucket must not grant the full remaining quota at once.
         assert!(!state.did_consume(4800));
         assert!(!state.did_consume(1));
     }
 
-    #[test]
-    fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
+    #[tokio::test(start_paused = true)]
+    async fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
         let mut state = RateLimiterState::new(
             RateLimitType::RequestWeight,
             Duration::from_millis(10).as_nanos(),
@@ -239,7 +239,7 @@ mod tests {
         );
         state.throttle(Instant::now() + Duration::from_millis(20));
         state.sync_usage(Some(1200), Some(6000));
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::advance(Duration::from_millis(50)).await;
         // The bucket refills from the throttle deadline up to the newly
         // reported limit rather than staying stuck at zero.
         assert!(state.did_consume(6000));

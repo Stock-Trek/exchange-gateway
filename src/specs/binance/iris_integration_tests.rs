@@ -242,15 +242,27 @@ fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
         .count()
 }
 
-/// Polls `condition` until it holds, with a generous deadline.
+/// Polls `condition` until it holds, with a generous deadline. The runtime
+/// clock is driven forward with `pause`/`advance` instead of sleeping so
+/// timers fire without spending wall-clock time; it is resumed before
+/// returning so the rest of the test runs on real time.
 async fn wait_until(mut condition: impl FnMut() -> bool) -> Option<()> {
-    for _ in 0..500 {
-        if condition() {
-            return Some(());
+    tokio::time::pause();
+    let result = async {
+        for _ in 0..500 {
+            if condition() {
+                return Some(());
+            }
+            // Fire any timers due in the next window and let the connector's
+            // tasks run; the mock transport itself is in-memory.
+            tokio::time::advance(Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        None
     }
-    None
+    .await;
+    tokio::time::resume();
+    result
 }
 
 #[tokio::test]
@@ -485,17 +497,9 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
                 .await
         })
     };
-    for _ in 0..100 {
-        if logon_count(&client.sent.lock().unwrap()) == 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(
-        logon_count(&client.sent.lock().unwrap()),
-        2,
-        "re-authentication logon should be in flight"
-    );
+    wait_until(|| logon_count(&client.sent.lock().unwrap()) == 2)
+        .await
+        .expect("re-authentication logon should be in flight");
 
     // Two more signed sends arrive while authentication is in flight:
     // they must wait for it to finish instead of starting a second one.
@@ -515,7 +519,16 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Give the concurrent sends plenty of scheduling turns to (wrongly)
+    // start a second authentication, driving the clock forward with
+    // `pause`/`advance` instead of sleeping so any timers involved fire
+    // without waiting real time.
+    tokio::time::pause();
+    for _ in 0..10 {
+        tokio::time::advance(Duration::from_millis(10)).await;
+        tokio::task::yield_now().await;
+    }
+    tokio::time::resume();
     assert_eq!(
         logon_count(&client.sent.lock().unwrap()),
         2,

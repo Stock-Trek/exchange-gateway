@@ -289,7 +289,7 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
     assert_eq!(client.sent.lock().unwrap().len(), 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn http_send_refunds_local_reservation_on_rate_limited() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let connector = scripted_http_connector(
@@ -310,8 +310,9 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
 
     // Once the server's Retry-After has elapsed, the refunded budget
     // admits the next request: it reaches the transport again instead of
-    // being rejected by the local limiter.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // being rejected by the local limiter. The clock starts paused, so
+    // jump it past the retry window instead of sleeping.
+    tokio::time::advance(Duration::from_millis(100)).await;
     let result = connector
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;
