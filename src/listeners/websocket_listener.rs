@@ -257,7 +257,7 @@ mod tests {
         Ok(RateLimitFeedback {
             usage: vec![RateLimitUsage {
                 interval_nanos: Duration::from_secs(60).as_nanos(),
-                used: message.used,
+                used: Some(message.used),
                 limit: None,
             }],
             ..Default::default()
@@ -344,7 +344,7 @@ mod tests {
                     retry_after: Some(Duration::from_secs(30)),
                     usage: vec![RateLimitUsage {
                         interval_nanos: Duration::from_secs(60).as_nanos(),
-                        used: message.used,
+                        used: Some(message.used),
                         limit: None,
                     }],
                     ..Default::default()
