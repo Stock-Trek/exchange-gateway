@@ -6,6 +6,8 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     #[error("Received unrecognised response")]
     BadResponse,
+    #[error("Exchange API error {code}: {message}")]
+    ApiError { code: i64, message: String },
     #[error("Crypto key error: {0}")]
     CryptoKey(String),
     #[error(transparent)]
