@@ -13,7 +13,7 @@ ed25519-compact = "2.3.0"
 exchange-types = { version = "0.4.9", registry = "shipyard" }
 futures-timer = "3.0"
 hmac = "0.12"
-iris = { version = "1.0.0", registry = "shipyard", optional = true }
+iris = { version = "1.0.1", registry = "shipyard", optional = true }
 p256 = "0.13"
 p384 = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
