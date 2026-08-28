@@ -407,6 +407,62 @@ mod tests {
         (port, shutdown_tx)
     }
 
+    /// Spawns a server that cleanly closes the first connection it accepts and
+    /// then drops every later connection without completing the websocket
+    /// handshake, so a reconnecting client's connect attempts keep failing and
+    /// it stays in the reconnecting state (`is_connected` stays false) for the
+    /// duration of the test.
+    async fn spawn_server_that_closes_first_connection_then_stalls()
+    -> (u16, tokio::sync::oneshot::Sender<()>) {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("should bind to ephemeral port");
+        let port = listener
+            .local_addr()
+            .expect("should have local address")
+            .port();
+        let connection_index = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            let mut shutdown_rx = Some(shutdown_rx);
+            loop {
+                tokio::select! {
+                    _ = async {
+                        if let Some(rx) = &mut shutdown_rx {
+                            rx.await.ok();
+                        }
+                    } => break,
+                    accept_result = listener.accept() => {
+                        let (stream, _) = accept_result.expect("should accept a connection");
+                        let index = connection_index.fetch_add(1, Ordering::SeqCst);
+                        if index == 0 {
+                            tokio::spawn(async move {
+                                let builder = tokio_websockets::ServerBuilder::new();
+                                if let Ok((_request, mut ws_stream)) = builder.accept(stream).await {
+                                    // First connection: graceful server close, so the
+                                    // client's `ServerCloseBehavior::Reconnect` kicks in.
+                                    let _ = ws_stream
+                                        .send(tokio_websockets::Message::close(
+                                            Some(tokio_websockets::CloseCode::NORMAL_CLOSURE),
+                                            "maintenance",
+                                        ))
+                                        .await;
+                                    let _ = ws_stream.close().await;
+                                }
+                            });
+                        } else {
+                            // Later connections are dropped without a websocket
+                            // upgrade, so the client's reconnect attempt fails and
+                            // it keeps retrying, staying in the reconnecting state.
+                            drop(stream);
+                        }
+                    }
+                }
+            }
+        });
+        (port, shutdown_tx)
+    }
+
     async fn wait_until_connection_count(connections: &Arc<AtomicUsize>, expected: usize) {
         for _ in 0..200 {
             if connections.load(Ordering::SeqCst) >= expected {
@@ -475,6 +531,75 @@ mod tests {
         .await
         .expect("should receive a response on the fresh connection");
         assert_eq!(response, TestResponse { id: 1, status: 200 });
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
+    }
+
+    #[tokio::test]
+    async fn send_message_fails_fast_while_reconnecting() {
+        let (port, _shutdown) = spawn_server_that_closes_first_connection_then_stalls().await;
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> = Arc::new(TestListener {
+            received: received.clone(),
+        });
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let config = test_config().with_circuit_breaker_config(
+            CircuitBreakerConfig::new()
+                .with_initial_backoff(Duration::from_millis(50))
+                .with_max_backoff(Duration::from_millis(200))
+                .with_no_reconnect_limit(),
+        );
+        let client =
+            IrisWebsocketClient::<TestRequest, TestResponse>::with_config(&url, config, listener);
+        client.connect().await.expect("connect should succeed");
+        wait_until_connected(&client).await;
+
+        // The server closes the first connection cleanly, so with
+        // `ServerCloseBehavior::Reconnect` the client starts reconnecting.
+        // Every later handshake is stalled, so the client stays in the
+        // reconnecting state and `is_connected` remains false.
+        for _ in 0..200 {
+            if !client.is_connected() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            !client.is_connected(),
+            "client should drop into the reconnecting state after the server close"
+        );
+
+        // A message sent while the client is reconnecting must fail fast
+        // instead of being buffered for the fresh connection: iris rejects
+        // the send with `ConnectionClosed` as soon as the connected flag is
+        // down, well inside the 30s gateway timeout. A buffering client would
+        // accept the message and only deliver it after the reconnect, so a
+        // prompt error proves the fail-fast behaviour.
+        let message = TestRequest {
+            id: 1,
+            method: "ping".into(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.send_message(message, Duration::from_secs(30)),
+        )
+        .await
+        .expect("send while reconnecting should fail fast, not hang until its timeout");
+        assert!(
+            matches!(
+                &result,
+                Err(EGError::External(e))
+                    if e
+                        .downcast_ref::<iris::ConnectionError>()
+                        .is_some_and(|error| {
+                            matches!(error, iris::ConnectionError::ConnectionClosed)
+                        })
+            ),
+            "send while reconnecting should fail fast with ConnectionClosed, got: {result:?}"
+        );
+
         client
             .disconnect()
             .await
