@@ -316,10 +316,10 @@ fn authenticate_websocket_leg(
         let api_key = api_key.clone();
         let time_sync = time_sync.clone();
         Arc::new(move || {
-            // A fresh id per attempt: a logon queued in the transport's
-            // outbound channel by a timed-out attempt must never resolve a
-            // later attempt's waiter, and the later attempt's own response
-            // must never be mistaken for another request's.
+            // A fresh id per attempt: a response to an earlier attempt (e.g.
+            // a slow logon response that arrives after a reconnect) must
+            // never resolve a later attempt's waiter, and the later attempt's
+            // own response must never be mistaken for another request's.
             let id = id();
             let message = websocket_auth_message(&id, &api_key, &time_sync);
             // Match any response for this attempt's logon id, success or
@@ -752,10 +752,10 @@ mod tests {
             Duration::from_secs(20),
         );
         // A retried authentication must not reuse the previous attempt's id:
-        // a logon queued in the transport's outbound channel by a timed-out
-        // attempt (iris delivers it on the fresh connection) would otherwise
-        // resolve the newer attempt's waiter, and the newer attempt's own
-        // response would leak to the user's listener with no waiter left.
+        // a slow response to the earlier attempt (e.g. one arriving after a
+        // reconnect) would otherwise resolve the newer attempt's waiter, and
+        // the newer attempt's own response would leak to the user's listener
+        // with no waiter left.
         let (first_message, first_filter) = (leg.create_auth_attempt)();
         let (second_message, second_filter) = (leg.create_auth_attempt)();
         assert_ne!(
@@ -1134,9 +1134,10 @@ mod tests {
     /// [`LogonGate`] is configured, logon responses can be held so an
     /// authentication can be observed mid-flight.
     ///
-    /// Like iris, requests sent while the connection is down are queued (and
-    /// recorded) but get no response: the pending logon responses are
-    /// delivered on the next `connect`, in the order they were queued.
+    /// Like iris, a send while the connection is down (e.g. while the client
+    /// is reconnecting) fails fast with `ConnectionClosed` instead of being
+    /// buffered for the fresh connection, so nothing sent during a drop is
+    /// ever recorded or answered.
     #[cfg(feature = "iris")]
     #[derive(Clone)]
     struct MockWebsocketClient {
@@ -1144,7 +1145,6 @@ mod tests {
         connected: Arc<AtomicBool>,
         sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
         logon_gate: Option<LogonGate>,
-        pending_logons: Arc<Mutex<Vec<BinanceWebsocketResponse>>>,
         logon_error: Option<BinanceError>,
     }
 
@@ -1167,21 +1167,7 @@ mod tests {
 
         async fn connect(&self) -> EGResult<()> {
             self.connected.store(true, Ordering::SeqCst);
-            self.listener.on_connected().await?;
-            // Deliver logon responses queued while the connection was down,
-            // in order: iris drains its outbound channel FIFO on the fresh
-            // connection, so a logon queued during a drop is answered before
-            // anything sent after it.
-            let pending = std::mem::take(
-                &mut *self
-                    .pending_logons
-                    .lock()
-                    .expect("mutex should not be poisoned"),
-            );
-            for response in pending {
-                self.listener.on_message(response).await?;
-            }
-            Ok(())
+            self.listener.on_connected().await
         }
         fn is_connected(&self) -> bool {
             self.connected.load(Ordering::SeqCst)
@@ -1191,6 +1177,15 @@ mod tests {
             message: Self::TransportReq,
             _timeout: Duration,
         ) -> EGResult<()> {
+            // Like iris, a send while the connection is down (e.g. while the
+            // client is reconnecting) fails fast instead of being buffered
+            // for the fresh connection: reject before the message is even
+            // recorded so nothing sent during a drop can land later.
+            if !self.connected.load(Ordering::SeqCst) {
+                return Err(EGError::External(Box::new(
+                    iris::ConnectionError::ConnectionClosed,
+                )));
+            }
             self.sent
                 .lock()
                 .expect("mutex should not be poisoned")
@@ -1208,18 +1203,7 @@ mod tests {
                     Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
                     None => logon_response(message.metadata.id, 200, None),
                 };
-                if self.connected.load(Ordering::SeqCst) {
-                    self.listener.on_message(response).await?;
-                } else {
-                    // While the connection is down iris queues the request
-                    // and delivers it on the fresh connection; hold the
-                    // response until the client reconnects so the waiter
-                    // stays pending, as it would on a live socket.
-                    self.pending_logons
-                        .lock()
-                        .expect("mutex should not be poisoned")
-                        .push(response);
-                }
+                self.listener.on_message(response).await?;
             }
             Ok(())
         }
@@ -1317,7 +1301,6 @@ mod tests {
             connected: Arc::new(AtomicBool::new(false)),
             sent: Arc::new(Mutex::new(Vec::new())),
             logon_gate,
-            pending_logons: Arc::new(Mutex::new(Vec::new())),
             logon_error,
         };
         let _ = client_handle.send(mock_client.clone());
@@ -1770,7 +1753,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "iris")]
-    async fn sends_during_a_drop_reauthenticate_before_the_order_is_queued() {
+    async fn sends_during_a_drop_fail_fast_until_reconnect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
         let connector = Arc::new(
             mock_session_connector(
@@ -1798,66 +1781,50 @@ mod tests {
             .expect("disconnect should succeed");
         assert!(!connector.is_authenticated().unwrap());
 
-        // A signed send while the connection is down must re-authenticate
-        // before the order is queued: the logon enters the outbound channel
-        // first, so on the fresh connection it is delivered ahead of the
-        // order. (Before the fix the stale check saw the old epoch, skipped
-        // re-auth, and queued the order under a dead session.)
-        let send = {
-            let connector = connector.clone();
-            tokio::spawn(async move {
-                connector
-                    .send(order_request(), true, Duration::from_secs(5))
-                    .await
-            })
-        };
-        wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 2)
-            .await
-            .expect("logon should be queued while the connection is down");
-        // The order must not be queued until re-authentication has completed:
-        // before the fix the stale check saw the old epoch, skipped re-auth,
-        // and queued the order under a dead session.
-        assert!(
-            !client.sent.lock().unwrap().iter().any(|message| matches!(
-                message.metadata.method,
-                BinanceWebsocketMethodName::PlaceOrder
-            )),
-            "the order must not be queued before re-authentication"
-        );
+        // A signed send while the connection is down must fail fast: iris
+        // rejects sends with `ConnectionClosed` as soon as the connected flag
+        // is down, so the re-authentication logon never goes out and the
+        // order is never queued under a dead session. (Before the fix the
+        // stale check saw the old epoch, skipped re-auth, and queued the
+        // order under a dead session.)
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            connector.send(order_request(), true, Duration::from_secs(5)),
+        )
+        .await
+        .expect("send while the connection is down should fail fast, not hang")
+        .expect_err("send must fail while the connection is down");
+        assert!(matches!(
+            &error,
+            EGError::External(e)
+                if e
+                    .downcast_ref::<iris::ConnectionError>()
+                    .is_some_and(|error| {
+                        matches!(error, iris::ConnectionError::ConnectionClosed)
+                    })
+        ));
+        // Neither the logon nor the order was ever recorded: the fail-fast
+        // happens before any message reaches the transport.
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+        assert!(!client.sent.lock().unwrap().iter().any(|message| matches!(
+            message.metadata.method,
+            BinanceWebsocketMethodName::PlaceOrder
+        )));
         assert!(!connector.is_authenticated().unwrap());
 
-        // The connection comes back: the queued logon is answered first, then
-        // the order is queued under the fresh session. The connection may
-        // return while the first re-authentication is still in flight, in
-        // which case its logon belongs to the superseded epoch and one more
-        // logon runs against the fresh connection — the invariant is that the
-        // order always follows the last logon.
+        // Once the connection comes back, the next signed send
+        // re-authenticates and goes out normally.
         client.connect().await.expect("reconnect should succeed");
-        send.await
-            .expect("send task should complete")
-            .expect("send should succeed");
+        connector
+            .send(order_request(), true, Duration::from_secs(5))
+            .await
+            .expect("send should succeed once the connection returns");
         assert!(connector.is_authenticated().unwrap());
-        let sent = client.sent.lock().unwrap();
-        assert!(logon_count(&sent) >= 2);
-        let last_logon = sent
-            .iter()
-            .rposition(|message| {
-                matches!(message.metadata.method, BinanceWebsocketMethodName::Logon)
-            })
-            .expect("logon should be queued");
-        let order = sent
-            .iter()
-            .position(|message| {
-                matches!(
-                    message.metadata.method,
-                    BinanceWebsocketMethodName::PlaceOrder
-                )
-            })
-            .expect("order should be queued");
-        assert!(
-            order > last_logon,
-            "the order must be queued after the re-authentication logon"
-        );
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
+        assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
+            message.metadata.method,
+            BinanceWebsocketMethodName::PlaceOrder
+        )));
     }
 
     /// Polls `condition` until it holds, with a generous deadline.
@@ -2120,7 +2087,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "iris")]
-    async fn timed_out_queued_logon_does_not_resolve_a_newer_authentication() {
+    async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
         let logon_gate = LogonGate {
             block: Arc::new(AtomicBool::new(false)),
@@ -2132,8 +2099,9 @@ mod tests {
             Arc::new(RecordingListener {
                 received: received.clone(),
             });
-        // A short logon waiter so the first re-authentication attempt times
-        // out promptly while the connection is still down.
+        // A short logon waiter: if the reconnecting logon were buffered for
+        // the fresh connection it would time out after 50 ms, but fail-fast
+        // rejects it immediately, so the waiter never gets a chance to fire.
         let connector = Arc::new(
             mock_session_connector(
                 client_tx,
@@ -2150,60 +2118,40 @@ mod tests {
         assert!(connector.is_authenticated().unwrap());
         assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
 
-        // The connection drops for longer than the logon waiter: the first
-        // re-authentication attempt queues its logon in the transport's
-        // outbound channel (iris buffers sends while the connection is down),
-        // waits out its 50 ms timeout, and fails without the logon ever being
-        // delivered.
+        // The connection drops and the session goes stale.
         client
             .disconnect()
             .await
             .expect("disconnect should succeed");
         assert!(!connector.is_authenticated().unwrap());
-        let timed_out_send = {
-            let connector = connector.clone();
-            tokio::spawn(async move {
-                connector
-                    .send(order_request(), true, Duration::from_secs(5))
-                    .await
-            })
-        };
-        let error = timed_out_send
-            .await
-            .expect("send task should not panic")
-            .expect_err("the timed-out logon must fail the send");
-        assert!(matches!(error, EGError::TimedOut));
-        assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
 
-        // The timed-out attempt's logon stays queued: iris delivers it on the
-        // fresh connection. Hold its response so the test can deliver it after
-        // the newer attempt's waiter is registered, exactly as iris would
-        // (the stale logon is flushed before any later request).
-        let stale_response = {
-            let mut pending = client
-                .pending_logons
-                .lock()
-                .expect("mutex should not be poisoned");
-            let response = pending
-                .pop()
-                .expect("stale logon response should be queued");
-            assert!(pending.is_empty());
-            response
-        };
-        // Against real Binance the stale logon carries a timestamp outside the
-        // 5 s recvWindow, so it would come back rejected with -1021.
-        let stale_response = BinanceWebsocketResponse {
-            error: Some(BinanceError {
-                code: -1021,
-                msg: "Timestamp for this request is outside of the recvWindow.".into(),
-            }),
-            status: 400,
-            ..stale_response
-        };
+        // A signed send while the connection is down must fail fast: iris
+        // rejects the logon with `ConnectionClosed` instead of buffering it
+        // for the fresh connection, so the send fails immediately rather than
+        // waiting out its logon timeout, and no logon is left queued to
+        // resolve (or confuse) a later authentication.
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            connector.send(order_request(), true, Duration::from_secs(5)),
+        )
+        .await
+        .expect("send while reconnecting should fail fast, not hang until its timeout")
+        .expect_err("the failed logon must fail the send");
+        assert!(matches!(
+            &error,
+            EGError::External(e)
+                if e
+                    .downcast_ref::<iris::ConnectionError>()
+                    .is_some_and(|error| {
+                        matches!(error, iris::ConnectionError::ConnectionClosed)
+                    })
+        ));
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+        assert!(!connector.is_authenticated().unwrap());
 
         // The connection comes back and the session is stale again, so the
-        // next signed send starts a fresh authentication attempt.
-        logon_gate.block.store(true, Ordering::SeqCst);
+        // next signed send starts a fresh authentication attempt with a logon
+        // id distinct from the initial one.
         client.connect().await.expect("reconnect should succeed");
         let retried_send = {
             let connector = connector.clone();
@@ -2213,50 +2161,33 @@ mod tests {
                     .await
             })
         };
-        wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 3)
+        wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 2)
             .await
-            .expect("the retried authentication should queue its logon");
-        let (stale_logon_id, retried_logon_id) = {
+            .expect("the retried authentication should send its logon");
+        let (initial_logon_id, retried_logon_id) = {
             let sent = client.sent.lock().unwrap();
-            (sent[1].metadata.id.clone(), sent[2].metadata.id.clone())
+            (sent[0].metadata.id.clone(), sent[1].metadata.id.clone())
         };
         assert_ne!(
-            stale_logon_id, retried_logon_id,
+            initial_logon_id, retried_logon_id,
             "each authentication attempt must use a fresh logon id"
         );
 
-        // The stale queued logon's response arrives while the newer attempt's
-        // waiter is registered. It must not resolve that waiter (before the
-        // fix both logons shared one id, so the stale -1021 rejection made a
-        // healthy session spuriously fail authentication).
-        client
-            .listener
-            .on_message(stale_response.clone())
-            .await
-            .expect("delivering the stale logon response should succeed");
-        assert!(
-            !connector.is_authenticated().unwrap(),
-            "the stale logon response must not authenticate the session"
-        );
-
-        // Release the current attempt's logon response: it resolves its own
-        // waiter and the send completes normally.
-        logon_gate.block.store(false, Ordering::SeqCst);
-        logon_gate.release.notify_one();
+        // The retried attempt's own logon response resolves its waiter and
+        // the send completes normally.
         retried_send
             .await
             .expect("send task should not panic")
             .expect("the retried send should succeed against its own logon");
         assert!(connector.is_authenticated().unwrap());
 
-        // The current attempt's logon response must not leak to the user's
-        // listener. The only message the delegate may see is the stale
-        // queued logon's response, which no live waiter matches (iris flushed
-        // the dead attempt's logon on the fresh connection).
-        let received = received.lock().unwrap();
-        assert_eq!(received.len(), 1, "only the stale logon response may leak");
-        assert_eq!(received[0].id, stale_logon_id);
-        assert_ne!(received[0].id, retried_logon_id);
+        // No logon response leaked to the user's listener: the reconnecting
+        // logon was never accepted (so it has no response to deliver), and
+        // the retried logon was consumed by its own waiter.
+        assert!(
+            received.lock().unwrap().is_empty(),
+            "logon responses must not leak to the delegate listener"
+        );
     }
 
     #[test]

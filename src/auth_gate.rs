@@ -83,8 +83,9 @@ impl AuthGate {
     /// Bumping on disconnect as well as on (re)connect means staleness is
     /// detected as soon as the connection drops rather than only after a
     /// reconnect fires `on_connected`, so a signed request sent while the
-    /// connection is down cannot be queued in the transport's outbound
-    /// channel and delivered on the fresh connection before re-auth.
+    /// connection is down is always forced through re-authentication (which
+    /// fails fast with iris's `ConnectionClosed` while the client is
+    /// reconnecting) instead of slipping out under a dead session.
     pub fn on_connection_lost(&self) -> EGResult<()> {
         self.bump_epoch()
     }
