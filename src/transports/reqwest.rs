@@ -1,6 +1,9 @@
 use crate::{
     error::{EGError, EGResult},
-    rate_limit::feedback::{RateLimitFeedback, RateLimitUsage},
+    rate_limit::{
+        feedback::{RateLimitFeedback, RateLimitUsage},
+        rate_limit_type::RateLimitType,
+    },
     transports::http::HttpClientTrait,
 };
 use async_trait::async_trait;
@@ -152,6 +155,7 @@ fn rate_limit_feedback_from_status_and_headers(
     };
     if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-used-weight-1m") {
         feedback.usage.push(RateLimitUsage {
+            rate_limit_type: RateLimitType::RequestWeight,
             interval_nanos: Duration::from_secs(60).as_nanos(),
             used: Some(used),
             limit: None,
@@ -159,6 +163,7 @@ fn rate_limit_feedback_from_status_and_headers(
     }
     if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-order-count-10s") {
         feedback.usage.push(RateLimitUsage {
+            rate_limit_type: RateLimitType::Orders,
             interval_nanos: Duration::from_secs(10).as_nanos(),
             used: Some(used),
             limit: None,
@@ -166,6 +171,7 @@ fn rate_limit_feedback_from_status_and_headers(
     }
     if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-order-count-1d") {
         feedback.usage.push(RateLimitUsage {
+            rate_limit_type: RateLimitType::Orders,
             interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
             used: Some(used),
             limit: None,

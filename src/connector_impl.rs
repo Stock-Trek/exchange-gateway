@@ -238,8 +238,8 @@ where
         for leg in &self.authenticate_legs {
             // Each attempt creates its message and response filter together,
             // so a retry binds its waiter to a fresh request id instead of
-            // reusing the previous attempt's (which may still be queued in
-            // the transport's outbound channel after a timeout).
+            // reusing the previous attempt's (a response to the previous
+            // attempt must never resolve the retry's waiter).
             let (signed_auth_message, weight, order_count, filter) = {
                 let (auth_message, filter) = (leg.create_auth_attempt)();
                 self.check_rate_limits(&auth_message)?;
@@ -277,8 +277,7 @@ where
     /// session-based connectors, whenever the installed signer belongs to an
     /// older connection epoch — or the connection itself is down (the drop
     /// may not have been reported to the auth gate yet, so a signed request
-    /// cannot be allowed to queue in the transport's outbound channel and
-    /// land on a fresh connection before re-auth).
+    /// must not skip re-authentication while the connection is down).
     fn session_is_stale(&self) -> EGResult<bool> {
         let has_signer = self
             .signer

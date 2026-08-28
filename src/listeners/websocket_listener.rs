@@ -237,7 +237,8 @@ where
 mod tests {
     use super::*;
     use crate::rate_limit::{
-        feedback::RateLimitUsage, rate_limit_config::RateLimitConfig, rate_limiter::RateLimiter,
+        feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
+        rate_limit_type::RateLimitType, rate_limiter::RateLimiter,
     };
     use std::{
         sync::{Arc, Mutex},
@@ -256,6 +257,7 @@ mod tests {
     fn feedback(message: &TestMessage) -> EGResult<RateLimitFeedback> {
         Ok(RateLimitFeedback {
             usage: vec![RateLimitUsage {
+                rate_limit_type: RateLimitType::RequestWeight,
                 interval_nanos: Duration::from_secs(60).as_nanos(),
                 used: Some(message.used),
                 limit: None,
@@ -285,6 +287,7 @@ mod tests {
     fn rate_limits() -> RateLimits {
         RateLimits {
             weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
                 capacity_per_interval: 100,
                 interval_nanos: Duration::from_secs(60).as_nanos(),
             }]),
@@ -343,6 +346,7 @@ mod tests {
                 Ok(RateLimitFeedback {
                     retry_after: Some(Duration::from_secs(30)),
                     usage: vec![RateLimitUsage {
+                        rate_limit_type: RateLimitType::RequestWeight,
                         interval_nanos: Duration::from_secs(60).as_nanos(),
                         used: Some(message.used),
                         limit: None,
