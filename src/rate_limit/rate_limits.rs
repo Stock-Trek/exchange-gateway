@@ -29,7 +29,9 @@ impl RateLimits {
     /// sent). Reported usage then realigns each bucket's remaining capacity
     /// and limit with what the server actually enforces, so hard-coded weights
     /// (e.g. `exchangeInfo`, which is dynamic on Binance) cannot drift
-    /// undetected.
+    /// undetected. `exchangeInfo` feedback carries the limit definitions
+    /// without usage, so it adopts the limits without resetting locally
+    /// consumed capacity.
     pub fn apply_feedback(&self, feedback: &RateLimitFeedback) -> EGResult<()> {
         if feedback.throttled || feedback.retry_after.is_some() {
             self.weight.throttle(feedback.retry_after)?;
@@ -58,7 +60,10 @@ impl RateLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rate_limit::{feedback::RateLimitUsage, rate_limit_type::RateLimitType};
+    use crate::rate_limit::{
+        feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
+        rate_limit_type::RateLimitType,
+    };
     use std::time::Duration;
 
     #[test]
@@ -93,7 +98,7 @@ mod tests {
                 usage: vec![RateLimitUsage {
                     rate_limit_type: RateLimitType::RequestWeight,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                    used: 6000,
+                    used: Some(6000),
                     limit: None,
                 }],
             })
@@ -134,13 +139,75 @@ mod tests {
                 usage: vec![RateLimitUsage {
                     rate_limit_type: RateLimitType::RequestWeight,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                    used: 3000,
+                    used: Some(3000),
                     limit: Some(4000),
                 }],
             })
             .unwrap();
         assert!(limits.weight.did_acquire(1000).unwrap());
         assert!(!limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[test]
+    fn exchange_info_limit_only_feedback_keeps_local_consumption() {
+        // Regression test: REST exchangeInfo rateLimits entries carry the
+        // limit definitions but never a usage count, so applying them must
+        // adopt the limits without refilling the buckets to `limit - 0`.
+        // Otherwise every exchangeInfo poll would wipe out all locally
+        // consumed capacity and disable local rate limiting.
+        let limits = RateLimits {
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 6000,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![
+                RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 50,
+                    interval_nanos: Duration::from_secs(10).as_nanos(),
+                },
+                RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 160_000,
+                    interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+                },
+            ]),
+        };
+        assert!(limits.weight.did_acquire(1000).unwrap());
+        assert!(limits.orders.did_acquire(10).unwrap());
+        limits
+            .apply_feedback(&RateLimitFeedback {
+                throttled: false,
+                retry_after: None,
+                usage: vec![
+                    RateLimitUsage {
+                        rate_limit_type: RateLimitType::Orders,
+                        interval_nanos: Duration::from_secs(60).as_nanos(),
+                        used: None,
+                        limit: Some(6000),
+                    },
+                    RateLimitUsage {
+                        rate_limit_type: RateLimitType::Orders,
+                        interval_nanos: Duration::from_secs(10).as_nanos(),
+                        used: None,
+                        limit: Some(50),
+                    },
+                    RateLimitUsage {
+                        rate_limit_type: RateLimitType::Orders,
+                        interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+                        used: None,
+                        limit: Some(160_000),
+                    },
+                ],
+            })
+            .unwrap();
+        // The weight bucket still has 6000 - 1000 = 5000 left, not a full
+        // 6000, and the 10s order bucket 50 - 10 = 40 left, not a full 50.
+        assert!(limits.weight.did_acquire(5000).unwrap());
+        assert!(!limits.weight.did_acquire(1).unwrap());
+        assert!(limits.orders.did_acquire(40).unwrap());
+        assert!(!limits.orders.did_acquire(1).unwrap());
     }
 
     #[test]
@@ -212,13 +279,13 @@ mod tests {
                     RateLimitUsage {
                         rate_limit_type: RateLimitType::RequestWeight,
                         interval_nanos: Duration::from_secs(60).as_nanos(),
-                        used: 3000,
+                        used: Some(3000),
                         limit: Some(6000),
                     },
                     RateLimitUsage {
                         rate_limit_type: RateLimitType::RawRequests,
                         interval_nanos: Duration::from_secs(60).as_nanos(),
-                        used: 40_000,
+                        used: Some(40_000),
                         limit: Some(61_000),
                     },
                 ],

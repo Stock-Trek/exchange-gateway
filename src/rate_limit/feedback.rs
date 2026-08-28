@@ -18,8 +18,14 @@ pub struct RateLimitUsage {
     pub rate_limit_type: RateLimitType,
     /// The bucket interval in nanoseconds (e.g. one minute for request weight).
     pub interval_nanos: u128,
-    /// Usage reported by the server within the interval.
-    pub used: u32,
+    /// Usage reported by the server within the interval, when the response
+    /// carried it. Binance's `X-MBX-*` usage headers and WebSocket API
+    /// `rateLimits` entries report it; the `rateLimits` entries in REST
+    /// `exchangeInfo` responses carry only the limit definitions and never a
+    /// count. When it is `None` the local bucket adopts any reported limit
+    /// without refilling: the server did not tell us what it consumed, so
+    /// locally-consumed capacity must not be reset to `limit - 0`.
+    pub used: Option<u32>,
     /// The limit reported by the server for the interval, when known.
     ///
     /// Binance's usage headers omit the limit; the `rateLimits` arrays in

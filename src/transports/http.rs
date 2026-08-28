@@ -251,7 +251,7 @@ mod tests {
                 usage: vec![RateLimitUsage {
                     rate_limit_type: RateLimitType::RequestWeight,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                    used: response.used,
+                    used: Some(response.used),
                     limit: None,
                 }],
                 ..Default::default()
@@ -310,7 +310,7 @@ mod tests {
                     usage: vec![RateLimitUsage {
                         rate_limit_type: RateLimitType::RequestWeight,
                         interval_nanos: Duration::from_secs(60).as_nanos(),
-                        used: 6000,
+                        used: Some(6000),
                         limit: None,
                     }],
                 },

@@ -136,7 +136,7 @@ mod tests {
             .apply_usage(&RateLimitUsage {
                 rate_limit_type: RateLimitType::RequestWeight,
                 interval_nanos: Duration::from_secs(60).as_nanos(),
-                used: 1000,
+                used: Some(1000),
                 limit: Some(6000),
             })
             .unwrap();
@@ -144,7 +144,7 @@ mod tests {
             .apply_usage(&RateLimitUsage {
                 rate_limit_type: RateLimitType::RawRequests,
                 interval_nanos: Duration::from_secs(60).as_nanos(),
-                used: 60_000,
+                used: Some(60_000),
                 limit: Some(61_000),
             })
             .unwrap();
@@ -180,7 +180,7 @@ mod tests {
             .apply_usage(&RateLimitUsage {
                 rate_limit_type: RateLimitType::Orders,
                 interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                used: 5000,
+                used: Some(5000),
                 limit: Some(10_000),
             })
             .unwrap();

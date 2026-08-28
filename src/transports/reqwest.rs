@@ -157,7 +157,7 @@ fn rate_limit_feedback_from_status_and_headers(
         feedback.usage.push(RateLimitUsage {
             rate_limit_type: RateLimitType::RequestWeight,
             interval_nanos: Duration::from_secs(60).as_nanos(),
-            used,
+            used: Some(used),
             limit: None,
         });
     }
@@ -165,7 +165,7 @@ fn rate_limit_feedback_from_status_and_headers(
         feedback.usage.push(RateLimitUsage {
             rate_limit_type: RateLimitType::Orders,
             interval_nanos: Duration::from_secs(10).as_nanos(),
-            used,
+            used: Some(used),
             limit: None,
         });
     }
@@ -173,7 +173,7 @@ fn rate_limit_feedback_from_status_and_headers(
         feedback.usage.push(RateLimitUsage {
             rate_limit_type: RateLimitType::Orders,
             interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-            used,
+            used: Some(used),
             limit: None,
         });
     }
@@ -361,13 +361,13 @@ mod tests {
             feedback.usage[0].interval_nanos,
             Duration::from_secs(60).as_nanos()
         );
-        assert_eq!(feedback.usage[0].used, 6000);
+        assert_eq!(feedback.usage[0].used, Some(6000));
         assert_eq!(feedback.usage[0].limit, None);
         assert_eq!(
             feedback.usage[1].interval_nanos,
             Duration::from_secs(10).as_nanos()
         );
-        assert_eq!(feedback.usage[1].used, 3);
+        assert_eq!(feedback.usage[1].used, Some(3));
     }
 
     #[tokio::test]
@@ -401,11 +401,11 @@ mod tests {
             feedback.usage[0].interval_nanos,
             Duration::from_secs(60).as_nanos()
         );
-        assert_eq!(feedback.usage[0].used, 1200);
+        assert_eq!(feedback.usage[0].used, Some(1200));
         assert_eq!(
             feedback.usage[1].interval_nanos,
             Duration::from_secs(24 * 60 * 60).as_nanos()
         );
-        assert_eq!(feedback.usage[1].used, 12);
+        assert_eq!(feedback.usage[1].used, Some(12));
     }
 }

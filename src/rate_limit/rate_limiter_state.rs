@@ -68,8 +68,17 @@ impl RateLimiterState {
     /// `used`/`limit` come from the exchange (usage headers, WebSocket
     /// `rateLimits`, `exchangeInfo`), so the bucket tracks the server even
     /// when the locally hard-coded weight or limit has drifted. The refill
-    /// window restarts from now. An absent limit keeps the configured limit
-    /// and only trims remaining capacity down to `limit - used`.
+    /// window restarts from now.
+    ///
+    /// * `used` + `limit` both reported (usage headers, WebSocket
+    ///   `rateLimits`): remaining capacity is set to `limit - used`.
+    /// * Only `used` reported: the configured limit is kept and remaining
+    ///   capacity is trimmed down to `limit - used`, never increased.
+    /// * Only `limit` reported (REST `exchangeInfo` `rateLimits` carry the
+    ///   current definitions but never a count): the new limit is adopted,
+    ///   but locally-consumed capacity is kept. Usage feedback must never
+    ///   refill a bucket, and the server did not tell us what it consumed.
+    /// * Neither reported: no-op.
     ///
     /// While a throttle is pending the bucket stays empty: usage feedback
     /// must not repopulate it, or a limit-carrying response arriving inside
@@ -77,19 +86,33 @@ impl RateLimiterState {
     /// `rateLimits` while a 429/`Retry-After` is active) would instantly
     /// grant `limit - used` once the deadline elapses instead of refilling
     /// from zero. The new limit is still adopted so the refill uses it.
-    pub fn sync_usage(&mut self, used: u32, limit: Option<u32>) {
+    pub fn sync_usage(&mut self, used: Option<u32>, limit: Option<u32>) {
         if let Some(limit) = limit {
             self.capacity_per_interval = limit;
-            if self.throttled_until.is_some() {
-                self.current_capacity = 0;
-            } else {
-                self.current_capacity = self.capacity_per_interval.saturating_sub(used.min(limit));
+        }
+        match (used, limit) {
+            (Some(used), Some(limit)) => {
+                if self.throttled_until.is_some() {
+                    self.current_capacity = 0;
+                } else {
+                    self.current_capacity =
+                        self.capacity_per_interval.saturating_sub(used.min(limit));
+                }
             }
-        } else {
-            let remaining = self
-                .capacity_per_interval
-                .saturating_sub(used.min(self.capacity_per_interval));
-            self.current_capacity = self.current_capacity.min(remaining);
+            (Some(used), None) => {
+                let remaining = self
+                    .capacity_per_interval
+                    .saturating_sub(used.min(self.capacity_per_interval));
+                self.current_capacity = self.current_capacity.min(remaining);
+            }
+            // A limit definition without usage: adopt the limit but keep the
+            // locally-consumed capacity. In particular the bucket must not be
+            // refilled to `limit - 0`, or every REST `exchangeInfo` poll would
+            // wipe out all locally-reserved capacity.
+            (None, Some(limit)) => {
+                self.current_capacity = self.current_capacity.min(limit);
+            }
+            (None, None) => {}
         }
         self.last_calculation = Instant::now();
         self.excess_interval_nanos = 0;
@@ -177,7 +200,7 @@ mod tests {
         );
         let _ = state.did_consume(5000);
         // Server reports 3000 used out of a newly lowered limit of 4000.
-        state.sync_usage(3000, Some(4000));
+        state.sync_usage(Some(3000), Some(4000));
         assert!(state.did_consume(1000));
         assert!(!state.did_consume(1));
     }
@@ -192,7 +215,7 @@ mod tests {
         let _ = state.did_consume(3000);
         // Server reports 5500 used in the last minute but no limit: remaining
         // capacity is trimmed to 500, never increased.
-        state.sync_usage(5500, None);
+        state.sync_usage(Some(5500), None);
         assert!(state.did_consume(500));
         assert!(!state.did_consume(1));
     }
@@ -207,7 +230,7 @@ mod tests {
         let _ = state.did_consume(1000);
         // Server reports low usage: the bucket must not be refilled beyond
         // what the local model has already accounted for.
-        state.sync_usage(100, None);
+        state.sync_usage(Some(100), None);
         assert!(state.did_consume(5000));
         assert!(!state.did_consume(1));
     }
@@ -220,7 +243,7 @@ mod tests {
             10,
         );
         state.throttle(Instant::now() + Duration::from_secs(60));
-        state.sync_usage(0, Some(10));
+        state.sync_usage(Some(0), Some(10));
         assert!(!state.did_consume(10));
     }
 
@@ -236,7 +259,7 @@ mod tests {
         // concurrent exchangeInfo response while a 429/Retry-After is active)
         // must not repopulate the bucket: it stays empty and refills from
         // zero after the deadline instead of instantly granting limit - used.
-        state.sync_usage(1200, Some(6000));
+        state.sync_usage(Some(1200), Some(6000));
         std::thread::sleep(Duration::from_millis(30));
         // Throttle elapsed, but the 60s refill window has barely started:
         // the bucket must not grant the full remaining quota at once.
@@ -252,11 +275,70 @@ mod tests {
             6000,
         );
         state.throttle(Instant::now() + Duration::from_millis(20));
-        state.sync_usage(1200, Some(6000));
+        state.sync_usage(Some(1200), Some(6000));
         std::thread::sleep(Duration::from_millis(50));
         // The bucket refills from the throttle deadline up to the newly
         // reported limit rather than staying stuck at zero.
         assert!(state.did_consume(6000));
+    }
+
+    #[test]
+    fn sync_usage_with_limit_only_adopts_limit_without_refilling() {
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
+        let _ = state.did_consume(5000);
+        // A limit definition without a usage count (REST `exchangeInfo`): the
+        // new limit is adopted, but the bucket must not be refilled to
+        // limit - 0 = limit — the 5000 locally-consumed capacity stays gone.
+        state.sync_usage(None, Some(4000));
+        assert!(state.did_consume(1000));
+        assert!(!state.did_consume(1));
+    }
+
+    #[test]
+    fn sync_usage_with_limit_only_never_adds_capacity() {
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
+        let _ = state.did_consume(1000);
+        // The server raises the limit; the bucket adopts it but must not gain
+        // the difference as if the server had reported zero usage.
+        state.sync_usage(None, Some(6000));
+        assert!(state.did_consume(5000));
+        assert!(!state.did_consume(1));
+    }
+
+    #[test]
+    fn sync_usage_with_limit_only_trims_capacity_above_new_limit() {
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
+        let _ = state.did_consume(1000);
+        // The server lowers the limit below the remaining capacity: the
+        // bucket is trimmed to the new limit.
+        state.sync_usage(None, Some(2000));
+        assert!(state.did_consume(2000));
+        assert!(!state.did_consume(1));
+    }
+
+    #[test]
+    fn sync_usage_without_usage_or_limit_is_noop() {
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
+        let _ = state.did_consume(1000);
+        state.sync_usage(None, None);
+        assert!(state.did_consume(5000));
+        assert!(!state.did_consume(1));
     }
 
     #[test]
@@ -266,7 +348,7 @@ mod tests {
             Duration::from_secs(60).as_nanos(),
             10,
         );
-        state.sync_usage(20, Some(10));
+        state.sync_usage(Some(20), Some(10));
         assert!(!state.did_consume(1));
     }
 }

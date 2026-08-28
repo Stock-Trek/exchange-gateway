@@ -575,7 +575,12 @@ fn rate_limit_usage(limit: &BinanceRateLimit) -> Option<RateLimitUsage> {
     Some(RateLimitUsage {
         rate_limit_type: rate_limit_type(limit.rateLimitType),
         interval_nanos,
-        used: limit.count.unwrap_or(0).max(0) as u32,
+        // REST `exchangeInfo` `rateLimits` entries carry only the current
+        // limit definitions and never a `count` (only WebSocket API responses
+        // do), so `None` here means "adopt the limit, keep local usage"
+        // rather than "zero used" — a missing count must not refill the
+        // bucket to `limit - 0` on every poll.
+        used: limit.count.map(|count| count.max(0) as u32),
         limit: Some(limit.limit.max(0) as u32),
     })
 }
@@ -597,8 +602,11 @@ fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128>
     Some(Duration::from_secs(secs).as_nanos())
 }
 /// `exchangeInfo` returns the rate-limit definitions Binance currently
-/// enforces, so the local capacity is updated from the response body rather
-/// than from a hard-coded value that may have drifted.
+/// enforces, so the local capacity limits are updated from the response body
+/// rather than from a hard-coded value that may have drifted. REST
+/// `exchangeInfo` `rateLimits` entries never carry a usage `count`, so the
+/// feedback adopts the limits without resetting locally-consumed capacity
+/// (unlike WebSocket API responses, which report usage on every message).
 fn http_response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
     let mut feedback = RateLimitFeedback::default();
     if let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
@@ -1039,7 +1047,11 @@ mod tests {
     }
 
     #[test]
-    fn exchange_info_feedback_reports_limits_and_usage() {
+    fn exchange_info_feedback_adopts_limits_without_usage() {
+        // REST exchangeInfo rateLimits entries carry the current limit
+        // definitions but never a usage count (only WebSocket API responses
+        // include `count`), so the feedback must adopt the limits without
+        // reporting any usage: locally-consumed capacity stays untouched.
         let response = BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(
             exchange_info_result(vec![
                 rate_limit(
@@ -1047,14 +1059,14 @@ mod tests {
                     BinanceRateLimitInterval::MINUTE,
                     1,
                     6000,
-                    Some(1200),
+                    None,
                 ),
                 rate_limit(
                     BinanceRateLimitType::ORDERS,
                     BinanceRateLimitInterval::SECOND,
                     10,
                     50,
-                    Some(3),
+                    None,
                 ),
             ]),
         ));
@@ -1068,14 +1080,14 @@ mod tests {
             feedback.usage[0].interval_nanos,
             Duration::from_secs(60).as_nanos()
         );
-        assert_eq!(feedback.usage[0].used, 1200);
+        assert_eq!(feedback.usage[0].used, None);
         assert_eq!(feedback.usage[0].limit, Some(6000));
         assert_eq!(feedback.usage[1].rate_limit_type, RateLimitType::Orders);
         assert_eq!(
             feedback.usage[1].interval_nanos,
             Duration::from_secs(10).as_nanos()
         );
-        assert_eq!(feedback.usage[1].used, 3);
+        assert_eq!(feedback.usage[1].used, None);
         assert_eq!(feedback.usage[1].limit, Some(50));
     }
 
@@ -1146,14 +1158,14 @@ mod tests {
             feedback.usage[0].interval_nanos,
             Duration::from_secs(60).as_nanos()
         );
-        assert_eq!(feedback.usage[0].used, 2500);
+        assert_eq!(feedback.usage[0].used, Some(2500));
         assert_eq!(feedback.usage[0].limit, Some(6000));
         assert_eq!(feedback.usage[1].rate_limit_type, RateLimitType::Orders);
         assert_eq!(
             feedback.usage[1].interval_nanos,
             Duration::from_secs(24 * 60 * 60).as_nanos()
         );
-        assert_eq!(feedback.usage[1].used, 12);
+        assert_eq!(feedback.usage[1].used, Some(12));
         assert_eq!(feedback.usage[1].limit, Some(160_000));
     }
 
@@ -1172,7 +1184,7 @@ mod tests {
             usage.interval_nanos,
             Duration::from_secs(24 * 60 * 60).as_nanos()
         );
-        assert_eq!(usage.used, 10);
+        assert_eq!(usage.used, Some(10));
         assert_eq!(usage.limit, Some(160_000));
         assert_eq!(
             rate_limit_usage(&rate_limit(
