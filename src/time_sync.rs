@@ -29,3 +29,18 @@ impl TimeSync {
             .expect("System time does not fit in i64 milliseconds")
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn time_sync_applies_server_offset() {
+        let time_sync = TimeSync::default();
+        let local = time_sync.now_millis();
+        time_sync.sync(local + 10_000);
+        let synced = time_sync.now_millis();
+        assert!(synced >= local + 10_000, "synced: {synced}");
+        assert!(synced < local + 10_000 + 60_000, "synced: {synced}");
+    }
+}

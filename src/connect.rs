@@ -1,6 +1,9 @@
 #[cfg(feature = "iris")]
 use {
-    crate::{specs::binance::websocket_connector, transports::iris::default_config},
+    crate::{
+        specs::binance::websocket::connector as binance_websocket_connector,
+        transports::iris::default_config,
+    },
     exchange_types::binance::websocket::{
         BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
@@ -9,7 +12,7 @@ use {
 
 #[cfg(feature = "reqwest")]
 use {
-    crate::specs::binance::http_connector,
+    crate::specs::binance::http::connector as binance_http_connector,
     exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
 };
 
@@ -39,7 +42,7 @@ impl Connect {
         ExternalReq: Send,
         ExternalRes: Clone + Send + Sync + 'static,
     {
-        http_connector(
+        binance_http_connector(
             trading_mode,
             to_unsigned_request,
             to_external_response,
@@ -89,7 +92,7 @@ impl Connect {
         ExternalReq: Send + Sync,
         ExternalRes: Clone + Send + Sync + 'static,
     {
-        websocket_connector(
+        binance_websocket_connector(
             trading_mode,
             to_unsigned_request,
             to_external_response,
