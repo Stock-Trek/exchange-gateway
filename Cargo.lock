@@ -526,9 +526,9 @@ dependencies = [
 
 [[package]]
 name = "exchange-types"
-version = "0.4.9"
+version = "0.4.11"
 source = "registry+ssh://git@ssh.shipyard.rs/stock-trek/crate-index.git"
-checksum = "101d3e05c359469ad49b521b4919b181d704e559995537a6d4f3f56577adbf52"
+checksum = "d0b894fd656a3948fef960910fec4214cf5342a386f622801d9cb979b0f46376"
 dependencies = [
  "query-params",
  "rust_decimal",
