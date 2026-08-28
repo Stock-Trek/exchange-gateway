@@ -61,6 +61,18 @@ impl AuthGate {
         Ok(())
     }
 
+    /// Clears the in-flight authentication without advancing the
+    /// authenticated epoch: a failed authentication leaves the session stale
+    /// so waiters retry instead of treating the current connection as
+    /// authenticated.
+    pub fn cancel(&self) -> EGResult<()> {
+        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+        let Some(_) = &state.in_flight.take() else {
+            return Err(EGError::NotAuthenticated);
+        };
+        Ok(())
+    }
+
     pub fn on_connection_established(&self) -> EGResult<()> {
         self.state
             .lock()
@@ -174,5 +186,33 @@ mod tests {
         gate.release().expect("Release must be Ok");
         on_complete.notify();
         assert!(matches!(gate.release(), Err(EGError::NotAuthenticated)));
+    }
+
+    #[test]
+    fn cancelling_a_failed_authentication_keeps_the_session_stale() {
+        let gate = AuthGate::default();
+        gate.on_connection_established().unwrap();
+        let AuthGateAcquisition::Authenticator(on_complete) = gate.acquire().unwrap() else {
+            panic!("expected an authenticator acquisition");
+        };
+
+        // A failed authentication must not advance the authenticated epoch:
+        // the session stays stale so a waiter retries against the current
+        // connection instead of treating it as authenticated.
+        gate.cancel().expect("Cancel must be Ok");
+        on_complete.notify();
+        assert!(gate.is_stale().unwrap());
+
+        // A waiter can immediately re-acquire and retry.
+        assert!(matches!(
+            gate.acquire().unwrap(),
+            AuthGateAcquisition::Authenticator(_)
+        ));
+    }
+
+    #[test]
+    fn cancelling_without_an_in_flight_authentication_is_an_error() {
+        let gate = AuthGate::default();
+        assert!(matches!(gate.cancel(), Err(EGError::NotAuthenticated)));
     }
 }
