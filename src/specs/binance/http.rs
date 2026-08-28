@@ -8,6 +8,7 @@ use crate::{
     listeners::convert_listener::ConvertListener,
     listeners::listener::ListenerTrait,
     rate_limit::feedback::RateLimitFeedback,
+    rate_limit::rate_limits::RateLimits,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
@@ -15,7 +16,7 @@ use crate::{
     specs::binance::common::{data_signer, order_weight, rate_limit_usage, sync_timestamp_fields},
     specs::binance::common::{exchange_urls, rate_limits},
     time_sync::TimeSync,
-    transports::http::HttpEndpoint,
+    transports::http::{HttpClientTrait, HttpEndpoint},
     transports::transport::Transport,
     transports::{
         http::HttpTransport,
@@ -34,7 +35,6 @@ use exchange_types::binance::{
 use reqwest::Method;
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
@@ -46,10 +46,34 @@ where
     ExternalReq: Send,
     ExternalRes: Clone + Send + Sync + 'static,
 {
-    let exchange_urls = exchange_urls();
-    let url = exchange_urls.url(ExchangeTransportType::Http, trading_mode);
+    let url = exchange_urls().url(ExchangeTransportType::Http, trading_mode);
     let client = Arc::new(ReqwestHttpClient::new(&url));
-    let rate_limits = rate_limits();
+    connector_with_client(
+        client,
+        rate_limits(),
+        to_unsigned_request,
+        to_external_response,
+        listener,
+        credentials,
+    )
+}
+
+/// Assembles the production HTTP connector around an injected transport
+/// client and rate limits. The production [`connector`] builds the real
+/// reqwest client; tests pass a scripted client (and custom limits) to
+/// exercise the same connector wiring without a network.
+pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
+    client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
+    rate_limits: RateLimits,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    credentials: Option<ApiKeyCredentials>,
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
+where
+    ExternalReq: Send,
+    ExternalRes: Clone + Send + Sync + 'static,
+{
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
     let transport = HttpTransport::new(
@@ -144,8 +168,7 @@ fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     }
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
+fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
     match request.params {
         BinanceHttpUnsignedRequest::AssetLimits(..) => HttpEndpoint::AssetLimits,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => HttpEndpoint::ExchangeInfo,
@@ -153,8 +176,7 @@ pub(crate) fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint 
     }
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn endpoints() -> HashMap<HttpEndpoint, String> {
+fn endpoints() -> HashMap<HttpEndpoint, String> {
     let mut endpoints = HashMap::new();
     endpoints.insert(HttpEndpoint::AssetLimits, "myFilters".into());
     endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
@@ -162,8 +184,7 @@ pub(crate) fn endpoints() -> HashMap<HttpEndpoint, String> {
     endpoints
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn null_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
+fn null_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest> {
     ConvertSigner::new(|unsigned| {
         Ok(BinanceHttpRequest {
             params: unsigned,
@@ -172,8 +193,7 @@ pub(crate) fn null_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, Binance
     })
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn sync_timestamp(
+fn sync_timestamp(
     time_sync: Arc<TimeSync>,
 ) -> ArcTryConvertValue<BinanceHttpUnsignedRequest, BinanceHttpUnsignedRequest> {
     Arc::new(move |request| {
@@ -191,8 +211,7 @@ pub(crate) fn sync_timestamp(
     })
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn create_signer_from_credentials(
+fn create_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>> {
     let ApiKeyCredentials { secret, .. } = credentials;
@@ -226,8 +245,7 @@ fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<O
     })
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
+fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
     let mut feedback = RateLimitFeedback::default();
     if let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
         feedback
@@ -237,8 +255,7 @@ pub(crate) fn response_feedback(response: &BinanceHttpResponse) -> EGResult<Rate
     Ok(feedback)
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
+fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
         BinanceHttpUnsignedRequest::AssetLimits(..) => 40,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => 20,
@@ -246,8 +263,7 @@ pub(crate) fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     }
 }
 
-// TODO why is this pub(crate)?
-pub(crate) fn order_count(request: &BinanceHttpUnsignedRequest) -> u32 {
+fn order_count(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
         BinanceHttpUnsignedRequest::SpotOrderRequest(..) => 1,
         _ => 0,
