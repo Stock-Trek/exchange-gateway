@@ -1,7 +1,9 @@
+use crate::rate_limit::rate_limit_type::RateLimitType;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiterState {
+    rate_limit_type: RateLimitType,
     interval_nanos: u128,
     capacity_per_interval: u32,
     current_capacity: u32,
@@ -11,13 +13,18 @@ pub(crate) struct RateLimiterState {
 }
 
 impl RateLimiterState {
-    pub fn new(interval_nanos: u128, capacity_per_interval: u32) -> Self {
+    pub fn new(
+        rate_limit_type: RateLimitType,
+        interval_nanos: u128,
+        capacity_per_interval: u32,
+    ) -> Self {
         assert!(interval_nanos > 0, "interval_nanos cannot be zero");
         assert!(
             capacity_per_interval > 0,
             "capacity_per_interval cannot be zero"
         );
         Self {
+            rate_limit_type,
             interval_nanos,
             capacity_per_interval,
             current_capacity: capacity_per_interval,
@@ -25,6 +32,9 @@ impl RateLimiterState {
             excess_interval_nanos: 0,
             throttled_until: None,
         }
+    }
+    pub fn rate_limit_type(&self) -> RateLimitType {
+        self.rate_limit_type
     }
     pub fn interval_nanos(&self) -> u128 {
         self.interval_nanos
@@ -135,7 +145,11 @@ mod tests {
 
     #[test]
     fn throttle_empties_bucket_until_deadline() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 10);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            10,
+        );
         assert!(state.did_consume(1));
         state.throttle(Instant::now() + Duration::from_secs(60));
         assert!(!state.did_consume(1));
@@ -143,7 +157,11 @@ mod tests {
 
     #[test]
     fn throttle_expires_and_refills_from_deadline() {
-        let mut state = RateLimiterState::new(Duration::from_millis(10).as_nanos(), 10);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_millis(10).as_nanos(),
+            10,
+        );
         state.throttle(Instant::now() + Duration::from_millis(20));
         std::thread::sleep(Duration::from_millis(30));
         // Bucket refills from the throttle deadline, so capacity returns.
@@ -152,7 +170,11 @@ mod tests {
 
     #[test]
     fn sync_usage_realigns_capacity_and_limit() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 6000);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
         let _ = state.did_consume(5000);
         // Server reports 3000 used out of a newly lowered limit of 4000.
         state.sync_usage(3000, Some(4000));
@@ -162,7 +184,11 @@ mod tests {
 
     #[test]
     fn sync_usage_without_limit_only_trims_capacity() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 6000);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
         let _ = state.did_consume(3000);
         // Server reports 5500 used in the last minute but no limit: remaining
         // capacity is trimmed to 500, never increased.
@@ -173,7 +199,11 @@ mod tests {
 
     #[test]
     fn sync_usage_without_limit_never_adds_capacity() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 6000);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
         let _ = state.did_consume(1000);
         // Server reports low usage: the bucket must not be refilled beyond
         // what the local model has already accounted for.
@@ -184,7 +214,11 @@ mod tests {
 
     #[test]
     fn sync_usage_keeps_throttle() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 10);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            10,
+        );
         state.throttle(Instant::now() + Duration::from_secs(60));
         state.sync_usage(0, Some(10));
         assert!(!state.did_consume(10));
@@ -192,7 +226,11 @@ mod tests {
 
     #[test]
     fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 6000);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            6000,
+        );
         state.throttle(Instant::now() + Duration::from_millis(20));
         // Limit-carrying usage arriving inside the throttle window (e.g. a
         // concurrent exchangeInfo response while a 429/Retry-After is active)
@@ -208,7 +246,11 @@ mod tests {
 
     #[test]
     fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
-        let mut state = RateLimiterState::new(Duration::from_millis(10).as_nanos(), 6000);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_millis(10).as_nanos(),
+            6000,
+        );
         state.throttle(Instant::now() + Duration::from_millis(20));
         state.sync_usage(1200, Some(6000));
         std::thread::sleep(Duration::from_millis(50));
@@ -219,7 +261,11 @@ mod tests {
 
     #[test]
     fn sync_usage_with_usage_above_limit_drains_bucket() {
-        let mut state = RateLimiterState::new(Duration::from_secs(60).as_nanos(), 10);
+        let mut state = RateLimiterState::new(
+            RateLimitType::RequestWeight,
+            Duration::from_secs(60).as_nanos(),
+            10,
+        );
         state.sync_usage(20, Some(10));
         assert!(!state.did_consume(1));
     }

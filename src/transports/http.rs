@@ -208,7 +208,8 @@ mod tests {
         error::EGError,
         listeners::listener::ListenerTrait,
         rate_limit::{
-            feedback::RateLimitUsage, rate_limit_config::RateLimitConfig, rate_limiter::RateLimiter,
+            feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
+            rate_limit_type::RateLimitType, rate_limiter::RateLimiter,
         },
     };
     use std::time::Duration;
@@ -248,6 +249,7 @@ mod tests {
         fn rate_limit_feedback(&self, response: &TestRes) -> RateLimitFeedback {
             RateLimitFeedback {
                 usage: vec![RateLimitUsage {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                     used: response.used,
                     limit: None,
@@ -306,6 +308,7 @@ mod tests {
                     throttled: true,
                     retry_after: Some(Duration::from_secs(30)),
                     usage: vec![RateLimitUsage {
+                        rate_limit_type: RateLimitType::RequestWeight,
                         interval_nanos: Duration::from_secs(60).as_nanos(),
                         used: 6000,
                         limit: None,
@@ -329,6 +332,7 @@ mod tests {
     fn rate_limits() -> RateLimits {
         RateLimits {
             weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
                 capacity_per_interval: 100,
                 interval_nanos: Duration::from_secs(60).as_nanos(),
             }]),

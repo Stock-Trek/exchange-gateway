@@ -1,3 +1,4 @@
+use crate::rate_limit::rate_limit_type::RateLimitType;
 use std::time::Duration;
 
 /// Server-reported usage of a single rate-limit bucket.
@@ -9,8 +10,12 @@ use std::time::Duration;
 /// `exchangeInfo` weight and the configured limits change without notice),
 /// hard-coded local weights can drift. Applying this feedback to the local
 /// limiter keeps the model aligned with the server.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitUsage {
+    /// The kind of rate limit the bucket enforces (e.g. request weight vs
+    /// raw request count), so feedback is matched to the right local bucket
+    /// even when two types share the same interval.
+    pub rate_limit_type: RateLimitType,
     /// The bucket interval in nanoseconds (e.g. one minute for request weight).
     pub interval_nanos: u128,
     /// Usage reported by the server within the interval.
