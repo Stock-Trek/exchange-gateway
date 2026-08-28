@@ -54,9 +54,6 @@ where
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
         let transport_req = self.try_convert_request(request)?;
         self.client.send_message(transport_req, timeout).await?;
-        // WebSocket responses arrive asynchronously through the listener,
-        // which applies any rate-limit feedback per message (and surfaces
-        // retry feedback as an error to matching waiters).
         Ok(())
     }
     async fn send_and_wait_for(
@@ -70,9 +67,6 @@ where
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
         self.client.send_message(transport_req, timeout).await?;
-        // The listener applies rate-limit feedback to every message and
-        // resolves the waiter with [`EGError::RateLimited`] when the matched
-        // response carries retry feedback.
         self.wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {

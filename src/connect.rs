@@ -26,11 +26,6 @@ use {
 pub struct Connect;
 
 impl Connect {
-    /// Builds a connector backed by the built-in [`reqwest`] HTTP transport.
-    ///
-    /// The transport is private to the crate: the gateway signs the request and
-    /// builds the transport-level HTTP request internally, so the signed query
-    /// string and the sent request can never diverge.
     #[cfg(feature = "reqwest")]
     pub fn binance_http<ExternalReq, ExternalRes>(
         &self,
@@ -53,18 +48,6 @@ impl Connect {
         )
     }
 
-    /// Builds a connector backed by the built-in [`iris`] websocket transport.
-    ///
-    /// The transport is private to the crate: the gateway signs the request and
-    /// serializes the exchange-level request internally, so the signed payload
-    /// and the sent message can never diverge.
-    ///
-    /// The iris client is configured to reconnect automatically after a
-    /// graceful server close (e.g. Binance maintenance or session expiry), so
-    /// the connector's reconnect/re-authentication machinery keeps working.
-    /// Pass a custom [`IrisConfig`] via
-    /// [`binance_websocket_with_config`](Connect::binance_websocket_with_config)
-    /// to tune the reconnect/circuit-breaker behavior.
     #[cfg(feature = "iris")]
     pub fn binance_websocket<ExternalReq, ExternalRes>(
         &self,
@@ -90,20 +73,6 @@ impl Connect {
         )
     }
 
-    /// Builds a connector backed by the built-in [`iris`] websocket transport
-    /// using a custom [`IrisConfig`].
-    ///
-    /// The transport is private to the crate: the gateway signs the request and
-    /// serializes the exchange-level request internally, so the signed payload
-    /// and the sent message can never diverge.
-    ///
-    /// The connector's reconnect/re-authentication machinery depends on
-    /// `on_connected` firing again after a drop, so the config should use
-    /// [`iris::ServerCloseBehavior::Reconnect`] (the default chosen by
-    /// [`binance_websocket`](Connect::binance_websocket)). A config that keeps
-    /// iris's default `Disconnect` behavior permanently ends the connection
-    /// task on a clean server close, so reconnects and re-authentication never
-    /// engage.
     #[cfg(feature = "iris")]
     #[allow(clippy::too_many_arguments)]
     pub fn binance_websocket_with_config<ExternalReq, ExternalRes>(

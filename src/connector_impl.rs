@@ -124,12 +124,6 @@ where
         {
             Ok(()) => Ok(()),
             Err(error) => {
-                // Binance counts request weight even for rejected requests
-                // (-2010/-2015/-1100 etc. surface as HttpError), so a 4xx/5xx
-                // business rejection consumed server-side capacity: keep the
-                // local reservation so the budget tracks true server usage.
-                // Only a server-side 429/418 (RateLimited) is not counted by
-                // the server, so give the locally-reserved capacity back then.
                 if matches!(&error, EGError::RateLimited { .. }) {
                     let _ = self.rate_limits.refund(weight, order_count);
                 }
@@ -186,15 +180,11 @@ where
             return Ok(());
         };
         loop {
-            // A concurrent caller may have re-authenticated while we waited.
             if !self.session_is_stale()? {
                 return Ok(());
             }
             let on_complete = match self.auth_gate.acquire()? {
                 AuthGateAcquisition::Waiting(on_complete) => {
-                    // Another authentication is already in flight: wait for it
-                    // to finish instead of starting a second one, then re-check
-                    // whether the session is still stale
                     on_complete.wait().await?;
                     continue;
                 }
@@ -203,16 +193,9 @@ where
             let result = self.run_authentication(credentials).await;
             match result {
                 Err(_) => {
-                    // A failed authentication must not advance the
-                    // authenticated epoch: the session stays stale so waiters
-                    // retry instead of treating the current connection as
-                    // authenticated.
                     self.auth_gate.cancel()?;
                 }
                 Ok(()) => {
-                    // Clear the gate before waking waiters so a waiter that
-                    // finds the session stale can immediately become the next
-                    // authenticator.
                     self.auth_gate.release()?;
                 }
             }
@@ -220,9 +203,6 @@ where
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
-                    // The connection reconnected while we were authenticating:
-                    // the session was established on a connection that is no
-                    // longer current, so try again against the new one.
                     if self.session_is_stale()? {
                         continue;
                     }
@@ -232,14 +212,9 @@ where
         }
     }
 
-    /// Sends each authentication leg and saves the resulting signer
     async fn run_authentication(&self, credentials: &TCredentials) -> EGResult<()> {
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
-            // Each attempt creates its message and response filter together,
-            // so a retry binds its waiter to a fresh request id instead of
-            // reusing the previous attempt's (a response to the previous
-            // attempt must never resolve the retry's waiter).
             let (signed_auth_message, weight, order_count, filter) = {
                 let (auth_message, filter) = (leg.create_auth_attempt)();
                 self.check_rate_limits(&auth_message)?;
@@ -273,11 +248,6 @@ where
         }
         Ok(())
     }
-    /// The session is stale while no signer is installed yet and, for
-    /// session-based connectors, whenever the installed signer belongs to an
-    /// older connection epoch — or the connection itself is down (the drop
-    /// may not have been reported to the auth gate yet, so a signed request
-    /// must not skip re-authentication while the connection is down).
     fn session_is_stale(&self) -> EGResult<bool> {
         let has_signer = self
             .signer
@@ -302,17 +272,12 @@ where
     fn check_rate_limits(&self, unsigned: &EGUnsignedReq) -> EGResult<()> {
         let weight = (self.to_weight)(unsigned);
         if !self.rate_limits.weight.did_acquire(weight)? {
-            return Err(EGError::RateLimited {
-                feedback: RateLimitFeedback::default(),
-            });
+            return Err(EGError::RateLimited(RateLimitFeedback::default()));
         }
         let order_count = (self.to_order_count)(unsigned);
         if !self.rate_limits.orders.did_acquire(order_count)? {
-            // Roll back the weight we already acquired for this request.
             let _ = self.rate_limits.weight.refund(weight);
-            return Err(EGError::RateLimited {
-                feedback: RateLimitFeedback::default(),
-            });
+            return Err(EGError::RateLimited(RateLimitFeedback::default()));
         }
         Ok(())
     }

@@ -1,15 +1,9 @@
 //! A minimal, runnable REST example: polls `GET /api/v3/exchangeInfo` on the
 //! Binance testnet through the gateway's HTTP connector.
 //!
-//! Run with:
-//!
 //! ```sh
 //! cargo run --example binance_http --features reqwest
 //! ```
-//!
-//! The example needs no credentials because `exchangeInfo` is a public
-//! (MARKET_DATA) endpoint. Signed requests would additionally require
-//! [`ApiKeyCredentials`]
 
 #[cfg(not(feature = "reqwest"))]
 fn main() {}
@@ -55,8 +49,6 @@ mod binance {
         }
     }
 
-    /// A local error so that exchange-types errors can be boxed into [`EGError`]
-    /// (the upstream `BinanceError` does not implement `std::error::Error`).
     #[derive(Debug)]
     struct ExampleError(String);
 
@@ -68,9 +60,6 @@ mod binance {
 
     impl std::error::Error for ExampleError {}
 
-    /// Converts the gateway's typed unsigned request into the exchange-types
-    /// request. Requests that carry no signature payload (`exchangeInfo`) are
-    /// sent unsigned.
     fn to_unsigned_request(request: MyRequest) -> EGResult<BinanceHttpUnsignedRequest> {
         if request.exchange_info {
             Ok(BinanceHttpUnsignedRequest::ExchangeInfo(
@@ -105,7 +94,6 @@ mod binance {
 
     pub(crate) async fn main() -> EGResult<()> {
         let listener: Arc<dyn ListenerTrait<TMessage = MyResponse>> = Arc::new(MyListener);
-
         let connector = Connect.binance_http(
             TradingMode::Paper,
             Arc::new(to_unsigned_request),
@@ -114,9 +102,6 @@ mod binance {
             None,
         )?;
         connector.connect().await?;
-
-        // `send` is fire-and-forget: the exchange's reply is delivered to the
-        // listener (`MyListener`) asynchronously.
         connector
             .send(
                 MyRequest {
@@ -127,7 +112,6 @@ mod binance {
             )
             .await?;
         tokio::time::sleep(Duration::from_secs(2)).await;
-
         connector.disconnect().await?;
         Ok(())
     }

@@ -9,9 +9,6 @@ use crate::{
 use async_trait::async_trait;
 use std::time::Duration;
 
-/// A transport-level HTTP request handled by the reqwest-backed client.
-///
-/// `query` carries the raw query string and is appended to the request URL verbatim.
 #[derive(Debug, Clone)]
 pub(crate) struct HttpRequest {
     pub(crate) method: reqwest::Method,
@@ -20,7 +17,6 @@ pub(crate) struct HttpRequest {
     pub(crate) body: Option<Vec<u8>>,
 }
 
-/// A transport-level HTTP response produced by the reqwest-backed client.
 #[derive(Debug, Clone)]
 pub struct HttpResponse {
     pub status: u16,
@@ -28,7 +24,6 @@ pub struct HttpResponse {
     pub headers: Vec<(String, String)>,
 }
 
-/// A concrete [`HttpClientTrait`] implementation backed by [`reqwest`].
 #[derive(Clone)]
 pub(crate) struct ReqwestHttpClient {
     client: reqwest::Client,
@@ -36,13 +31,9 @@ pub(crate) struct ReqwestHttpClient {
 }
 
 impl ReqwestHttpClient {
-    /// Creates a client that sends requests to `base_url` using a default
-    /// [`reqwest::Client`].
     pub(crate) fn new(base_url: &str) -> Self {
         Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
     }
-    /// Creates a client that sends requests to `base_url` using a custom
-    /// [`reqwest::Client`].
     pub(crate) fn with_client(base_url: &str, client: reqwest::Client) -> Self {
         Self {
             client,
@@ -113,13 +104,9 @@ impl HttpClientTrait for ReqwestHttpClient {
         } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || status == reqwest::StatusCode::IM_A_TEAPOT
         {
-            // 429/418: the server throttled (or auto-banned) this IP. The
-            // request still consumed server-side weight, and the response
-            // carries the authoritative usage + Retry-After, so that feedback
-            // travels back with the error instead of being discarded.
-            Err(EGError::RateLimited {
-                feedback: rate_limit_feedback_from_status_and_headers(status.as_u16(), &headers),
-            })
+            Err(EGError::RateLimited(
+                rate_limit_feedback_from_status_and_headers(status.as_u16(), &headers),
+            ))
         } else {
             Err(EGError::HttpError {
                 status: status.as_u16(),
@@ -133,12 +120,6 @@ impl HttpClientTrait for ReqwestHttpClient {
     }
 }
 
-/// Extracts Binance's rate-limit feedback from a response status and headers.
-///
-/// Binance's REST API signals throttling via 429 (too many requests) / 418
-/// (IP auto-banned) with an optional `Retry-After` header, and reports actual
-/// usage on every response via `X-MBX-*` headers. Feeding these into the local
-/// limiter keeps it aligned with the server.
 fn rate_limit_feedback_from_status_and_headers(
     status: u16,
     headers: &[(String, String)],
@@ -150,7 +131,7 @@ fn rate_limit_feedback_from_status_and_headers(
         .map(Duration::from_secs);
     let mut feedback = RateLimitFeedback {
         retry_after,
-        throttled: matches!(status, 429 | 418),
+        is_throttled: matches!(status, 429 | 418),
         ..Default::default()
     };
     if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-used-weight-1m") {
@@ -351,10 +332,10 @@ mod tests {
             .await
             .expect_err("429 should be returned as an error");
         let feedback = match error {
-            EGError::RateLimited { feedback } => feedback,
+            EGError::RateLimited(feedback) => feedback,
             other => panic!("expected RateLimited with feedback, got: {other:?}"),
         };
-        assert!(feedback.throttled);
+        assert!(feedback.is_throttled);
         assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
         assert_eq!(feedback.usage.len(), 2);
         assert_eq!(
@@ -394,7 +375,7 @@ mod tests {
             .await
             .expect("200 should succeed");
         let feedback = client.rate_limit_feedback(&response);
-        assert!(!feedback.throttled);
+        assert!(!feedback.is_throttled);
         assert_eq!(feedback.retry_after, None);
         assert_eq!(feedback.usage.len(), 2);
         assert_eq!(

@@ -24,7 +24,7 @@ mod tests {
     use ed25519_compact::{KeyPair, Seed, Signature};
 
     #[test]
-    fn signature_verifies_with_the_public_key() {
+    fn signing() {
         let key_pair = KeyPair::from_seed(Seed::generate());
         let signer = Ed25519Signer::new(key_pair.sk);
         let msg = b"hello world";

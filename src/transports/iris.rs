@@ -1,5 +1,3 @@
-//! A concrete [`WebsocketClientTrait`] implementation backed by the
-//! [`iris`] crate.
 use crate::{
     error::{EGError, EGResult},
     listeners::listener::ListenerTrait,
@@ -18,13 +16,6 @@ use std::{
     time::Duration,
 };
 
-/// A concrete [`WebsocketClientTrait`] implementation backed by the
-/// [`iris`] crate.
-///
-/// Outgoing [`TransportReq`](WebsocketClientTrait::TransportReq) messages are
-/// serialized to JSON before being sent over the wire and incoming frames are
-/// deserialized into [`TransportRes`](WebsocketClientTrait::TransportRes) messages,
-/// which are forwarded to the listener supplied at construction time.
 pub(crate) struct IrisWebsocketClient<TransportReq, TransportRes>
 where
     TransportReq: Serialize + Send + 'static,
@@ -38,8 +29,6 @@ where
     TransportReq: Serialize + Send + 'static,
     TransportRes: DeserializeOwned + Send + 'static,
 {
-    /// Creates a client that connects to `url` using a custom
-    /// [`IrisConfig`].
     pub(crate) fn with_config(
         url: &str,
         config: IrisConfig,
@@ -53,12 +42,6 @@ where
         Self { client }
     }
 
-    /// Sends `message`, failing with [`EGError::TimedOut`] once `delay` fires.
-    ///
-    /// [`send_message`](WebsocketClientTrait::send_message) uses a real
-    /// [`Delay`]; this variant accepts a caller-supplied timer so tests can
-    /// drive the timeout with a paused tokio clock instead of waiting on
-    /// wall-clock time.
     async fn send_message_with_delay<D>(&self, message: TransportReq, delay: D) -> EGResult<()>
     where
         D: Future<Output = ()> + Send + 'static,
@@ -76,14 +59,6 @@ where
     }
 }
 
-/// The gateway's default [`IrisConfig`] for websocket transports.
-///
-/// `IrisConfig::new()` defaults [`ServerCloseBehavior`] to `Disconnect`, which
-/// permanently ends the iris connection task when the server closes the
-/// connection cleanly (maintenance, session expiry, ...). The gateway's
-/// reconnect/re-authentication machinery depends on `on_connected` firing
-/// again so the connection epoch can bump and the stale session can be
-/// detected, so the default must reconnect.
 pub(crate) fn default_config() -> IrisConfig {
     IrisConfig::new().with_server_close_behavior(ServerCloseBehavior::Reconnect)
 }
@@ -134,7 +109,6 @@ where
     }
 }
 
-/// Adapts an [`Arc<dyn ListenerTrait>`] to the [`IrisListener`] expected by the [`iris`] crate
 struct IrisListenerAdapter<TransportRes> {
     delegate: Arc<dyn ListenerTrait<TMessage = TransportRes>>,
 }

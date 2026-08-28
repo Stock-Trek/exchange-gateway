@@ -93,12 +93,6 @@ where
     type TMessage = TransportRes;
 
     async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        // Every incoming message carries the server's view of the rate-limit
-        // buckets (Binance's WebSocket API includes a `rateLimits` array on
-        // each response), so feedback is applied before handler dispatch.
-        // This covers both fire-and-forget messages (forwarded below) and
-        // send-and-wait responses (matched by a handler, which would
-        // otherwise short-circuit before the feedback listener).
         let feedback = (self.feedback)(&message)?;
         self.rate_limits.apply_feedback(&feedback)?;
         let response = (self.converter)(message)?;
@@ -194,12 +188,7 @@ impl<EGRes> ResponseHandler<EGRes> {
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
             if feedback.has_retry_feedback() {
-                // A response carrying retry feedback (429/418 or Retry-After)
-                // is an error, not a success: the waiter resolves with the
-                // server's feedback so callers know the request was rejected.
-                state.rate_limited = Some(EGError::RateLimited {
-                    feedback: feedback.clone(),
-                });
+                state.rate_limited = Some(EGError::RateLimited(feedback.clone()));
             } else {
                 state.filtered_response = Some(response);
             }
@@ -373,7 +362,7 @@ mod tests {
             .expect("waiter should resolve")
             .expect_err("retry feedback should be an error");
         let feedback = match error {
-            EGError::RateLimited { feedback } => feedback,
+            EGError::RateLimited(feedback) => feedback,
             other => panic!("expected RateLimited, got: {other:?}"),
         };
         assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));

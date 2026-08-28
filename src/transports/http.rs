@@ -20,13 +20,6 @@ pub(crate) trait HttpClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
 
-    /// Sends a transport-level request and returns the response.
-    ///
-    /// Implementations must surface non-success HTTP statuses as [`EGError`]
-    /// rather than returning them as successful responses: 429 should map to
-    /// [`EGError::RateLimited`] and other non-2xx statuses to
-    /// [`EGError::HttpError`] so that callers do not have to inspect status
-    /// codes themselves.
     async fn send_message(
         &self,
         endpoint: &str,
@@ -34,12 +27,6 @@ pub(crate) trait HttpClientTrait: Send + Sync {
         timeout: Duration,
     ) -> EGResult<Self::TransportRes>;
 
-    /// Extracts server-side rate-limit feedback from a response, if any.
-    ///
-    /// Clients that surface exchange rate-limit headers (e.g. Binance's
-    /// `Retry-After` and `X-MBX-*` headers) override this so the gateway can
-    /// feed the server's view back into the local rate limiter. The default
-    /// returns no feedback.
     fn rate_limit_feedback(&self, _response: &Self::TransportRes) -> RateLimitFeedback {
         RateLimitFeedback::default()
     }
@@ -59,10 +46,7 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
-    /// Local rate limiter realigned with server feedback on every response.
     rate_limits: RateLimits,
-    /// Extracts exchange-level rate-limit feedback (e.g. `exchangeInfo`'s
-    /// `rateLimits`) from a converted response.
     feedback: ArcTryConvertRef<EGRes, RateLimitFeedback>,
     is_connected: AtomicBool,
 }
@@ -141,13 +125,6 @@ where
             is_connected: AtomicBool::new(false),
         }
     }
-    /// Sends the request, applies any server-side rate-limit feedback to the
-    /// local limiter, and converts the response.
-    ///
-    /// A response (or rejection) carrying retry feedback — 429/418 or a
-    /// `Retry-After` header — is surfaced as [`EGError::RateLimited`] rather
-    /// than returned as a success, so callers never have to inspect feedback
-    /// alongside a response.
     async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
         let http_endpoint = (self.to_http_endpoint)(&request);
         let endpoint = self
@@ -162,9 +139,6 @@ where
         {
             Ok(response_dto) => response_dto,
             Err(error) => {
-                // A 429/418 rejection carries throttling + usage feedback that
-                // must still be applied: the request consumed server-side
-                // weight and the response reports the true usage.
                 let _ = self.rate_limits.apply_feedback_from_error(&error);
                 return Err(error);
             }
@@ -175,10 +149,10 @@ where
         let exchange_feedback = (self.feedback)(&response)?;
         feedback.usage.extend(exchange_feedback.usage);
         feedback.retry_after = feedback.retry_after.or(exchange_feedback.retry_after);
-        feedback.throttled |= exchange_feedback.throttled;
+        feedback.is_throttled |= exchange_feedback.is_throttled;
         self.rate_limits.apply_feedback(&feedback)?;
         if feedback.has_retry_feedback() {
-            return Err(EGError::RateLimited { feedback });
+            return Err(EGError::RateLimited(feedback));
         }
         Ok(response)
     }
@@ -303,18 +277,16 @@ mod tests {
             _message: TestReq,
             _timeout: Duration,
         ) -> EGResult<TestRes> {
-            Err(EGError::RateLimited {
-                feedback: RateLimitFeedback {
-                    throttled: true,
-                    retry_after: Some(Duration::from_secs(30)),
-                    usage: vec![RateLimitUsage {
-                        rate_limit_type: RateLimitType::RequestWeight,
-                        interval_nanos: Duration::from_secs(60).as_nanos(),
-                        used: Some(6000),
-                        limit: None,
-                    }],
-                },
-            })
+            Err(EGError::RateLimited(RateLimitFeedback {
+                is_throttled: true,
+                retry_after: Some(Duration::from_secs(30)),
+                usage: vec![RateLimitUsage {
+                    rate_limit_type: RateLimitType::RequestWeight,
+                    interval_nanos: Duration::from_secs(60).as_nanos(),
+                    used: Some(6000),
+                    limit: None,
+                }],
+            }))
         }
     }
 
@@ -411,7 +383,7 @@ mod tests {
             .await
             .expect_err("retry feedback should be an error");
         match error {
-            EGError::RateLimited { feedback } => {
+            EGError::RateLimited(feedback) => {
                 assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
             }
             other => panic!("expected RateLimited, got: {other:?}"),
@@ -450,7 +422,7 @@ mod tests {
             .fire_and_forget(TestReq { id: 1 }, Duration::from_secs(5))
             .await
             .expect_err("retry feedback should be an error");
-        assert!(matches!(error, EGError::RateLimited { .. }));
+        assert!(matches!(error, EGError::RateLimited(..)));
     }
 
     #[tokio::test]
@@ -477,7 +449,7 @@ mod tests {
             )
             .await
             .expect_err("429 should be an error");
-        assert!(matches!(error, EGError::RateLimited { .. }));
+        assert!(matches!(error, EGError::RateLimited(..)));
         // The rejection's feedback was applied even though the request failed:
         // the bucket is drained until Retry-After elapses.
         assert!(!rate_limits.weight.did_acquire(1).unwrap());

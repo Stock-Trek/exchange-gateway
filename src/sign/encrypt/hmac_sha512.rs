@@ -37,7 +37,7 @@ mod tests {
     use secrecy::SecretSlice;
 
     #[test]
-    fn signature_matches_independently_computed_hmac_sha512() {
+    fn signing() {
         let key = vec![1, 2, 3, 4, 5];
         let signer = HmacSha512Signer::new(SecretSlice::<u8>::from(key.clone()));
         let msg = b"hello world";

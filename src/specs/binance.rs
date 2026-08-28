@@ -71,7 +71,6 @@ use crate::{
     urls::{ExchangeTransportType, TradingMode},
 };
 
-/// Binance's default `recvWindow`, used when the caller does not specify one.
 const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
 
 #[allow(clippy::too_many_arguments)]
@@ -186,7 +185,6 @@ where
     ))
 }
 
-/// Builds the transport-level HTTP request from the signed exchange-level request
 #[cfg(feature = "reqwest")]
 fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
@@ -226,10 +224,6 @@ fn signed_query(query: String, signature: Option<String>) -> String {
     }
 }
 
-/// Builds the query string for the unsigned `GET /api/v3/exchangeInfo`
-/// endpoint. The caller's `permissions`/`symbolStatus` filters are forwarded
-/// so they reach Binance (an empty `permissions` list is omitted, matching the
-/// REST API's "all symbols" default).
 #[cfg(feature = "reqwest")]
 fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
     let mut pairs = Vec::new();
@@ -250,9 +244,6 @@ fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
 
 #[cfg(feature = "reqwest")]
 fn from_http_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
-    // Any 2xx is a successful response: `ReqwestHttpClient` only surfaces
-    // non-2xx statuses as errors, so a 201/204 must be parsed as a result
-    // rather than as an error body.
     if (200..300).contains(&response.status) {
         let result = serde_json::from_slice(&response.body)
             .map_err(|error| EGError::External(Box::new(error)))?;
@@ -317,18 +308,8 @@ fn authenticate_websocket_leg(
         let api_key = api_key.clone();
         let time_sync = time_sync.clone();
         Arc::new(move || {
-            // A fresh id per attempt: a response to an earlier attempt (e.g.
-            // a slow logon response that arrives after a reconnect) must
-            // never resolve a later attempt's waiter, and the later attempt's
-            // own response must never be mistaken for another request's.
             let id = id();
             let message = websocket_auth_message(&id, &api_key, &time_sync);
-            // Match any response for this attempt's logon id, success or
-            // rejection: a rejected logon must be consumed by the
-            // authentication waiter so it neither leaks to the user's
-            // listener nor forces the authenticating caller to wait out the
-            // full timeout. The rejection itself is surfaced by
-            // `create_signer` below.
             let filter: ArcPredicate<BinanceWebsocketResponse> =
                 Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
             (message, filter)
@@ -380,9 +361,6 @@ fn sync_from_logon_response(
     Ok(())
 }
 
-/// Converts a rejected logon response into the error the authenticating
-/// caller sees, so a failed `session.logon` surfaces as the exchange's actual
-/// error (e.g. `-2014 API-key format invalid.`) instead of a timeout.
 fn logon_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
     if let Some(error) = &message.error {
         return Err(EGError::ApiError {
@@ -421,8 +399,6 @@ fn null_websocket_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, Bin
     })
 }
 
-/// Fills in a fresh server-synced `timestamp` and a default `recvWindow` on
-/// every signed HTTP request before it is signed.
 fn sync_http_timestamp(
     time_sync: Arc<TimeSync>,
 ) -> ArcTryConvertValue<BinanceHttpUnsignedRequest, BinanceHttpUnsignedRequest> {
@@ -441,8 +417,6 @@ fn sync_http_timestamp(
     })
 }
 
-/// Fills in a fresh server-synced `timestamp` (and default `recvWindow` for
-/// orders) on every signed websocket request before it is signed.
 fn sync_websocket_timestamp(
     time_sync: Arc<TimeSync>,
 ) -> ArcTryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketUnsignedRequest> {
@@ -550,12 +524,10 @@ fn rate_limits() -> RateLimits {
     RateLimits {
         weight: RateLimiter::new(vec![RateLimitConfig {
             rate_limit_type: RateLimitType::RequestWeight,
-            // per IP
             capacity_per_interval: 6000,
             interval_nanos: Duration::from_mins(1).as_nanos(),
         }]),
         orders: RateLimiter::new(vec![
-            // per account
             RateLimitConfig {
                 rate_limit_type: RateLimitType::Orders,
                 capacity_per_interval: 50,
@@ -575,11 +547,6 @@ fn rate_limit_usage(limit: &BinanceRateLimit) -> Option<RateLimitUsage> {
     Some(RateLimitUsage {
         rate_limit_type: rate_limit_type(limit.rateLimitType),
         interval_nanos,
-        // REST `exchangeInfo` `rateLimits` entries carry only the current
-        // limit definitions and never a `count` (only WebSocket API responses
-        // do), so `None` here means "adopt the limit, keep local usage"
-        // rather than "zero used" — a missing count must not refill the
-        // bucket to `limit - 0` on every poll.
         used: limit.count.map(|count| count.max(0) as u32),
         limit: Some(limit.limit.max(0) as u32),
     })
@@ -601,12 +568,6 @@ fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128>
     };
     Some(Duration::from_secs(secs).as_nanos())
 }
-/// `exchangeInfo` returns the rate-limit definitions Binance currently
-/// enforces, so the local capacity limits are updated from the response body
-/// rather than from a hard-coded value that may have drifted. REST
-/// `exchangeInfo` `rateLimits` entries never carry a usage `count`, so the
-/// feedback adopts the limits without resetting locally-consumed capacity
-/// (unlike WebSocket API responses, which report usage on every message).
 fn http_response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
     let mut feedback = RateLimitFeedback::default();
     if let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
@@ -616,8 +577,6 @@ fn http_response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitF
     }
     Ok(feedback)
 }
-/// Every WebSocket API response carries the current rate-limit usage, which
-/// realigns the local limiters with the server on each message.
 fn websocket_response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitFeedback> {
     let mut feedback = RateLimitFeedback::default();
     feedback
@@ -1610,13 +1569,11 @@ mod tests {
         ) -> EGResult<Self::TransportRes> {
             self.sent.lock().unwrap().push(message);
             match self.outcome {
-                ScriptedOutcome::RateLimited => Err(EGError::RateLimited {
-                    feedback: RateLimitFeedback {
-                        throttled: true,
-                        retry_after: Some(Duration::from_millis(50)),
-                        usage: vec![],
-                    },
-                }),
+                ScriptedOutcome::RateLimited => Err(EGError::RateLimited(RateLimitFeedback {
+                    is_throttled: true,
+                    retry_after: Some(Duration::from_millis(50)),
+                    usage: vec![],
+                })),
                 ScriptedOutcome::HttpError => Err(EGError::HttpError {
                     status: 400,
                     body: br#"{"code":-2010,"msg":"insufficient balance"}"#.to_vec(),

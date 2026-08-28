@@ -3,14 +3,6 @@ use crate::{
     rate_limit::{feedback::RateLimitFeedback, rate_limiter::RateLimiter},
 };
 
-/// The rate limits enforced locally by a connector.
-///
-/// Binance enforces independent limits for request weight (shared by all
-/// request types, `REQUEST_WEIGHT` 6000/min per IP) and order count
-/// (`ORDERS` 50 per 10 seconds and 160000 per day per account). Modelling
-/// them as separate buckets means a burst of `exchangeInfo` polls no longer
-/// eats into the order budget, and order placement is throttled at Binance's
-/// actual rate rather than an approximation of it.
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimits {
     pub weight: RateLimiter,
@@ -22,18 +14,8 @@ impl RateLimits {
         self.weight.refund(weight)?;
         self.orders.refund(orders)
     }
-    /// Applies server-side rate-limit feedback to the local model.
-    ///
-    /// A 429/418 response throttles every bucket until `Retry-After` elapses
-    /// (the IP is throttled or banned, so neither weight nor orders can be
-    /// sent). Reported usage then realigns each bucket's remaining capacity
-    /// and limit with what the server actually enforces, so hard-coded weights
-    /// (e.g. `exchangeInfo`, which is dynamic on Binance) cannot drift
-    /// undetected. `exchangeInfo` feedback carries the limit definitions
-    /// without usage, so it adopts the limits without resetting locally
-    /// consumed capacity.
     pub fn apply_feedback(&self, feedback: &RateLimitFeedback) -> EGResult<()> {
-        if feedback.throttled || feedback.retry_after.is_some() {
+        if feedback.is_throttled || feedback.retry_after.is_some() {
             self.weight.throttle(feedback.retry_after)?;
             self.orders.throttle(feedback.retry_after)?;
         }
@@ -43,14 +25,8 @@ impl RateLimits {
         }
         Ok(())
     }
-    /// Applies feedback carried by a rejected request's error, if any.
-    ///
-    /// A server-rejected 429/418 travels back as [`EGError::RateLimited`]
-    /// carrying the throttling + usage feedback observed on the response, so
-    /// the local model is realigned even though the request failed. Local
-    /// rejections carry no feedback and are a no-op here.
     pub fn apply_feedback_from_error(&self, error: &EGError) -> EGResult<()> {
-        if let EGError::RateLimited { feedback } = error {
+        if let EGError::RateLimited(feedback) = error {
             self.apply_feedback(feedback)?;
         }
         Ok(())
@@ -93,7 +69,7 @@ mod tests {
         assert!(limits.orders.did_acquire(1).unwrap());
         limits
             .apply_feedback(&RateLimitFeedback {
-                throttled: true,
+                is_throttled: true,
                 retry_after: Some(Duration::from_secs(30)),
                 usage: vec![RateLimitUsage {
                     rate_limit_type: RateLimitType::RequestWeight,
@@ -134,7 +110,7 @@ mod tests {
         // 4000 with 3000 already used: the bucket must adopt both.
         limits
             .apply_feedback(&RateLimitFeedback {
-                throttled: false,
+                is_throttled: false,
                 retry_after: None,
                 usage: vec![RateLimitUsage {
                     rate_limit_type: RateLimitType::RequestWeight,
@@ -178,7 +154,7 @@ mod tests {
         assert!(limits.orders.did_acquire(10).unwrap());
         limits
             .apply_feedback(&RateLimitFeedback {
-                throttled: false,
+                is_throttled: false,
                 retry_after: None,
                 usage: vec![
                     RateLimitUsage {
@@ -225,13 +201,11 @@ mod tests {
         // A 429 rejection travels back as RateLimited carrying the server's
         // feedback; applying it must drain the buckets until Retry-After.
         limits
-            .apply_feedback_from_error(&crate::error::EGError::RateLimited {
-                feedback: RateLimitFeedback {
-                    throttled: true,
-                    retry_after: Some(Duration::from_secs(30)),
-                    usage: vec![],
-                },
-            })
+            .apply_feedback_from_error(&crate::error::EGError::RateLimited(RateLimitFeedback {
+                is_throttled: true,
+                retry_after: Some(Duration::from_secs(30)),
+                usage: vec![],
+            }))
             .unwrap();
         assert!(!limits.weight.did_acquire(1).unwrap());
     }
@@ -273,7 +247,7 @@ mod tests {
         };
         limits
             .apply_feedback(&RateLimitFeedback {
-                throttled: false,
+                is_throttled: false,
                 retry_after: None,
                 usage: vec![
                     RateLimitUsage {

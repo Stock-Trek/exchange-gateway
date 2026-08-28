@@ -49,13 +49,6 @@ impl RateLimiter {
         }
         Ok(())
     }
-    /// Realigns every bucket of the same rate-limit type and interval with
-    /// server-reported usage.
-    ///
-    /// Buckets with a different type or interval are left untouched: Binance
-    /// reports `REQUEST_WEIGHT` (6000/min) and `RAW_REQUESTS` (61000/min)
-    /// with the same one-minute window, so matching on interval alone would
-    /// let the wrong usage overwrite the weight limiter's capacity.
     pub fn apply_usage(&self, usage: &RateLimitUsage) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
@@ -70,8 +63,6 @@ impl RateLimiter {
         }
         Ok(())
     }
-    /// Drains every bucket until `retry_after` elapses (a short default when
-    /// the server did not send a `Retry-After` header).
     pub fn throttle(&self, retry_after: Option<Duration>) -> EGResult<()> {
         let until = Instant::now() + retry_after.unwrap_or(Duration::from_secs(1));
         let mut limiters_guard = self

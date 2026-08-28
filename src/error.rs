@@ -24,14 +24,7 @@ pub enum EGError {
     #[error("Unknown endpoint")]
     UnknownEndpoint,
     #[error("Rate limit exceeded")]
-    RateLimited {
-        /// Server-side rate-limit feedback observed on the rejected response
-        /// (e.g. Binance's 429/418 with a `Retry-After` header and `X-MBX-*`
-        /// usage headers). Callers feed this back into the local limiter so
-        /// the local model stays aligned with the server. Empty when the
-        /// request was rejected by a *local* limiter.
-        feedback: RateLimitFeedback,
-    },
+    RateLimited(RateLimitFeedback),
     #[error("Request timed out waiting for a response")]
     TimedOut,
 }

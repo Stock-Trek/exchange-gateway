@@ -54,38 +54,10 @@ impl RateLimiterState {
     pub fn refund(&mut self, cost: u32) {
         self.current_capacity = (self.current_capacity + cost).min(self.capacity_per_interval);
     }
-    /// Drops the bucket to zero and refuses to refill it until `until` elapses.
-    ///
-    /// Used when the server answers 429/418 with a `Retry-After` header: the
-    /// local model must not keep admitting requests while the server is
-    /// throttling (or banning) our IP.
     pub fn throttle(&mut self, until: Instant) {
         self.current_capacity = 0;
         self.throttled_until = Some(until);
     }
-    /// Realigns the bucket with server-reported usage.
-    ///
-    /// `used`/`limit` come from the exchange (usage headers, WebSocket
-    /// `rateLimits`, `exchangeInfo`), so the bucket tracks the server even
-    /// when the locally hard-coded weight or limit has drifted. The refill
-    /// window restarts from now.
-    ///
-    /// * `used` + `limit` both reported (usage headers, WebSocket
-    ///   `rateLimits`): remaining capacity is set to `limit - used`.
-    /// * Only `used` reported: the configured limit is kept and remaining
-    ///   capacity is trimmed down to `limit - used`, never increased.
-    /// * Only `limit` reported (REST `exchangeInfo` `rateLimits` carry the
-    ///   current definitions but never a count): the new limit is adopted,
-    ///   but locally-consumed capacity is kept. Usage feedback must never
-    ///   refill a bucket, and the server did not tell us what it consumed.
-    /// * Neither reported: no-op.
-    ///
-    /// While a throttle is pending the bucket stays empty: usage feedback
-    /// must not repopulate it, or a limit-carrying response arriving inside
-    /// the throttle window (e.g. a concurrent `exchangeInfo` or WebSocket
-    /// `rateLimits` while a 429/`Retry-After` is active) would instantly
-    /// grant `limit - used` once the deadline elapses instead of refilling
-    /// from zero. The new limit is still adopted so the refill uses it.
     pub fn sync_usage(&mut self, used: Option<u32>, limit: Option<u32>) {
         if let Some(limit) = limit {
             self.capacity_per_interval = limit;
@@ -105,10 +77,6 @@ impl RateLimiterState {
                     .saturating_sub(used.min(self.capacity_per_interval));
                 self.current_capacity = self.current_capacity.min(remaining);
             }
-            // A limit definition without usage: adopt the limit but keep the
-            // locally-consumed capacity. In particular the bucket must not be
-            // refilled to `limit - 0`, or every REST `exchangeInfo` poll would
-            // wipe out all locally-reserved capacity.
             (None, Some(limit)) => {
                 self.current_capacity = self.current_capacity.min(limit);
             }
@@ -123,9 +91,6 @@ impl RateLimiterState {
             .is_some_and(|throttled_until| Instant::now() < throttled_until)
     }
     fn did_quick_consume(&mut self, cost: u32) -> bool {
-        // A single request can never consume more than the full bucket
-        // capacity. Refuse rather than panic: a request weight that exceeds
-        // the configured capacity must not take down the whole process.
         if cost > self.capacity_per_interval {
             return false;
         }
@@ -139,11 +104,9 @@ impl RateLimiterState {
         let now = Instant::now();
         if let Some(throttled_until) = self.throttled_until {
             if now < throttled_until {
-                // Still throttled: keep the bucket empty and do not refill.
                 return;
             }
             self.throttled_until = None;
-            // Refill starts counting once the throttle has elapsed.
             self.last_calculation = throttled_until;
         }
         let elapsed_nanos = now.duration_since(self.last_calculation).as_nanos();
