@@ -89,6 +89,13 @@ mod binance {
             BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(_)) => {
                 Err(EGError::UnknownEndpoint)
             }
+            BinanceHttpResponse::Result(BinanceHttpResponseResult::AmendOrder(_))
+            | BinanceHttpResponse::Result(BinanceHttpResponseResult::CancelAllOrders(_))
+            | BinanceHttpResponse::Result(BinanceHttpResponseResult::CancelOrder(_))
+            | BinanceHttpResponse::Result(BinanceHttpResponseResult::Ping(_))
+            | BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(_)) => {
+                Err(EGError::UnknownEndpoint)
+            }
         }
     }
 

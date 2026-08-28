@@ -17,7 +17,7 @@ use secrecy::SecretString;
 use std::time::Duration;
 use uuid::Uuid;
 
-pub(crate) const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
+const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
 
 pub(crate) fn exchange_urls() -> ExchangeUrls {
     ExchangeUrls::new(
@@ -80,7 +80,7 @@ pub(crate) fn rate_limit_usage(limit: &BinanceRateLimit) -> Option<RateLimitUsag
     })
 }
 
-pub(crate) fn rate_limit_type(rate_limit_type: BinanceRateLimitType) -> RateLimitType {
+fn rate_limit_type(rate_limit_type: BinanceRateLimitType) -> RateLimitType {
     match rate_limit_type {
         BinanceRateLimitType::CONNECTIONS => RateLimitType::Connections,
         BinanceRateLimitType::ORDERS => RateLimitType::Orders,
@@ -89,7 +89,7 @@ pub(crate) fn rate_limit_type(rate_limit_type: BinanceRateLimitType) -> RateLimi
     }
 }
 
-pub(crate) fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128> {
+fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128> {
     let secs = match interval {
         BinanceRateLimitInterval::SECOND => 1,
         BinanceRateLimitInterval::MINUTE => 60,

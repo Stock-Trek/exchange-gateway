@@ -1,26 +1,11 @@
 use crate::{
-    auth_gate::AuthGate,
     connector::Connector,
-    connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::ArcTryConvertValue,
-    listeners::{
-        convert_listener::ConvertListener, listener::ListenerTrait,
-        websocket_listener::WebsocketListener,
-    },
-    specs::binance::{
-        common::rate_limits,
-        websocket::{
-            authenticate_leg, create_signer_from_credentials, from_response, null_signer,
-            order_count, request_weight, response_feedback, sync_timestamp, to_request,
-        },
-    },
-    time_sync::TimeSync,
-    transports::{
-        transport::Transport,
-        websocket::{WebsocketClientTrait, WebsocketTransport},
-    },
+    listeners::listener::ListenerTrait,
+    specs::binance::websocket::connector_with_client_factory,
+    transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
@@ -196,56 +181,36 @@ fn mock_session_connector(
         BinanceWebsocketResponse,
         BinanceWebsocketResponse,
     > = Arc::new(Ok);
-    let auth_gate = Arc::new(AuthGate::default());
-    let rate_limits = rate_limits();
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
-    let websocket_listener = Arc::new(WebsocketListener::new(
-        Arc::new(from_response),
-        response_feedback,
-        rate_limits.clone(),
-        response_listener,
-        auth_gate.clone(),
-    ));
-    let mock_client = MockWebsocketClient {
-        listener: websocket_listener.clone(),
-        connected: Arc::new(AtomicBool::new(false)),
-        sent: Arc::new(Mutex::new(Vec::new())),
-        logon_gate,
-        logon_error,
-    };
-    let _ = client_handle.send(mock_client.clone());
-    let client: Arc<
-        dyn WebsocketClientTrait<
-                TransportReq = BinanceWebsocketRequest,
-                TransportRes = BinanceWebsocketResponse,
-            >,
-    > = Arc::new(mock_client);
-    let websocket_transport = WebsocketTransport::new(
-        client,
-        Arc::new(to_request),
-        Arc::new(from_response),
-        websocket_listener,
-    );
-    let time_sync = Arc::new(TimeSync::default());
-    let authenticate_legs = vec![authenticate_leg(
-        credentials.api_key.clone(),
-        time_sync.clone(),
+    // The production connector builds the internal response listener and
+    // hands it to the client factory, so the scripted client is wired into
+    // the same listener (and shared auth gate) the transport uses.
+    let client_factory =
+        move |websocket_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>| {
+            let mock_client = MockWebsocketClient {
+                listener: websocket_listener,
+                connected: Arc::new(AtomicBool::new(false)),
+                sent: Arc::new(Mutex::new(Vec::new())),
+                logon_gate,
+                logon_error,
+            };
+            let _ = client_handle.send(mock_client.clone());
+            let client: Arc<
+                dyn WebsocketClientTrait<
+                        TransportReq = BinanceWebsocketRequest,
+                        TransportRes = BinanceWebsocketResponse,
+                    >,
+            > = Arc::new(mock_client);
+            client
+        };
+    connector_with_client_factory(
+        client_factory,
         logon_timeout,
-    )];
-    Ok(ConnectorImpl::new(
-        rate_limits.clone(),
-        request_weight,
-        order_count,
         to_unsigned_request,
-        sync_timestamp(time_sync),
-        Transport::Websocket(websocket_transport),
-        null_signer(),
+        to_external_response,
+        listener,
         Some(credentials),
-        create_signer_from_credentials,
-        authenticate_legs,
-        auth_gate,
-    ))
+        true,
+    )
 }
 
 fn order_request() -> BinanceWebsocketUnsignedRequest {
