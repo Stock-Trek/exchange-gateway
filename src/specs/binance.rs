@@ -249,7 +249,10 @@ fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
 
 #[cfg(feature = "reqwest")]
 fn from_http_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
-    if response.status == 200 {
+    // Any 2xx is a successful response: `ReqwestHttpClient` only surfaces
+    // non-2xx statuses as errors, so a 201/204 must be parsed as a result
+    // rather than as an error body.
+    if (200..300).contains(&response.status) {
         let result = serde_json::from_slice(&response.body)
             .map_err(|error| EGError::External(Box::new(error)))?;
         Ok(BinanceHttpResponse::Result(result))
@@ -1451,6 +1454,40 @@ mod tests {
             symbols: None,
             timestamp: 0,
         })
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn from_http_response_parses_any_2xx_as_result() {
+        let response = HttpResponse {
+            status: 201,
+            body: br#"[]"#.to_vec(),
+            headers: vec![],
+        };
+        let parsed = from_http_response(response).expect("201 should parse as a result");
+        assert!(matches!(
+            parsed,
+            BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(ref filters))
+                if filters.is_empty()
+        ));
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn from_http_response_parses_non_2xx_as_error() {
+        let response = HttpResponse {
+            status: 400,
+            body: br#"{"code":-2014,"msg":"API-key format invalid."}"#.to_vec(),
+            headers: vec![],
+        };
+        let parsed = from_http_response(response).expect("400 should parse as an error");
+        match parsed {
+            BinanceHttpResponse::Error(error) => {
+                assert_eq!(error.code, -2014);
+                assert_eq!(error.msg, "API-key format invalid.");
+            }
+            other => panic!("expected Error, got: {other:?}"),
+        }
     }
 
     #[tokio::test]
