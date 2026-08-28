@@ -34,9 +34,14 @@ pub(crate) trait HttpClientTrait: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum HttpEndpoint {
+    AmendOrder,
     AssetLimits,
+    CancelAllOrders,
+    CancelOrder,
     ExchangeInfo,
+    Ping,
     PlaceOrder,
+    Time,
 }
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
