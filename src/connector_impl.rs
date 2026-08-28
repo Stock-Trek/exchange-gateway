@@ -271,14 +271,19 @@ where
     }
     /// The session is stale while no signer is installed yet and, for
     /// session-based connectors, whenever the installed signer belongs to an
-    /// older connection epoch.
+    /// older connection epoch — or the connection itself is down (the drop
+    /// may not have been reported to the auth gate yet, so a signed request
+    /// cannot be allowed to queue in the transport's outbound channel and
+    /// land on a fresh connection before re-auth).
     fn session_is_stale(&self) -> EGResult<bool> {
         let has_signer = self
             .signer
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
             .is_some();
-        Ok(!has_signer || (!self.authenticate_legs.is_empty() && self.auth_gate.is_stale()?))
+        Ok(!has_signer
+            || (!self.authenticate_legs.is_empty()
+                && (self.auth_gate.is_stale()? || !self.transport.is_connected())))
     }
     fn signed_request(&self, unsigned: EGUnsignedReq, signed: bool) -> EGResult<EGReq> {
         if signed {

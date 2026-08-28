@@ -41,9 +41,12 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 #[cfg(feature = "iris")]
-use crate::{
-    listeners::websocket_listener::WebsocketListener, transports::iris::IrisWebsocketClient,
-    transports::websocket::WebsocketTransport,
+use {
+    crate::{
+        listeners::websocket_listener::WebsocketListener, transports::iris::IrisWebsocketClient,
+        transports::websocket::WebsocketTransport,
+    },
+    iris::Config as IrisConfig,
 };
 
 #[cfg(feature = "reqwest")]
@@ -121,6 +124,7 @@ pub(crate) fn websocket_connector<ExternalReq, ExternalRes>(
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
+    iris_config: IrisConfig,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,
@@ -142,7 +146,9 @@ where
     let client = Arc::new(IrisWebsocketClient::<
         BinanceWebsocketRequest,
         BinanceWebsocketResponse,
-    >::new(&url, websocket_listener.clone()));
+    >::with_config(
+        &url, iris_config, websocket_listener.clone()
+    ));
     let websocket_transport = WebsocketTransport::new(
         client,
         Arc::new(to_websocket_request),
@@ -1067,6 +1073,10 @@ mod tests {
     /// successful response, and every outgoing request is recorded. When a
     /// [`LogonGate`] is configured, logon responses can be held so an
     /// authentication can be observed mid-flight.
+    ///
+    /// Like iris, requests sent while the connection is down are queued (and
+    /// recorded) but get no response: the pending logon responses are
+    /// delivered on the next `connect`, in the order they were queued.
     #[cfg(feature = "iris")]
     #[derive(Clone)]
     struct MockWebsocketClient {
@@ -1074,6 +1084,7 @@ mod tests {
         connected: Arc<AtomicBool>,
         sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
         logon_gate: Option<LogonGate>,
+        pending_logons: Arc<Mutex<Vec<BinanceWebsocketResponse>>>,
         logon_error: Option<BinanceError>,
     }
 
@@ -1096,7 +1107,21 @@ mod tests {
 
         async fn connect(&self) -> EGResult<()> {
             self.connected.store(true, Ordering::SeqCst);
-            self.listener.on_connected().await
+            self.listener.on_connected().await?;
+            // Deliver logon responses queued while the connection was down,
+            // in order: iris drains its outbound channel FIFO on the fresh
+            // connection, so a logon queued during a drop is answered before
+            // anything sent after it.
+            let pending = std::mem::take(
+                &mut *self
+                    .pending_logons
+                    .lock()
+                    .expect("mutex should not be poisoned"),
+            );
+            for response in pending {
+                self.listener.on_message(response).await?;
+            }
+            Ok(())
         }
         fn is_connected(&self) -> bool {
             self.connected.load(Ordering::SeqCst)
@@ -1121,7 +1146,21 @@ mod tests {
                 }
                 let response = match &self.logon_error {
                     Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
-                    None => logon_response(message.metadata.id, 200, None),
+                    None => {
+                        let response = logon_response(message.metadata.id, 200, None);
+                        if self.connected.load(Ordering::SeqCst) {
+                            self.listener.on_message(response).await?;
+                        } else {
+                            // While the connection is down iris queues the request
+                            // and delivers it on the fresh connection; hold the
+                            // response until the client reconnects so the waiter
+                            // stays pending, as it would on a live socket.
+                            self.pending_logons
+                                .lock()
+                                .expect("mutex should not be poisoned")
+                                .push(response);
+                        }
+                    }
                 };
                 self.listener.on_message(response).await?;
             }
@@ -1129,7 +1168,7 @@ mod tests {
         }
         async fn disconnect(&self) -> EGResult<()> {
             self.connected.store(false, Ordering::SeqCst);
-            Ok(())
+            self.listener.on_disconnected().await
         }
     }
 
@@ -1220,6 +1259,7 @@ mod tests {
             connected: Arc::new(AtomicBool::new(false)),
             sent: Arc::new(Mutex::new(Vec::new())),
             logon_gate,
+            pending_logons: Arc::new(Mutex::new(Vec::new())),
             logon_error,
         };
         let _ = client_handle.send(mock_client.clone());
@@ -1627,6 +1667,101 @@ mod tests {
             message.metadata.method,
             BinanceWebsocketMethodName::PlaceOrder
         )));
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "iris")]
+    async fn sends_during_a_drop_reauthenticate_before_the_order_is_queued() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = Arc::new(mock_session_connector(client_tx, None).unwrap());
+        let client = client_rx.recv().unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(connector.is_authenticated().unwrap());
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+
+        // The connection drops. The transport reports the disconnect (as iris
+        // does when the socket closes, before it reconnects), bumping the
+        // connection epoch so the session is stale while the connection is
+        // down and re-authentication cannot be bypassed.
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
+        assert!(!connector.is_authenticated().unwrap());
+
+        // A signed send while the connection is down must re-authenticate
+        // before the order is queued: the logon enters the outbound channel
+        // first, so on the fresh connection it is delivered ahead of the
+        // order. (Before the fix the stale check saw the old epoch, skipped
+        // re-auth, and queued the order under a dead session.)
+        let send = {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
+        };
+        wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 2)
+            .await
+            .expect("logon should be queued while the connection is down");
+        // The order must not be queued until re-authentication has completed:
+        // before the fix the stale check saw the old epoch, skipped re-auth,
+        // and queued the order under a dead session.
+        assert!(
+            !client.sent.lock().unwrap().iter().any(|message| matches!(
+                message.metadata.method,
+                BinanceWebsocketMethodName::PlaceOrder
+            )),
+            "the order must not be queued before re-authentication"
+        );
+        assert!(!connector.is_authenticated().unwrap());
+
+        // The connection comes back: the queued logon is answered first, then
+        // the order is queued under the fresh session. The connection may
+        // return while the first re-authentication is still in flight, in
+        // which case its logon belongs to the superseded epoch and one more
+        // logon runs against the fresh connection — the invariant is that the
+        // order always follows the last logon.
+        client.connect().await.expect("reconnect should succeed");
+        send.await
+            .expect("send task should complete")
+            .expect("send should succeed");
+        assert!(connector.is_authenticated().unwrap());
+        let sent = client.sent.lock().unwrap();
+        assert!(logon_count(&sent) >= 2);
+        let last_logon = sent
+            .iter()
+            .rposition(|message| {
+                matches!(message.metadata.method, BinanceWebsocketMethodName::Logon)
+            })
+            .expect("logon should be queued");
+        let order = sent
+            .iter()
+            .position(|message| {
+                matches!(
+                    message.metadata.method,
+                    BinanceWebsocketMethodName::PlaceOrder
+                )
+            })
+            .expect("order should be queued");
+        assert!(
+            order > last_logon,
+            "the order must be queued after the re-authentication logon"
+        );
+    }
+
+    /// Polls `condition` until it holds, with a generous deadline.
+    #[cfg(feature = "iris")]
+    async fn wait_until(mut condition: impl FnMut() -> bool) -> Option<()> {
+        for _ in 0..500 {
+            if condition() {
+                return Some(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        None
     }
 
     #[tokio::test]
