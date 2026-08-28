@@ -8,7 +8,11 @@ use std::time::Duration;
 pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
     pub create_auth_attempt: ArcCreateAuthAttempt<EGUnsignedReq, EGRes>,
     pub timeout: Duration,
-    pub create_signer: ArcTryConvertValue<EGRes, Signer<EGUnsignedReq, EGReq>>,
+    /// Builds the signer the remaining authentication legs (and ultimately
+    /// user requests) run through. A leg that only gathers information —
+    /// e.g. a server-time bootstrap before the logon — returns `Ok(None)`
+    /// to keep the signer the previous leg installed.
+    pub create_signer: ArcTryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
 }
 
 impl<EGUnsignedReq, EGReq, EGRes> std::fmt::Debug for AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {

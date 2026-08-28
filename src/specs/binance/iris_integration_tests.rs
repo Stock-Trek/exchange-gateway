@@ -5,6 +5,7 @@ use crate::{
     functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
     specs::binance::websocket::connector_with_client_factory,
+    time_sync::TimeSync,
     transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
@@ -18,9 +19,11 @@ use exchange_types::binance::{
         BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
         BinanceSpotOrderParams, BinanceTimeInForce,
     },
+    time::BinanceTimeResult,
     websocket::{
         BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
+        BinanceWebsocketUnsignedRequest,
     },
 };
 use secrecy::SecretString;
@@ -79,6 +82,7 @@ struct MockWebsocketClient {
     sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
     logon_gate: Option<LogonGate>,
     logon_error: Option<BinanceError>,
+    server_time_offset: i64,
 }
 
 #[derive(Clone)]
@@ -110,20 +114,35 @@ impl WebsocketClientTrait for MockWebsocketClient {
             .lock()
             .expect("mutex should not be poisoned")
             .push(message.clone());
-        if matches!(message.metadata.method, BinanceWebsocketMethodName::Logon) {
-            if let Some(gate) = &self.logon_gate {
-                if gate.fail.load(Ordering::SeqCst) {
-                    return Err(EGError::TimedOut);
+        match message.metadata.method {
+            BinanceWebsocketMethodName::Logon => {
+                if let Some(gate) = &self.logon_gate {
+                    if gate.fail.load(Ordering::SeqCst) {
+                        return Err(EGError::TimedOut);
+                    }
+                    if gate.block.load(Ordering::SeqCst) {
+                        gate.release.notified().await;
+                    }
                 }
-                if gate.block.load(Ordering::SeqCst) {
-                    gate.release.notified().await;
-                }
+                let response = match &self.logon_error {
+                    Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
+                    None => logon_response(message.metadata.id, 200, None),
+                };
+                self.listener.on_message(response).await?;
             }
-            let response = match &self.logon_error {
-                Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
-                None => logon_response(message.metadata.id, 200, None),
-            };
-            self.listener.on_message(response).await?;
+            BinanceWebsocketMethodName::Time => {
+                let response = BinanceWebsocketResponse {
+                    error: None,
+                    id: message.metadata.id,
+                    rateLimits: vec![],
+                    result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
+                        serverTime: TimeSync::default().now_millis() + self.server_time_offset,
+                    })),
+                    status: 200,
+                };
+                self.listener.on_message(response).await?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -168,6 +187,7 @@ fn mock_session_connector(
     logon_error: Option<BinanceError>,
     logon_timeout: Duration,
     listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
+    server_time_offset: i64,
 ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -192,6 +212,7 @@ fn mock_session_connector(
                 sent: Arc::new(Mutex::new(Vec::new())),
                 logon_gate,
                 logon_error,
+                server_time_offset,
             };
             let _ = client_handle.send(mock_client.clone());
             let client: Arc<
@@ -262,6 +283,7 @@ async fn reauthenticates_after_reconnect() {
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
+        0,
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
@@ -307,6 +329,7 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
+            0,
         )
         .unwrap(),
     );
@@ -381,6 +404,7 @@ async fn logon_weight_counts_against_weight_rate_limit() {
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
+        0,
     )
     .unwrap();
 
@@ -418,6 +442,7 @@ async fn rejected_logon_fails_connect_and_does_not_leak_to_listener() {
         }),
         Duration::from_secs(20),
         listener,
+        0,
     )
     .unwrap();
 
@@ -458,6 +483,7 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
+            0,
         )
         .unwrap(),
     );
@@ -571,6 +597,7 @@ async fn failed_reauthentication_keeps_the_session_stale() {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
+            0,
         )
         .unwrap(),
     );
@@ -637,6 +664,7 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
             None,
             Duration::from_millis(50),
             listener,
+            0,
         )
         .unwrap(),
     );
@@ -694,7 +722,13 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
         .expect("the retried authentication should send its logon");
     let (initial_logon_id, retried_logon_id) = {
         let sent = client.sent.lock().unwrap();
-        (sent[0].metadata.id.clone(), sent[1].metadata.id.clone())
+        let mut logons = sent
+            .iter()
+            .filter(|message| matches!(message.metadata.method, BinanceWebsocketMethodName::Logon));
+        (
+            logons.next().expect("initial logon").metadata.id.clone(),
+            logons.next().expect("retried logon").metadata.id.clone(),
+        )
     };
     assert_ne!(
         initial_logon_id, retried_logon_id,
@@ -715,5 +749,51 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
     assert!(
         received.lock().unwrap().is_empty(),
         "logon responses must not leak to the delegate listener"
+    );
+}
+
+#[tokio::test]
+async fn connect_syncs_the_server_clock_before_the_logon() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let connector = mock_session_connector(
+        client_tx,
+        None,
+        None,
+        Duration::from_secs(20),
+        Arc::new(IgnoreListener),
+        // The server clock is 10 s ahead of the local clock: a logon signed
+        // with the raw local clock would be rejected with -1021.
+        10_000,
+    )
+    .unwrap();
+    let client = client_rx.recv().unwrap();
+
+    connector.connect().await.expect("connect should succeed");
+    assert!(connector.is_authenticated().unwrap());
+
+    // The very first message is the unsigned `time` bootstrap; the logon
+    // follows with a server-synced timestamp.
+    let sent = client.sent.lock().unwrap();
+    assert_eq!(sent.len(), 2, "time bootstrap + logon");
+    assert!(matches!(
+        sent[0].metadata.method,
+        BinanceWebsocketMethodName::Time
+    ));
+    assert!(
+        sent[0].params.signature.is_none(),
+        "the time bootstrap must be unsigned"
+    );
+    assert!(matches!(
+        sent[1].metadata.method,
+        BinanceWebsocketMethodName::Logon
+    ));
+    let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
+        panic!("expected a logon");
+    };
+    let local = TimeSync::default().now_millis();
+    assert!(
+        logon.timestamp >= local + 10_000,
+        "logon timestamp {} must be near the server clock (local {local})",
+        logon.timestamp
     );
 }
