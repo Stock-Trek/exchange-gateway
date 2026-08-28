@@ -55,6 +55,7 @@ use {
         http::HttpTransport,
         reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
     },
+    exchange_types::binance::exchange_info::BinanceExchangeInfoParams,
     reqwest::Method,
 };
 
@@ -225,9 +226,7 @@ fn signed_query(query: String, signature: Option<String>) -> String {
 /// so they reach Binance (an empty `permissions` list is omitted, matching the
 /// REST API's "all symbols" default).
 #[cfg(feature = "reqwest")]
-fn exchange_info_query(
-    params: &exchange_types::binance::exchange_info::BinanceExchangeInfoParams,
-) -> String {
+fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
     let mut pairs = Vec::new();
     if !params.permissions.is_empty() {
         pairs.push(format!(
