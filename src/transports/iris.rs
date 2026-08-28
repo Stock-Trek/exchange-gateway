@@ -59,6 +59,14 @@ where
     /// [`Delay`]; this variant accepts a caller-supplied timer so tests can
     /// drive the timeout with a paused tokio clock instead of waiting on
     /// wall-clock time.
+    ///
+    /// The send itself fails fast only when the iris client state is gone
+    /// (before `connect()` or after an explicit `disconnect()`). While a
+    /// dropped socket is being reconnected, iris keeps the connection task
+    /// (and its bounded outbound channel) alive, so a send is buffered and
+    /// delivered on the fresh connection instead of failing: the connector
+    /// relies on this to flush a re-authentication logon ahead of any order
+    /// queued during a drop.
     async fn send_message_with_delay<D>(&self, message: TransportReq, delay: D) -> EGResult<()>
     where
         D: Future<Output = ()> + Send + 'static,
@@ -614,6 +622,131 @@ mod tests {
         assert!(
             matches!(result, Err(EGError::TimedOut)),
             "send on a wedged connection should time out with TimedOut, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_during_a_drop_is_buffered_and_delivered_on_reconnect() {
+        // The server closes the first connection (a drop) and answers every
+        // message on later connections, so a logon buffered during the drop
+        // is delivered on the fresh connection.
+        let (port, _shutdown) = spawn_server_that_closes_first_connection().await;
+        let connections = Arc::new(AtomicUsize::new(0));
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> =
+            Arc::new(ConnectionCountingListener {
+                connections: connections.clone(),
+                received: received.clone(),
+            });
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        // A fixed 1s backoff (initial == max, so no jitter) leaves a wide,
+        // deterministic window in which the socket is down but the iris
+        // connection task (and its outbound channel) is still alive.
+        let config = test_config().with_circuit_breaker_config(
+            CircuitBreakerConfig::new()
+                .with_initial_backoff(Duration::from_secs(1))
+                .with_max_backoff(Duration::from_secs(1))
+                .with_no_reconnect_limit(),
+        );
+        let client =
+            IrisWebsocketClient::<TestRequest, TestResponse>::with_config(&url, config, listener);
+        client.connect().await.expect("connect should succeed");
+        wait_until_connection_count(&connections, 1).await;
+
+        // The server closes the connection; iris reports the drop and starts
+        // its reconnect backoff. During this window `is_connected()` is false
+        // but the outbound channel is still alive, so a send is buffered
+        // rather than failing fast: iris only fails fast once the client
+        // state is gone (never connected, or an explicit `disconnect()`).
+        for _ in 0..100 {
+            if !client.is_connected() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            !client.is_connected(),
+            "the socket should be down before the send"
+        );
+
+        // A logon send while the socket is down does NOT fail fast: the
+        // message is queued in the outbound channel and the send completes
+        // (from the sender's perspective) as soon as the message is accepted.
+        let message = TestRequest {
+            id: 1,
+            method: "logon".into(),
+        };
+        client
+            .send_message(message, Duration::from_secs(30))
+            .await
+            .expect("send while the socket is down should be buffered, not fail");
+
+        // Once the backoff elapses, iris reconnects and delivers the buffered
+        // message on the fresh connection; the server's reply then arrives at
+        // the listener.
+        wait_until_connection_count(&connections, 2).await;
+        assert!(
+            client.is_connected(),
+            "client should have reconnected after the drop"
+        );
+        let response = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let response = {
+                    let received = received.lock().expect("mutex should not be poisoned");
+                    received.first().cloned()
+                };
+                if let Some(response) = response {
+                    return response;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the buffered message should be delivered on the fresh connection");
+        assert_eq!(response, TestResponse { id: 1, status: 200 });
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
+    }
+
+    #[tokio::test]
+    async fn send_after_explicit_disconnect_fails_fast() {
+        let (port, _shutdown) = spawn_responder_server().await;
+        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> = Arc::new(TestListener {
+            received: Arc::new(Mutex::new(Vec::new())),
+        });
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let client = IrisWebsocketClient::<TestRequest, TestResponse>::with_config(
+            &url,
+            test_config(),
+            listener,
+        );
+        client.connect().await.expect("connect should succeed");
+        wait_until_connected(&client).await;
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
+        assert!(!client.is_connected());
+
+        // An explicit disconnect removes the iris client state, so the very
+        // next send fails immediately instead of being buffered: this is the
+        // "fail fast" behavior the iris tests exercise (as opposed to a drop,
+        // where the reconnect task keeps the outbound channel alive and sends
+        // are buffered).
+        let result = client
+            .send_message(
+                TestRequest {
+                    id: 1,
+                    method: "logon".into(),
+                },
+                Duration::from_secs(5),
+            )
+            .await;
+        assert!(
+            result.is_err(),
+            "send after an explicit disconnect should fail fast, got: {result:?}"
         );
     }
 }
