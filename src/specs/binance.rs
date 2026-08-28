@@ -2,7 +2,7 @@ use crate::{
     authenticate_leg::AuthenticateLeg,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcTryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue},
     rate_limit::{
         feedback::{RateLimitFeedback, RateLimitUsage},
         rate_limit_config::RateLimitConfig,
@@ -162,7 +162,11 @@ where
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        vec![authenticate_websocket_leg(api_key, time_sync.clone())]
+        vec![authenticate_websocket_leg(
+            api_key,
+            time_sync.clone(),
+            Duration::from_secs(20),
+        )]
     } else {
         vec![]
     };
@@ -299,26 +303,32 @@ fn http_endpoints() -> HashMap<HttpEndpoint, String> {
 fn authenticate_websocket_leg(
     api_key: String,
     time_sync: Arc<TimeSync>,
+    timeout: Duration,
 ) -> AuthenticateLeg<
     BinanceWebsocketUnsignedRequest,
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
 > {
-    let timeout = Duration::from_secs(20);
-    let id = id();
-    let create_auth_message = {
-        let id = id.clone();
+    let create_auth_attempt = {
         let api_key = api_key.clone();
         let time_sync = time_sync.clone();
-        Arc::new(move || websocket_auth_message(&id, &api_key, &time_sync))
-    };
-    let filter = {
-        // Match any response for this logon id, success or rejection: a
-        // rejected logon must be consumed by the authentication waiter so it
-        // neither leaks to the user's listener nor forces the authenticating
-        // caller to wait out the full timeout. The rejection itself is
-        // surfaced by `create_signer` below.
-        Arc::new(move |response: &BinanceWebsocketResponse| response.id == *id)
+        Arc::new(move || {
+            // A fresh id per attempt: a logon queued in the transport's
+            // outbound channel by a timed-out attempt must never resolve a
+            // later attempt's waiter, and the later attempt's own response
+            // must never be mistaken for another request's.
+            let id = id();
+            let message = websocket_auth_message(&id, &api_key, &time_sync);
+            // Match any response for this attempt's logon id, success or
+            // rejection: a rejected logon must be consumed by the
+            // authentication waiter so it neither leaks to the user's
+            // listener nor forces the authenticating caller to wait out the
+            // full timeout. The rejection itself is surfaced by
+            // `create_signer` below.
+            let filter: ArcPredicate<BinanceWebsocketResponse> =
+                Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
+            (message, filter)
+        })
     };
     let create_signer = {
         let time_sync = time_sync.clone();
@@ -333,9 +343,8 @@ fn authenticate_websocket_leg(
         )
     };
     AuthenticateLeg {
-        create_auth_message,
+        create_auth_attempt,
         create_signer,
-        filter,
         timeout,
     }
 }
@@ -707,13 +716,18 @@ mod tests {
     #[test]
     fn logon_filter_matches_any_response_for_the_logon_id() {
         let api_key = "api-key";
-        let leg = authenticate_websocket_leg(api_key.into(), Arc::new(TimeSync::default()));
-        let id = (leg.create_auth_message)().metadata.id;
+        let leg = authenticate_websocket_leg(
+            api_key.into(),
+            Arc::new(TimeSync::default()),
+            Duration::from_secs(20),
+        );
+        let (message, filter) = (leg.create_auth_attempt)();
+        let id = message.metadata.id;
         // Success and rejection are both matched, so a rejected logon is
         // consumed by the authentication waiter instead of leaking to the
         // user's listener. The rejection itself is surfaced by `create_signer`.
-        assert!((leg.filter)(&logon_response(id.clone(), 200, None)));
-        assert!((leg.filter)(&logon_response(
+        assert!(filter(&logon_response(id.clone(), 200, None)));
+        assert!(filter(&logon_response(
             id.clone(),
             200,
             Some(BinanceError {
@@ -721,10 +735,48 @@ mod tests {
                 msg: "API-key format invalid.".into(),
             }),
         )));
-        assert!((leg.filter)(&logon_response(id.clone(), 401, None)));
+        assert!(filter(&logon_response(id.clone(), 401, None)));
         // Responses for other requests do not match.
-        assert!(!(leg.filter)(&logon_response(
-            "some-other-id".into(),
+        assert!(!filter(&logon_response("some-other-id".into(), 200, None)));
+    }
+
+    #[test]
+    fn each_authentication_attempt_uses_a_fresh_logon_id() {
+        let api_key = "api-key";
+        let leg = authenticate_websocket_leg(
+            api_key.into(),
+            Arc::new(TimeSync::default()),
+            Duration::from_secs(20),
+        );
+        // A retried authentication must not reuse the previous attempt's id:
+        // a logon queued in the transport's outbound channel by a timed-out
+        // attempt (iris delivers it on the fresh connection) would otherwise
+        // resolve the newer attempt's waiter, and the newer attempt's own
+        // response would leak to the user's listener with no waiter left.
+        let (first_message, first_filter) = (leg.create_auth_attempt)();
+        let (second_message, second_filter) = (leg.create_auth_attempt)();
+        assert_ne!(
+            first_message.metadata.id, second_message.metadata.id,
+            "each authentication attempt must use a fresh logon id"
+        );
+        // Each attempt's waiter matches only that attempt's response.
+        assert!(first_filter(&logon_response(
+            first_message.metadata.id.clone(),
+            200,
+            None
+        )));
+        assert!(!first_filter(&logon_response(
+            second_message.metadata.id.clone(),
+            200,
+            None
+        )));
+        assert!(second_filter(&logon_response(
+            second_message.metadata.id.clone(),
+            200,
+            None
+        )));
+        assert!(!second_filter(&logon_response(
+            first_message.metadata.id.clone(),
             200,
             None
         )));
@@ -733,8 +785,12 @@ mod tests {
     #[test]
     fn logon_signer_surfaces_rejected_logon_error() {
         let api_key = "api-key";
-        let leg = authenticate_websocket_leg(api_key.into(), Arc::new(TimeSync::default()));
-        let id = (leg.create_auth_message)().metadata.id;
+        let leg = authenticate_websocket_leg(
+            api_key.into(),
+            Arc::new(TimeSync::default()),
+            Duration::from_secs(20),
+        );
+        let id = (leg.create_auth_attempt)().0.metadata.id;
         // A successful logon response yields a signer.
         assert!((leg.create_signer)(logon_response(id.clone(), 200, None)).is_ok());
         // A rejected logon surfaces the exchange's actual error.
@@ -1227,6 +1283,7 @@ mod tests {
         client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
         logon_gate: Option<LogonGate>,
         logon_error: Option<BinanceError>,
+        logon_timeout: Duration,
         listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
     ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
         let credentials = ApiKeyCredentials {
@@ -1277,6 +1334,7 @@ mod tests {
         let authenticate_legs = vec![authenticate_websocket_leg(
             credentials.api_key.clone(),
             time_sync.clone(),
+            logon_timeout,
         )];
         Ok(ConnectorImpl::new(
             rate_limits.clone(),
@@ -1632,8 +1690,14 @@ mod tests {
     #[cfg(feature = "iris")]
     async fn reauthenticates_after_reconnect() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
-        let connector =
-            mock_session_connector(client_tx, None, None, Arc::new(IgnoreListener)).unwrap();
+        let connector = mock_session_connector(
+            client_tx,
+            None,
+            None,
+            Duration::from_secs(20),
+            Arc::new(IgnoreListener),
+        )
+        .unwrap();
         let client = client_rx.recv().unwrap();
 
         connector.connect().await.expect("connect should succeed");
@@ -1672,7 +1736,14 @@ mod tests {
     async fn sends_during_a_drop_reauthenticate_before_the_order_is_queued() {
         let (client_tx, client_rx) = std::sync::mpsc::channel();
         let connector = Arc::new(
-            mock_session_connector(client_tx, None, None, Arc::new(IgnoreListener)).unwrap(),
+            mock_session_connector(
+                client_tx,
+                None,
+                None,
+                Duration::from_secs(20),
+                Arc::new(IgnoreListener),
+            )
+            .unwrap(),
         );
         let client = client_rx.recv().unwrap();
 
@@ -1768,8 +1839,14 @@ mod tests {
     #[cfg(feature = "iris")]
     async fn logon_weight_counts_against_weight_rate_limit() {
         let (client_tx, _client_rx) = std::sync::mpsc::channel();
-        let connector =
-            mock_session_connector(client_tx, None, None, Arc::new(IgnoreListener)).unwrap();
+        let connector = mock_session_connector(
+            client_tx,
+            None,
+            None,
+            Duration::from_secs(20),
+            Arc::new(IgnoreListener),
+        )
+        .unwrap();
 
         connector.connect().await.expect("connect should succeed");
 
@@ -1804,6 +1881,7 @@ mod tests {
                 code: -2014,
                 msg: "API-key format invalid.".into(),
             }),
+            Duration::from_secs(20),
             listener,
         )
         .unwrap();
@@ -1844,6 +1922,7 @@ mod tests {
                 client_tx,
                 Some(logon_gate.clone()),
                 None,
+                Duration::from_secs(20),
                 Arc::new(IgnoreListener),
             )
             .unwrap(),
@@ -1957,6 +2036,7 @@ mod tests {
                 client_tx,
                 Some(logon_gate.clone()),
                 None,
+                Duration::from_secs(20),
                 Arc::new(IgnoreListener),
             )
             .unwrap(),
@@ -1999,6 +2079,147 @@ mod tests {
             message.metadata.method,
             BinanceWebsocketMethodName::PlaceOrder
         )));
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "iris")]
+    async fn timed_out_queued_logon_does_not_resolve_a_newer_authentication() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let logon_gate = LogonGate {
+            block: Arc::new(AtomicBool::new(false)),
+            release: Arc::new(tokio::sync::Notify::new()),
+            fail: Arc::new(AtomicBool::new(false)),
+        };
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+            Arc::new(RecordingListener {
+                received: received.clone(),
+            });
+        // A short logon waiter so the first re-authentication attempt times
+        // out promptly while the connection is still down.
+        let connector = Arc::new(
+            mock_session_connector(
+                client_tx,
+                Some(logon_gate.clone()),
+                None,
+                Duration::from_millis(50),
+                listener,
+            )
+            .unwrap(),
+        );
+        let client = client_rx.recv().unwrap();
+
+        connector.connect().await.expect("connect should succeed");
+        assert!(connector.is_authenticated().unwrap());
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
+
+        // The connection drops for longer than the logon waiter: the first
+        // re-authentication attempt queues its logon in the transport's
+        // outbound channel (iris buffers sends while the connection is down),
+        // waits out its 50 ms timeout, and fails without the logon ever being
+        // delivered.
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
+        assert!(!connector.is_authenticated().unwrap());
+        let timed_out_send = {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
+        };
+        let error = timed_out_send
+            .await
+            .expect("send task should not panic")
+            .expect_err("the timed-out logon must fail the send");
+        assert!(matches!(error, EGError::TimedOut));
+        assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
+
+        // The timed-out attempt's logon stays queued: iris delivers it on the
+        // fresh connection. Hold its response so the test can deliver it after
+        // the newer attempt's waiter is registered, exactly as iris would
+        // (the stale logon is flushed before any later request).
+        let stale_response = {
+            let mut pending = client
+                .pending_logons
+                .lock()
+                .expect("mutex should not be poisoned");
+            let response = pending
+                .pop()
+                .expect("stale logon response should be queued");
+            assert!(pending.is_empty());
+            response
+        };
+        // Against real Binance the stale logon carries a timestamp outside the
+        // 5 s recvWindow, so it would come back rejected with -1021.
+        let stale_response = BinanceWebsocketResponse {
+            error: Some(BinanceError {
+                code: -1021,
+                msg: "Timestamp for this request is outside of the recvWindow.".into(),
+            }),
+            status: 400,
+            ..stale_response
+        };
+
+        // The connection comes back and the session is stale again, so the
+        // next signed send starts a fresh authentication attempt.
+        logon_gate.block.store(true, Ordering::SeqCst);
+        client.connect().await.expect("reconnect should succeed");
+        let retried_send = {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
+        };
+        wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 3)
+            .await
+            .expect("the retried authentication should queue its logon");
+        let (stale_logon_id, retried_logon_id) = {
+            let sent = client.sent.lock().unwrap();
+            (sent[1].metadata.id.clone(), sent[2].metadata.id.clone())
+        };
+        assert_ne!(
+            stale_logon_id, retried_logon_id,
+            "each authentication attempt must use a fresh logon id"
+        );
+
+        // The stale queued logon's response arrives while the newer attempt's
+        // waiter is registered. It must not resolve that waiter (before the
+        // fix both logons shared one id, so the stale -1021 rejection made a
+        // healthy session spuriously fail authentication).
+        client
+            .listener
+            .on_message(stale_response.clone())
+            .await
+            .expect("delivering the stale logon response should succeed");
+        assert!(
+            !connector.is_authenticated().unwrap(),
+            "the stale logon response must not authenticate the session"
+        );
+
+        // Release the current attempt's logon response: it resolves its own
+        // waiter and the send completes normally.
+        logon_gate.block.store(false, Ordering::SeqCst);
+        logon_gate.release.notify_one();
+        retried_send
+            .await
+            .expect("send task should not panic")
+            .expect("the retried send should succeed against its own logon");
+        assert!(connector.is_authenticated().unwrap());
+
+        // The current attempt's logon response must not leak to the user's
+        // listener. The only message the delegate may see is the stale
+        // queued logon's response, which no live waiter matches (iris flushed
+        // the dead attempt's logon on the fresh connection).
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 1, "only the stale logon response may leak");
+        assert_eq!(received[0].id, stale_logon_id);
+        assert_ne!(received[0].id, retried_logon_id);
     }
 
     #[test]
@@ -2083,7 +2304,11 @@ mod tests {
     #[test]
     fn logon_response_syncs_server_time() {
         let time_sync = Arc::new(TimeSync::default());
-        let leg = authenticate_websocket_leg("api-key".into(), time_sync.clone());
+        let leg = authenticate_websocket_leg(
+            "api-key".into(),
+            time_sync.clone(),
+            Duration::from_secs(20),
+        );
         let local = time_sync.now_millis();
         let response = BinanceWebsocketResponse {
             error: None,
