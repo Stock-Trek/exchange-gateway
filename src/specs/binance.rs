@@ -180,7 +180,9 @@ fn to_http_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
     let mut headers = Vec::new();
     let (method, query) = match params {
-        BinanceHttpUnsignedRequest::ExchangeInfo(_) => (Method::GET, None),
+        BinanceHttpUnsignedRequest::ExchangeInfo(params) => {
+            (Method::GET, Some(exchange_info_query(&params)))
+        }
         BinanceHttpUnsignedRequest::AssetLimits(params) => (
             Method::GET,
             Some(signed_query(params.query_params(true), signature)),
@@ -210,6 +212,28 @@ fn signed_query(query: String, signature: Option<String>) -> String {
         Some(signature) => format!("{query}&signature={signature}"),
         None => query,
     }
+}
+
+/// Builds the query string for the unsigned `GET /api/v3/exchangeInfo`
+/// endpoint. The caller's `permissions`/`symbolStatus` filters are forwarded
+/// so they reach Binance (an empty `permissions` list is omitted, matching the
+/// REST API's "all symbols" default).
+#[cfg(feature = "reqwest")]
+fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
+    let mut pairs = Vec::new();
+    if !params.permissions.is_empty() {
+        pairs.push(format!(
+            "permissions={}",
+            params
+                .permissions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    pairs.push(format!("symbolStatus={}", params.symbolStatus));
+    pairs.join("&")
 }
 
 #[cfg(feature = "reqwest")]
@@ -813,6 +837,38 @@ mod tests {
             symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
         });
         assert!(http_unsigned_request_to_bytes(&request).unwrap().is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_query_is_forwarded() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
+        };
+        let http_request = to_http_request(request).unwrap();
+        assert_eq!(http_request.method, Method::GET);
+        assert_eq!(
+            http_request.query.as_deref(),
+            Some("permissions=SPOT&symbolStatus=TRADING")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn http_exchange_info_omits_empty_permissions() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
+        };
+        let http_request = to_http_request(request).unwrap();
+        assert_eq!(http_request.query.as_deref(), Some("symbolStatus=TRADING"));
     }
 
     #[test]
