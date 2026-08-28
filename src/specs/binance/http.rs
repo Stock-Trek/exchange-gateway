@@ -25,12 +25,15 @@ use crate::{
     urls::{ExchangeTransportType, TradingMode},
 };
 use exchange_types::binance::{
+    amend::BinanceAmendOrderParams,
+    cancel::{BinanceCancelAllOrdersParams, BinanceCancelOrderParams},
     exchange_info::BinanceExchangeInfoParams,
     http::{
         BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
         BinanceHttpUnsignedRequest,
     },
     signed::BinanceSignedParams,
+    spot::BinanceSpotOrderParams,
 };
 use reqwest::Method;
 use std::{borrow::Cow, collections::HashMap, sync::Arc};
@@ -123,6 +126,36 @@ fn to_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
                 Some(signed_query(params.query_params(true), signature)),
             )
         }
+        BinanceHttpUnsignedRequest::AmendOrderRequest(mut params) => {
+            if let Some(api_key) = params.apiKey.take() {
+                headers.push(("X-MBX-APIKEY".into(), api_key));
+            }
+            (
+                Method::POST,
+                Some(signed_query(params.query_params(true), signature)),
+            )
+        }
+        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(mut params) => {
+            if let Some(api_key) = params.apiKey.take() {
+                headers.push(("X-MBX-APIKEY".into(), api_key));
+            }
+            (
+                Method::DELETE,
+                Some(signed_query(params.query_params(true), signature)),
+            )
+        }
+        BinanceHttpUnsignedRequest::CancelOrderRequest(mut params) => {
+            if let Some(api_key) = params.apiKey.take() {
+                headers.push(("X-MBX-APIKEY".into(), api_key));
+            }
+            (
+                Method::DELETE,
+                Some(signed_query(params.query_params(true), signature)),
+            )
+        }
+        BinanceHttpUnsignedRequest::Ping(..) | BinanceHttpUnsignedRequest::Time(..) => {
+            (Method::GET, None)
+        }
     };
     Ok(HttpRequest {
         method,
@@ -173,6 +206,11 @@ fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
         BinanceHttpUnsignedRequest::AssetLimits(..) => HttpEndpoint::AssetLimits,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => HttpEndpoint::ExchangeInfo,
         BinanceHttpUnsignedRequest::SpotOrderRequest(..) => HttpEndpoint::PlaceOrder,
+        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => HttpEndpoint::AmendOrder,
+        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => HttpEndpoint::CancelAllOrders,
+        BinanceHttpUnsignedRequest::CancelOrderRequest(..) => HttpEndpoint::CancelOrder,
+        BinanceHttpUnsignedRequest::Ping(..) => HttpEndpoint::Ping,
+        BinanceHttpUnsignedRequest::Time(..) => HttpEndpoint::Time,
     }
 }
 
@@ -181,6 +219,11 @@ fn endpoints() -> HashMap<HttpEndpoint, String> {
     endpoints.insert(HttpEndpoint::AssetLimits, "myFilters".into());
     endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
     endpoints.insert(HttpEndpoint::PlaceOrder, "order".into());
+    endpoints.insert(HttpEndpoint::AmendOrder, "order/cancelReplace".into());
+    endpoints.insert(HttpEndpoint::CancelAllOrders, "openOrders".into());
+    endpoints.insert(HttpEndpoint::CancelOrder, "order".into());
+    endpoints.insert(HttpEndpoint::Ping, "ping".into());
+    endpoints.insert(HttpEndpoint::Time, "time".into());
     endpoints
 }
 
@@ -206,7 +249,21 @@ fn sync_timestamp(
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
                 BinanceHttpUnsignedRequest::SpotOrderRequest(params)
             }
+            BinanceHttpUnsignedRequest::AmendOrderRequest(mut params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+                BinanceHttpUnsignedRequest::AmendOrderRequest(params)
+            }
+            BinanceHttpUnsignedRequest::CancelAllOrdersRequest(mut params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+                BinanceHttpUnsignedRequest::CancelAllOrdersRequest(params)
+            }
+            BinanceHttpUnsignedRequest::CancelOrderRequest(mut params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+                BinanceHttpUnsignedRequest::CancelOrderRequest(params)
+            }
             request @ BinanceHttpUnsignedRequest::ExchangeInfo(..) => request,
+            request @ BinanceHttpUnsignedRequest::Ping(..) => request,
+            request @ BinanceHttpUnsignedRequest::Time(..) => request,
         })
     })
 }
@@ -233,16 +290,79 @@ fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<O
         }
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => None,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
-            let params_without_api_key = if params.apiKey.is_none() {
-                Cow::Borrowed(params)
-            } else {
-                let mut cloned = params.clone();
-                cloned.apiKey = None;
-                Cow::Owned(cloned)
-            };
+            let params_without_api_key = strip_api_key(params.as_ref());
             Some(params_without_api_key.query_params(true).into_bytes())
         }
+        BinanceHttpUnsignedRequest::AmendOrderRequest(params) => {
+            let params_without_api_key = strip_api_key(params);
+            Some(params_without_api_key.query_params(true).into_bytes())
+        }
+        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(params) => {
+            let params_without_api_key = strip_api_key(params);
+            Some(params_without_api_key.query_params(true).into_bytes())
+        }
+        BinanceHttpUnsignedRequest::CancelOrderRequest(params) => {
+            let params_without_api_key = strip_api_key(params);
+            Some(params_without_api_key.query_params(true).into_bytes())
+        }
+        BinanceHttpUnsignedRequest::Ping(..) | BinanceHttpUnsignedRequest::Time(..) => None,
     })
+}
+
+/// REST signs the query string without the `apiKey` param (it is sent in
+/// the X-MBX-APIKEY header instead).
+fn strip_api_key<T>(params: &T) -> Cow<'_, T>
+where
+    T: Clone + HasApiKey,
+{
+    if params.api_key().is_none() {
+        Cow::Borrowed(params)
+    } else {
+        let mut cloned = params.clone();
+        cloned.set_api_key(None);
+        Cow::Owned(cloned)
+    }
+}
+
+trait HasApiKey {
+    fn api_key(&self) -> &Option<String>;
+    fn set_api_key(&mut self, api_key: Option<String>);
+}
+
+impl HasApiKey for BinanceSpotOrderParams {
+    fn api_key(&self) -> &Option<String> {
+        &self.apiKey
+    }
+    fn set_api_key(&mut self, api_key: Option<String>) {
+        self.apiKey = api_key;
+    }
+}
+
+impl HasApiKey for BinanceAmendOrderParams {
+    fn api_key(&self) -> &Option<String> {
+        &self.apiKey
+    }
+    fn set_api_key(&mut self, api_key: Option<String>) {
+        self.apiKey = api_key;
+    }
+}
+
+impl HasApiKey for BinanceCancelAllOrdersParams {
+    fn api_key(&self) -> &Option<String> {
+        &self.apiKey
+    }
+    fn set_api_key(&mut self, api_key: Option<String>) {
+        self.apiKey = api_key;
+    }
+}
+
+impl HasApiKey for BinanceCancelOrderParams {
+    fn api_key(&self) -> &Option<String> {
+        &self.apiKey
+    }
+    fn set_api_key(&mut self, api_key: Option<String>) {
+        self.apiKey = api_key;
+    }
 }
 
 fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
@@ -260,6 +380,11 @@ fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
         BinanceHttpUnsignedRequest::AssetLimits(..) => 40,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => 20,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
+        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => 2,
+        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => 1,
+        BinanceHttpUnsignedRequest::CancelOrderRequest(..) => 1,
+        BinanceHttpUnsignedRequest::Ping(..) => 1,
+        BinanceHttpUnsignedRequest::Time(..) => 1,
     }
 }
 

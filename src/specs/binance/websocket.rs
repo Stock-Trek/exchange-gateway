@@ -257,10 +257,21 @@ fn sync_timestamp(
             BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
             }
+            BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+            }
+            BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+            }
+            BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &time_sync);
+            }
             BinanceWebsocketUnsignedParams::Logon(params) => {
                 params.timestamp = time_sync.now_millis();
             }
-            BinanceWebsocketUnsignedParams::ExchangeInfo(..) => {}
+            BinanceWebsocketUnsignedParams::ExchangeInfo(..)
+            | BinanceWebsocketUnsignedParams::Ping(..)
+            | BinanceWebsocketUnsignedParams::Time(..) => {}
         }
         Ok(request)
     })
@@ -292,6 +303,16 @@ fn unsigned_request_params_to_bytes(
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
             Some(params.query_params(true).into_bytes())
         }
+        BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::Ping(..) | BinanceWebsocketUnsignedParams::Time(..) => None,
     })
 }
 
@@ -317,6 +338,11 @@ fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
         BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 4,
         BinanceWebsocketUnsignedParams::Logon(..) => 2,
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
+        BinanceWebsocketUnsignedParams::AmendOrderRequest(..) => 2,
+        BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(..) => 1,
+        BinanceWebsocketUnsignedParams::CancelOrderRequest(..) => 1,
+        BinanceWebsocketUnsignedParams::Ping(..) => 1,
+        BinanceWebsocketUnsignedParams::Time(..) => 1,
     }
 }
 
