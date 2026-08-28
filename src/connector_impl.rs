@@ -201,9 +201,21 @@ where
                 AuthGateAcquisition::Authenticator(on_complete) => on_complete,
             };
             let result = self.run_authentication(credentials).await;
-            // Clear the gate before waking waiters so a waiter that finds the
-            // session stale can immediately become the next authenticator.
-            self.auth_gate.release()?;
+            match result {
+                Err(_) => {
+                    // A failed authentication must not advance the
+                    // authenticated epoch: the session stays stale so waiters
+                    // retry instead of treating the current connection as
+                    // authenticated.
+                    self.auth_gate.cancel()?;
+                }
+                Ok(()) => {
+                    // Clear the gate before waking waiters so a waiter that
+                    // finds the session stale can immediately become the next
+                    // authenticator.
+                    self.auth_gate.release()?;
+                }
+            }
             on_complete.notify();
             match result {
                 Err(error) => return Err(error),
