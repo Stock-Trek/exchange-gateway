@@ -8,14 +8,7 @@ use crate::{
         feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
-    specs::binance::{
-        common::rate_limits,
-        http::{
-            connector_with_client, create_signer_from_credentials, endpoints, null_signer,
-            order_count, request_to_endpoint, request_weight, response_feedback, sync_timestamp,
-            time_bootstrap_leg,
-        },
-    },
+    specs::binance::{common::rate_limits, http::connector_with_client},
     time_sync::TimeSync,
     transports::{
         http::HttpClientTrait,
@@ -31,7 +24,6 @@ use exchange_types::binance::{
         BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
         BinanceSpotOrderParams, BinanceTimeInForce,
     },
-    time::BinanceTimeResult,
 };
 use secrecy::SecretString;
 use std::{
@@ -138,9 +130,6 @@ fn mock_http_connector(
         to_external_response,
         listener,
         Some(credentials),
-        create_signer_from_credentials,
-        authenticate_legs,
-        Arc::new(AuthGate::default()),
     )
 }
 

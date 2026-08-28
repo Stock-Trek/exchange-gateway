@@ -4,23 +4,9 @@ use crate::{
     error::{EGError, EGResult},
     functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
-    listeners::{
-        convert_listener::ConvertListener, listener::ListenerTrait,
-        websocket_listener::WebsocketListener,
-    },
-    specs::binance::{
-        common::rate_limits,
-        websocket::{
-            authenticate_leg, connector_with_client_factory, create_signer_from_credentials,
-            from_response, null_signer, order_count, request_weight, response_feedback,
-            sync_timestamp, time_bootstrap_leg, to_request,
-        },
-    },
+    specs::binance::websocket::connector_with_client_factory,
     time_sync::TimeSync,
-    transports::{
-        transport::Transport,
-        websocket::{WebsocketClientTrait, WebsocketTransport},
-    },
+    transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
@@ -96,8 +82,6 @@ struct MockWebsocketClient {
     sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
     logon_gate: Option<LogonGate>,
     logon_error: Option<BinanceError>,
-    /// The server clock reported by `time` responses, as an offset from the
-    /// local clock, so a skewed server clock can be scripted.
     server_time_offset: i64,
 }
 
@@ -228,6 +212,7 @@ fn mock_session_connector(
                 sent: Arc::new(Mutex::new(Vec::new())),
                 logon_gate,
                 logon_error,
+                server_time_offset,
             };
             let _ = client_handle.send(mock_client.clone());
             let client: Arc<
