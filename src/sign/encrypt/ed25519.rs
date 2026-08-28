@@ -20,10 +20,7 @@ impl DataSignerTrait for Ed25519Signer {
 
 #[cfg(test)]
 mod tests {
-    use crate::sign::encrypt::{
-        data_signer::DataSignerTrait,
-        ed25519::Ed25519Signer,
-    };
+    use crate::sign::encrypt::{data_signer::DataSignerTrait, ed25519::Ed25519Signer};
     use ed25519_compact::{KeyPair, Seed, Signature};
 
     #[test]
