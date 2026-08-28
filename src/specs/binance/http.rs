@@ -61,10 +61,6 @@ where
     )
 }
 
-/// Assembles the production HTTP connector around an injected transport
-/// client and rate limits. The production [`connector`] builds the real
-/// reqwest client; tests pass a scripted client (and custom limits) to
-/// exercise the same connector wiring without a network.
 pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
     rate_limits: RateLimits,
@@ -309,8 +305,6 @@ fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<O
     })
 }
 
-/// REST signs the query string without the `apiKey` param (it is sent in
-/// the X-MBX-APIKEY header instead).
 fn strip_api_key<T>(params: &T) -> Cow<'_, T>
 where
     T: Clone + HasApiKey,

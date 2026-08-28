@@ -80,11 +80,6 @@ where
     )
 }
 
-/// Assembles the production WebSocket connector around an injected client
-/// factory and logon timeout. The client factory receives the internal
-/// response listener (which routes responses, applies rate-limit feedback
-/// and drives the auth gate) so a client can be scripted around the same
-/// wiring the production [`connector`] uses with [`IrisWebsocketClient`].
 pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
     client_factory: impl FnOnce(
         Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,

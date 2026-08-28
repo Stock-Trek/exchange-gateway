@@ -27,7 +27,7 @@ thiserror = "2.0.18"
 uuid = { version = "1.23.3", features = ["v4"] }
 
 [features]
-default = []
+default = ["iris", "reqwest", "serde"]
 iris = ["dep:iris", "dep:serde_json", "dep:serde", "exchange-types/serde"]
 reqwest = ["dep:reqwest", "dep:serde_json", "dep:serde", "exchange-types/serde"]
 serde = [
