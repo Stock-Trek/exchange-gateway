@@ -58,7 +58,7 @@ impl RateLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rate_limit::feedback::RateLimitUsage;
+    use crate::rate_limit::{feedback::RateLimitUsage, rate_limit_type::RateLimitType};
     use std::time::Duration;
 
     #[test]
@@ -66,16 +66,19 @@ mod tests {
         let limits = RateLimits {
             weight: RateLimiter::new(vec![
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                 },
             ]),
             orders: RateLimiter::new(vec![
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
                     capacity_per_interval: 50,
                     interval_nanos: Duration::from_secs(10).as_nanos(),
                 },
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
                     capacity_per_interval: 160_000,
                     interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
                 },
@@ -88,6 +91,7 @@ mod tests {
                 throttled: true,
                 retry_after: Some(Duration::from_secs(30)),
                 usage: vec![RateLimitUsage {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                     used: 6000,
                     limit: None,
@@ -103,16 +107,19 @@ mod tests {
         let limits = RateLimits {
             weight: RateLimiter::new(vec![
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                 },
             ]),
             orders: RateLimiter::new(vec![
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
                     capacity_per_interval: 50,
                     interval_nanos: Duration::from_secs(10).as_nanos(),
                 },
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
                     capacity_per_interval: 160_000,
                     interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
                 },
@@ -125,6 +132,7 @@ mod tests {
                 throttled: false,
                 retry_after: None,
                 usage: vec![RateLimitUsage {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                     used: 3000,
                     limit: Some(4000),
@@ -140,6 +148,7 @@ mod tests {
         let limits = RateLimits {
             weight: RateLimiter::new(vec![
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                 },
@@ -165,6 +174,7 @@ mod tests {
         let limits = RateLimits {
             weight: RateLimiter::new(vec![
                 crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
                 },
@@ -175,5 +185,48 @@ mod tests {
             .apply_feedback_from_error(&crate::error::EGError::BadResponse)
             .unwrap();
         assert!(limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[test]
+    fn raw_requests_usage_does_not_overwrite_weight_bucket() {
+        // Binance reports REQUEST_WEIGHT (6000/min) and RAW_REQUESTS
+        // (61000/min) on the same one-minute window, RAW_REQUESTS last. The
+        // weight bucket must keep its own limit instead of adopting the
+        // raw-requests one, or the client would send ~10x the server's real
+        // weight limit.
+        let limits = RateLimits {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::RequestWeight,
+                    capacity_per_interval: 6000,
+                    interval_nanos: Duration::from_secs(60).as_nanos(),
+                },
+            ]),
+            orders: RateLimiter::new(vec![]),
+        };
+        limits
+            .apply_feedback(&RateLimitFeedback {
+                throttled: false,
+                retry_after: None,
+                usage: vec![
+                    RateLimitUsage {
+                        rate_limit_type: RateLimitType::RequestWeight,
+                        interval_nanos: Duration::from_secs(60).as_nanos(),
+                        used: 3000,
+                        limit: Some(6000),
+                    },
+                    RateLimitUsage {
+                        rate_limit_type: RateLimitType::RawRequests,
+                        interval_nanos: Duration::from_secs(60).as_nanos(),
+                        used: 40_000,
+                        limit: Some(61_000),
+                    },
+                ],
+            })
+            .unwrap();
+        // 3000 remaining on the weight bucket; the raw-requests usage (and
+        // its 61000 limit) must not have been applied to it.
+        assert!(limits.weight.did_acquire(3000).unwrap());
+        assert!(!limits.weight.did_acquire(1).unwrap());
     }
 }

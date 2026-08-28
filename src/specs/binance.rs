@@ -6,6 +6,7 @@ use crate::{
     rate_limit::{
         feedback::{RateLimitFeedback, RateLimitUsage},
         rate_limit_config::RateLimitConfig,
+        rate_limit_type::RateLimitType,
         rate_limiter::RateLimiter,
         rate_limits::RateLimits,
     },
@@ -26,7 +27,7 @@ use exchange_types::binance::{
         BinanceHttpUnsignedRequest,
     },
     logon::BinanceLogonParams,
-    rate_limits::{BinanceRateLimit, BinanceRateLimitInterval},
+    rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
     signed::BinanceSignedParams,
     spot::BinanceSpotOrderParams,
     websocket::{
@@ -545,6 +546,7 @@ fn websocket_converter(
 fn rate_limits() -> RateLimits {
     RateLimits {
         weight: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
             // per IP
             capacity_per_interval: 6000,
             interval_nanos: Duration::from_mins(1).as_nanos(),
@@ -552,10 +554,12 @@ fn rate_limits() -> RateLimits {
         orders: RateLimiter::new(vec![
             // per account
             RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
                 capacity_per_interval: 50,
                 interval_nanos: Duration::from_secs(10).as_nanos(),
             },
             RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
                 capacity_per_interval: 160_000,
                 interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
             },
@@ -566,10 +570,19 @@ fn rate_limits() -> RateLimits {
 fn rate_limit_usage(limit: &BinanceRateLimit) -> Option<RateLimitUsage> {
     let interval_nanos = rate_limit_interval_nanos(limit.interval)? * limit.intervalNum as u128;
     Some(RateLimitUsage {
+        rate_limit_type: rate_limit_type(limit.rateLimitType),
         interval_nanos,
         used: limit.count.unwrap_or(0).max(0) as u32,
         limit: Some(limit.limit.max(0) as u32),
     })
+}
+fn rate_limit_type(rate_limit_type: BinanceRateLimitType) -> RateLimitType {
+    match rate_limit_type {
+        BinanceRateLimitType::CONNECTIONS => RateLimitType::Connections,
+        BinanceRateLimitType::ORDERS => RateLimitType::Orders,
+        BinanceRateLimitType::RAW_REQUESTS => RateLimitType::RawRequests,
+        BinanceRateLimitType::REQUEST_WEIGHT => RateLimitType::RequestWeight,
+    }
 }
 fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128> {
     let secs = match interval {
@@ -1045,17 +1058,55 @@ mod tests {
         let feedback = http_response_feedback(&response).unwrap();
         assert_eq!(feedback.usage.len(), 2);
         assert_eq!(
+            feedback.usage[0].rate_limit_type,
+            RateLimitType::RequestWeight
+        );
+        assert_eq!(
             feedback.usage[0].interval_nanos,
             Duration::from_secs(60).as_nanos()
         );
         assert_eq!(feedback.usage[0].used, 1200);
         assert_eq!(feedback.usage[0].limit, Some(6000));
+        assert_eq!(feedback.usage[1].rate_limit_type, RateLimitType::Orders);
         assert_eq!(
             feedback.usage[1].interval_nanos,
             Duration::from_secs(10).as_nanos()
         );
         assert_eq!(feedback.usage[1].used, 3);
         assert_eq!(feedback.usage[1].limit, Some(50));
+    }
+
+    #[test]
+    fn request_weight_and_raw_requests_share_the_minute_window_without_overwriting() {
+        // Binance reports REQUEST_WEIGHT (6000/min) and RAW_REQUESTS
+        // (61000/min) with the same one-minute window, RAW_REQUESTS last.
+        // Both usages must not be collapsed onto the single weight limiter:
+        // the raw-requests limit must not overwrite the weight bucket's.
+        let limits = rate_limits();
+        let response = BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(
+            exchange_info_result(vec![
+                rate_limit(
+                    BinanceRateLimitType::REQUEST_WEIGHT,
+                    BinanceRateLimitInterval::MINUTE,
+                    1,
+                    6000,
+                    Some(1200),
+                ),
+                rate_limit(
+                    BinanceRateLimitType::RAW_REQUESTS,
+                    BinanceRateLimitInterval::MINUTE,
+                    1,
+                    61000,
+                    Some(40_000),
+                ),
+            ]),
+        ));
+        let feedback = http_response_feedback(&response).unwrap();
+        limits.apply_feedback(&feedback).unwrap();
+        // The weight limiter keeps the request-weight limit: 4800 remaining,
+        // not the raw-requests 61000.
+        assert!(limits.weight.did_acquire(4800).unwrap());
+        assert!(!limits.weight.did_acquire(1).unwrap());
     }
 
     #[test]
@@ -1085,11 +1136,16 @@ mod tests {
         let feedback = websocket_response_feedback(&response).unwrap();
         assert_eq!(feedback.usage.len(), 2);
         assert_eq!(
+            feedback.usage[0].rate_limit_type,
+            RateLimitType::RequestWeight
+        );
+        assert_eq!(
             feedback.usage[0].interval_nanos,
             Duration::from_secs(60).as_nanos()
         );
         assert_eq!(feedback.usage[0].used, 2500);
         assert_eq!(feedback.usage[0].limit, Some(6000));
+        assert_eq!(feedback.usage[1].rate_limit_type, RateLimitType::Orders);
         assert_eq!(
             feedback.usage[1].interval_nanos,
             Duration::from_secs(24 * 60 * 60).as_nanos()
@@ -1099,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn rate_limit_usage_maps_binance_intervals() {
+    fn rate_limit_usage_maps_binance_intervals_and_types() {
         let usage = rate_limit_usage(&rate_limit(
             BinanceRateLimitType::ORDERS,
             BinanceRateLimitInterval::DAY,
@@ -1108,12 +1164,25 @@ mod tests {
             Some(10),
         ))
         .unwrap();
+        assert_eq!(usage.rate_limit_type, RateLimitType::Orders);
         assert_eq!(
             usage.interval_nanos,
             Duration::from_secs(24 * 60 * 60).as_nanos()
         );
         assert_eq!(usage.used, 10);
         assert_eq!(usage.limit, Some(160_000));
+        assert_eq!(
+            rate_limit_usage(&rate_limit(
+                BinanceRateLimitType::RAW_REQUESTS,
+                BinanceRateLimitInterval::MINUTE,
+                1,
+                61000,
+                Some(6000),
+            ))
+            .unwrap()
+            .rate_limit_type,
+            RateLimitType::RawRequests
+        );
         assert!(
             rate_limit_usage(&rate_limit(
                 BinanceRateLimitType::ORDERS,
@@ -1590,10 +1659,12 @@ mod tests {
     fn single_slot_rate_limits() -> RateLimits {
         RateLimits {
             weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
                 capacity_per_interval: 1,
                 interval_nanos: Duration::from_secs(60).as_nanos(),
             }]),
             orders: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
                 capacity_per_interval: 1,
                 interval_nanos: Duration::from_secs(10).as_nanos(),
             }]),
