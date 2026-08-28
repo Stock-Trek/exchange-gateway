@@ -7,9 +7,8 @@ use crate::{
 };
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
-use tokio::time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiter {

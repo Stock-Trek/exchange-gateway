@@ -1,5 +1,5 @@
 use crate::rate_limit::rate_limit_type::RateLimitType;
-use tokio::time::Instant;
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiterState {
