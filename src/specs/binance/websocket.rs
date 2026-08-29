@@ -83,11 +83,6 @@ where
     )
 }
 
-/// Assembles the production WebSocket connector around an injected client
-/// factory and logon timeout. The client factory receives the internal
-/// response listener (which routes responses, applies rate-limit feedback
-/// and drives the auth gate) so a client can be scripted around the same
-/// wiring the production [`connector`] uses with [`IrisWebsocketClient`].
 pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
     client_factory: impl FnOnce(
         Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
@@ -227,10 +222,6 @@ fn sync_from_logon_response(
     Ok(())
 }
 
-/// Converts a rejected authentication response into the error the
-/// authenticating caller sees, so a failed leg (e.g. a `session.logon`
-/// rejected with `-2014 API-key format invalid.`) surfaces as the exchange's
-/// actual error instead of a timeout.
 fn rejected_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
     if let Some(error) = &message.error {
         return Err(EGError::ApiError {
@@ -247,12 +238,6 @@ fn rejected_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
     Ok(())
 }
 
-/// An authentication leg that fetches the server's clock over the unsigned
-/// `time` method before the logon, so the logon is signed with a
-/// server-synced timestamp even when the local clock is skewed beyond the
-/// recvWindow (a skewed logon would otherwise be rejected with -1021 and
-/// never sync). It does not establish a session, so its signer is left as-is
-/// (`Ok(None)` keeps the signer the previous leg installed).
 pub(crate) fn time_bootstrap_leg(
     clock: Arc<Clock>,
     timeout: Duration,
@@ -263,9 +248,6 @@ pub(crate) fn time_bootstrap_leg(
 > {
     let create_auth_attempt = {
         Arc::new(move || {
-            // A fresh id per attempt so a response to an earlier attempt
-            // (e.g. one arriving after a reconnect) never resolves a later
-            // attempt's waiter.
             let id = id();
             let message = time_bootstrap_message(&id);
             let filter: ArcPredicate<BinanceWebsocketResponse> =
