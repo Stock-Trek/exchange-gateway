@@ -1,7 +1,6 @@
 use crate::{
     auth_gate::{AuthGate, AuthGateAcquisition},
     authenticate_leg::AuthenticateLeg,
-    clock::Clock,
     connector::Connector,
     error::{EGError, EGResult},
     functions::{ArcTryConvertValue, TryConvertRef},
@@ -16,7 +15,7 @@ use async_trait::async_trait;
 use std::{
     ops::Deref,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub struct ConnectorImpl<
@@ -40,7 +39,6 @@ pub struct ConnectorImpl<
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
-    clock: Arc<Clock>,
 }
 
 #[async_trait]
@@ -161,7 +159,6 @@ where
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
         auth_gate: Arc<AuthGate>,
-        clock: Arc<Clock>,
     ) -> Self {
         Self {
             rate_limits,
@@ -176,7 +173,6 @@ where
             authenticate_legs,
             signer: Arc::new(Mutex::new(None)),
             auth_gate,
-            clock,
         }
     }
     async fn authenticate(&self) -> EGResult<()> {
@@ -233,6 +229,7 @@ where
                 };
                 (signed_auth_message, weight, order_count, filter)
             };
+            let start = Instant::now();
             let authentication_response = match self
                 .transport
                 .send_and_wait_for(signed_auth_message, leg.timeout, filter)
@@ -244,7 +241,8 @@ where
                     return Err(error);
                 }
             };
-            signer = match (leg.create_signer)(authentication_response)? {
+            let request_duration = start.elapsed();
+            signer = match (leg.create_signer)((authentication_response, request_duration))? {
                 // A leg that only gathers information (e.g. a server-time
                 // bootstrap) keeps the signer the previous leg installed.
                 Some(next_signer) => next_signer,
@@ -318,7 +316,6 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("authenticate_legs", &self.authenticate_legs)
             .field("signer", &"<redacted>")
             .field("auth_gate", &self.auth_gate)
-            .field("clock", &self.clock)
             .finish()
     }
 }

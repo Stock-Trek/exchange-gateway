@@ -50,29 +50,25 @@ mod tests {
     #[test]
     fn throttled_feedback_drains_buckets_until_retry_after() {
         let limits = RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![crate::rate_limit::rate_limit_config::RateLimitConfig {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
                     rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(
-                clock(),
-                vec![
-                    crate::rate_limit::rate_limit_config::RateLimitConfig {
-                        rate_limit_type: RateLimitType::Orders,
-                        capacity_per_interval: 50,
-                        interval_nanos: Duration::from_secs(10).as_nanos(),
-                    },
-                    crate::rate_limit::rate_limit_config::RateLimitConfig {
-                        rate_limit_type: RateLimitType::Orders,
-                        capacity_per_interval: 160_000,
-                        interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                    },
-                ],
-            ),
+                },
+            ]),
+            orders: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 50,
+                    interval_nanos: Duration::from_secs(10).as_nanos(),
+                },
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 160_000,
+                    interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+                },
+            ]),
         };
         assert!(limits.weight.did_acquire(1).unwrap());
         assert!(limits.orders.did_acquire(1).unwrap());
@@ -95,29 +91,25 @@ mod tests {
     #[test]
     fn usage_feedback_realigns_bucket_capacity() {
         let limits = RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![crate::rate_limit::rate_limit_config::RateLimitConfig {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
                     rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(
-                clock(),
-                vec![
-                    crate::rate_limit::rate_limit_config::RateLimitConfig {
-                        rate_limit_type: RateLimitType::Orders,
-                        capacity_per_interval: 50,
-                        interval_nanos: Duration::from_secs(10).as_nanos(),
-                    },
-                    crate::rate_limit::rate_limit_config::RateLimitConfig {
-                        rate_limit_type: RateLimitType::Orders,
-                        capacity_per_interval: 160_000,
-                        interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                    },
-                ],
-            ),
+                },
+            ]),
+            orders: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 50,
+                    interval_nanos: Duration::from_secs(10).as_nanos(),
+                },
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 160_000,
+                    interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+                },
+            ]),
         };
         // The exchangeInfo response reports a lowered request-weight limit of
         // 4000 with 3000 already used: the bucket must adopt both.
@@ -145,29 +137,23 @@ mod tests {
         // Otherwise every exchangeInfo poll would wipe out all locally
         // consumed capacity and disable local rate limiting.
         let limits = RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![RateLimitConfig {
-                    rate_limit_type: RateLimitType::RequestWeight,
-                    capacity_per_interval: 6000,
-                    interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(
-                clock(),
-                vec![
-                    RateLimitConfig {
-                        rate_limit_type: RateLimitType::Orders,
-                        capacity_per_interval: 50,
-                        interval_nanos: Duration::from_secs(10).as_nanos(),
-                    },
-                    RateLimitConfig {
-                        rate_limit_type: RateLimitType::Orders,
-                        capacity_per_interval: 160_000,
-                        interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                    },
-                ],
-            ),
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 6000,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![
+                RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 50,
+                    interval_nanos: Duration::from_secs(10).as_nanos(),
+                },
+                RateLimitConfig {
+                    rate_limit_type: RateLimitType::Orders,
+                    capacity_per_interval: 160_000,
+                    interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+                },
+            ]),
         };
         assert!(limits.weight.did_acquire(1000).unwrap());
         assert!(limits.orders.did_acquire(10).unwrap());
@@ -208,15 +194,14 @@ mod tests {
     #[test]
     fn rejected_request_error_applies_server_feedback() {
         let limits = RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![crate::rate_limit::rate_limit_config::RateLimitConfig {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
                     rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(clock(), vec![]),
+                },
+            ]),
+            orders: RateLimiter::new(vec![]),
         };
         // A 429 rejection travels back as RateLimited carrying the server's
         // feedback; applying it must drain the buckets until Retry-After.
@@ -233,15 +218,14 @@ mod tests {
     #[test]
     fn rejected_request_error_without_feedback_is_noop() {
         let limits = RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![crate::rate_limit::rate_limit_config::RateLimitConfig {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
                     rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(clock(), vec![]),
+                },
+            ]),
+            orders: RateLimiter::new(vec![]),
         };
         limits
             .apply_feedback_from_error(&crate::error::EGError::BadResponse)
@@ -257,15 +241,14 @@ mod tests {
         // raw-requests one, or the client would send ~10x the server's real
         // weight limit.
         let limits = RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![crate::rate_limit::rate_limit_config::RateLimitConfig {
+            weight: RateLimiter::new(vec![
+                crate::rate_limit::rate_limit_config::RateLimitConfig {
                     rate_limit_type: RateLimitType::RequestWeight,
                     capacity_per_interval: 6000,
                     interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(clock(), vec![]),
+                },
+            ]),
+            orders: RateLimiter::new(vec![]),
         };
         limits
             .apply_feedback(&RateLimitFeedback {

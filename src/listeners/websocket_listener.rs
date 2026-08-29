@@ -280,15 +280,12 @@ mod tests {
 
     fn rate_limits() -> RateLimits {
         RateLimits {
-            weight: RateLimiter::new(
-                clock(),
-                vec![RateLimitConfig {
-                    rate_limit_type: RateLimitType::RequestWeight,
-                    capacity_per_interval: 100,
-                    interval_nanos: Duration::from_secs(60).as_nanos(),
-                }],
-            ),
-            orders: RateLimiter::new(clock(), vec![]),
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 100,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![]),
         }
     }
 

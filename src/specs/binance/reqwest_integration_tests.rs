@@ -71,7 +71,7 @@ impl ListenerTrait for IgnoreHttpListener {
 #[derive(Clone)]
 struct MockHttpClient {
     sent: Arc<Mutex<Vec<HttpRequest>>>,
-    server_time_offset: i64,
+    clock: Arc<Clock>,
 }
 
 #[async_trait]
@@ -102,7 +102,7 @@ impl HttpClientTrait for MockHttpClient {
 /// any signed request).
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
-    server_time_offset: i64,
+    clock: Arc<Clock>,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -118,20 +118,19 @@ fn mock_http_connector(
         Arc::new(Ok);
     let mock_client = MockHttpClient {
         sent: Arc::new(Mutex::new(Vec::new())),
-        server_time_offset,
+        clock: clock.clone(),
     };
     let _ = client_handle.send(mock_client.clone());
     let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
         Arc::new(mock_client);
-    let clock = Arc::new(Clock::default());
     connector_with_client(
         client,
-        clock.clone(),
-        rate_limits(clock.clone()),
+        rate_limits(),
         to_unsigned_request,
         to_external_response,
         listener,
         Some(credentials),
+        clock,
     )
 }
 
@@ -146,7 +145,7 @@ fn asset_limits_request() -> BinanceHttpUnsignedRequest {
 #[tokio::test]
 async fn http_connector_installs_signer_on_connect() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector = mock_http_connector(client_tx, 0).unwrap();
+    let connector = mock_http_connector(client_tx, Arc::new(Clock::default())).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
@@ -179,7 +178,9 @@ async fn http_connect_syncs_the_server_clock_before_signed_requests() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     // The server clock is 10 s ahead of the local clock: a signed request
     // stamped with the raw local clock would be rejected with -1021.
-    let connector = mock_http_connector(client_tx, 10_000).unwrap();
+    let clock = Clock::default();
+    clock.sync(10_000, Duration::ZERO);
+    let connector = mock_http_connector(client_tx, Arc::new(clock)).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
@@ -258,6 +259,7 @@ fn scripted_http_connector(
     client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
     outcome: ScriptedOutcome,
     rate_limits: RateLimits,
+    clock: Arc<Clock>,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -278,36 +280,29 @@ fn scripted_http_connector(
     let _ = client_handle.send(scripted_client.clone());
     let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
         Arc::new(scripted_client);
-    let clock = Arc::new(Clock::default());
     connector_with_client(
         client,
-        clock,
         rate_limits,
         to_unsigned_request,
         to_external_response,
         listener,
         Some(credentials),
+        clock,
     )
 }
 
 fn single_slot_rate_limits() -> RateLimits {
     RateLimits {
-        weight: RateLimiter::new(
-            Arc::new(Clock::default()),
-            vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::RequestWeight,
-                capacity_per_interval: 1,
-                interval_nanos: Duration::from_secs(60).as_nanos(),
-            }],
-        ),
-        orders: RateLimiter::new(
-            Arc::new(Clock::default()),
-            vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::Orders,
-                capacity_per_interval: 1,
-                interval_nanos: Duration::from_secs(10).as_nanos(),
-            }],
-        ),
+        weight: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 1,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]),
+        orders: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::Orders,
+            capacity_per_interval: 1,
+            interval_nanos: Duration::from_secs(10).as_nanos(),
+        }]),
     }
 }
 
@@ -322,6 +317,7 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
         client_tx,
         ScriptedOutcome::HttpError,
         single_slot_rate_limits(),
+        Arc::new(Clock::default()),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
@@ -353,6 +349,7 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
         client_tx,
         ScriptedOutcome::RateLimited,
         single_slot_rate_limits(),
+        Arc::new(Clock::default()),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();

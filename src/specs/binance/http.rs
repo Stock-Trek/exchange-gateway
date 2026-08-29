@@ -46,22 +46,22 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
+    clock: Arc<Clock>,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let url = exchange_urls().url(ExchangeTransportType::Http, trading_mode);
-    let clock = Arc::new(Clock::default());
     let client = Arc::new(ReqwestHttpClient::new(&url));
     connector_with_client(
         client,
-        clock.clone(),
-        rate_limits(clock.clone()),
+        rate_limits(),
         to_unsigned_request,
         to_external_response,
         listener,
         credentials,
+        clock,
     )
 }
 
@@ -71,12 +71,12 @@ where
 /// exercise the same connector wiring without a network.
 pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
-    clock: Arc<Clock>,
     rate_limits: RateLimits,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
+    clock: Arc<Clock>,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send,
@@ -115,7 +115,6 @@ where
         create_signer_from_credentials,
         authenticate_legs,
         Arc::new(AuthGate::default()),
-        clock,
     ))
 }
 
@@ -400,16 +399,16 @@ pub(crate) fn time_bootstrap_leg(
         (message, filter)
     });
     let create_signer = {
-        let clock = clock.clone();
+        let signer_clock = clock.clone();
         Arc::new(
-            move |message: BinanceHttpResponse| -> EGResult<
+            move |(message, round_trip_time)| -> EGResult<
                 Option<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>>,
             > {
                 http_time_response_error(&message)?;
                 if let BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(result)) =
                     &message
                 {
-                    clock.sync(result.serverTime);
+                    signer_clock.sync(result.serverTime, round_trip_time);
                 }
                 Ok(None)
             },
@@ -667,7 +666,7 @@ mod test {
         // (61000/min) with the same one-minute window, RAW_REQUESTS last.
         // Both usages must not be collapsed onto the single weight limiter:
         // the raw-requests limit must not overwrite the weight bucket's.
-        let limits = rate_limits(Arc::new(Clock::default()));
+        let limits = rate_limits();
         let response = BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(
             exchange_info_result(vec![
                 rate_limit(
@@ -842,7 +841,7 @@ mod test {
         assert!(filter(&response));
         // The bootstrap records the server clock but installs no signer
         // (`Ok(None)` keeps the signer the previous leg installed).
-        let signer = (leg.create_signer)(response).unwrap();
+        let signer = (leg.create_signer)((response, Duration::ZERO)).unwrap();
         assert!(signer.is_none());
         assert!(
             clock.now_millis() >= local + 10_000,
@@ -861,7 +860,7 @@ mod test {
             msg: "Timestamp for this request is outside of the recvWindow.".into(),
         });
         assert!(filter(&response));
-        let signer = (leg.create_signer)(response);
+        let signer = (leg.create_signer)((response, Duration::ZERO));
         assert!(signer.is_err(), "expected ApiError");
         let Err(EGError::ApiError { code, message }) = signer else {
             panic!("expected an ApiError");

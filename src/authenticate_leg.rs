@@ -12,7 +12,7 @@ pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
     /// user requests) run through. A leg that only gathers information —
     /// e.g. a server-time bootstrap before the logon — returns `Ok(None)`
     /// to keep the signer the previous leg installed.
-    pub create_signer: ArcTryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
+    pub create_signer: ArcTryConvertValue<(EGRes, Duration), Option<Signer<EGUnsignedReq, EGReq>>>,
 }
 
 impl<EGUnsignedReq, EGReq, EGRes> std::fmt::Debug for AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {

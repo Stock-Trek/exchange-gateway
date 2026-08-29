@@ -1,13 +1,17 @@
+use std::time::SystemTimeError;
+
 use crate::rate_limit::feedback::RateLimitFeedback;
 
 pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EGError {
-    #[error("Received unrecognised response")]
-    BadResponse,
     #[error("Exchange API error {code}: {message}")]
     ApiError { code: i64, message: String },
+    #[error("Received unrecognised response")]
+    BadResponse,
+    #[error("Clock error: {0}")]
+    ClockError(SystemTimeError),
     #[error("Crypto key error: {0}")]
     CryptoKey(String),
     #[error(transparent)]
@@ -21,10 +25,10 @@ pub enum EGError {
     MutexPoisoned,
     #[error("Connector is not authenticated")]
     NotAuthenticated,
-    #[error("Unknown endpoint")]
-    UnknownEndpoint,
     #[error("Rate limit exceeded")]
     RateLimited(RateLimitFeedback),
     #[error("Request timed out waiting for a response")]
     TimedOut,
+    #[error("Unknown endpoint")]
+    UnknownEndpoint,
 }

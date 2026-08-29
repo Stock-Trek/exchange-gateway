@@ -14,7 +14,7 @@ use exchange_types::binance::{
 };
 use rust_decimal::Decimal;
 use secrecy::SecretString;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use uuid::Uuid;
 
 const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
@@ -48,31 +48,25 @@ pub(crate) fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
     SigningAlgorithm::HmacSha256.signer(secret)
 }
 
-pub(crate) fn rate_limits(clock: Arc<Clock>) -> RateLimits {
+pub(crate) fn rate_limits() -> RateLimits {
     RateLimits {
-        weight: RateLimiter::new(
-            clock.clone(),
-            vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::RequestWeight,
-                capacity_per_interval: 6000,
-                interval_nanos: Duration::from_mins(1).as_nanos(),
-            }],
-        ),
-        orders: RateLimiter::new(
-            clock.clone(),
-            vec![
-                RateLimitConfig {
-                    rate_limit_type: RateLimitType::Orders,
-                    capacity_per_interval: 50,
-                    interval_nanos: Duration::from_secs(10).as_nanos(),
-                },
-                RateLimitConfig {
-                    rate_limit_type: RateLimitType::Orders,
-                    capacity_per_interval: 160_000,
-                    interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                },
-            ],
-        ),
+        weight: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 6000,
+            interval_nanos: Duration::from_mins(1).as_nanos(),
+        }]),
+        orders: RateLimiter::new(vec![
+            RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 50,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            },
+            RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 160_000,
+                interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+            },
+        ]),
     }
 }
 
@@ -184,7 +178,7 @@ mod test {
 
     #[test]
     fn weight_rate_limit_is_6000_per_minute() {
-        let limits = rate_limits(Arc::new(Clock::default()));
+        let limits = rate_limits();
         for _ in 0..300 {
             assert!(limits.weight.did_acquire(20).unwrap());
         }
@@ -195,7 +189,7 @@ mod test {
 
     #[test]
     fn order_rate_limit_is_50_per_10_seconds() {
-        let limits = rate_limits(Arc::new(Clock::default()));
+        let limits = rate_limits();
         for _ in 0..50 {
             assert!(limits.orders.did_acquire(1).unwrap());
         }

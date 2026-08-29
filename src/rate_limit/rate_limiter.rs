@@ -1,5 +1,4 @@
 use crate::{
-    clock::Clock,
     error::{EGError, EGResult},
     rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
@@ -8,27 +7,20 @@ use crate::{
 };
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiter {
-    clock: Arc<Clock>,
     rate_limiters: Arc<Mutex<Vec<RateLimiterState>>>,
 }
 
 impl RateLimiter {
-    pub fn new(clock: Arc<Clock>, rate_limits: Vec<RateLimitConfig>) -> Self {
+    pub fn new(rate_limits: Vec<RateLimitConfig>) -> Self {
         let rate_limiters = Arc::new(Mutex::new(
-            rate_limits
-                .iter()
-                .map(|rl| rl.to_state(clock.clone()))
-                .collect(),
+            rate_limits.iter().map(|rl| rl.to_state()).collect(),
         ));
-        Self {
-            clock,
-            rate_limiters,
-        }
+        Self { rate_limiters }
     }
     pub fn did_acquire(&self, cost: u32) -> EGResult<bool> {
         let mut limiters_guard = self
@@ -71,7 +63,7 @@ impl RateLimiter {
         Ok(())
     }
     pub fn throttle(&self, retry_after: Option<Duration>) -> EGResult<()> {
-        let until = self.clock.now() + retry_after.unwrap_or(Duration::from_secs(1));
+        let until = Instant::now() + retry_after.unwrap_or(Duration::from_secs(1));
         let mut limiters_guard = self
             .rate_limiters
             .lock()
@@ -85,9 +77,6 @@ impl RateLimiter {
 
 #[cfg(test)]
 mod tests {
-    fn clock() -> Arc<Clock> {
-        Arc::new(Clock::default())
-    }
     use super::*;
     use crate::rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
@@ -97,14 +86,11 @@ mod tests {
 
     #[test]
     fn refund_returns_consumed_capacity() {
-        let limiter = RateLimiter::new(
-            clock(),
-            vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::RequestWeight,
-                capacity_per_interval: 10,
-                interval_nanos: Duration::from_secs(60).as_nanos(),
-            }],
-        );
+        let limiter = RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 10,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]);
         assert!(limiter.did_acquire(10).unwrap());
         assert!(!limiter.did_acquire(1).unwrap());
         limiter.refund(10).unwrap();
@@ -113,14 +99,11 @@ mod tests {
 
     #[test]
     fn refund_never_exceeds_capacity() {
-        let limiter = RateLimiter::new(
-            clock(),
-            vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::RequestWeight,
-                capacity_per_interval: 10,
-                interval_nanos: Duration::from_secs(60).as_nanos(),
-            }],
-        );
+        let limiter = RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 10,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]);
         assert!(limiter.did_acquire(1).unwrap());
         limiter.refund(10).unwrap();
         limiter.refund(10).unwrap();
@@ -134,14 +117,11 @@ mod tests {
         // (61000/min) with the same 60s window, RAW_REQUESTS last. The
         // raw-requests usage must not overwrite the weight bucket's
         // capacity or limit.
-        let limiter = RateLimiter::new(
-            clock(),
-            vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::RequestWeight,
-                capacity_per_interval: 6000,
-                interval_nanos: Duration::from_secs(60).as_nanos(),
-            }],
-        );
+        let limiter = RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 6000,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]);
         limiter
             .apply_usage(&RateLimitUsage {
                 rate_limit_type: RateLimitType::RequestWeight,
@@ -167,21 +147,18 @@ mod tests {
     fn apply_usage_matches_interval_within_a_type() {
         // The two order buckets share the ORDERS type but differ in
         // interval: daily usage must not realign the 10-second bucket.
-        let limiter = RateLimiter::new(
-            clock(),
-            vec![
-                RateLimitConfig {
-                    rate_limit_type: RateLimitType::Orders,
-                    capacity_per_interval: 50,
-                    interval_nanos: Duration::from_secs(10).as_nanos(),
-                },
-                RateLimitConfig {
-                    rate_limit_type: RateLimitType::Orders,
-                    capacity_per_interval: 160_000,
-                    interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-                },
-            ],
-        );
+        let limiter = RateLimiter::new(vec![
+            RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 50,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            },
+            RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 160_000,
+                interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
+            },
+        ]);
         // Use 5 of the 10-second budget.
         assert!(limiter.did_acquire(5).unwrap());
         // The server reports daily usage: 5000 used of a 10000 limit. Only

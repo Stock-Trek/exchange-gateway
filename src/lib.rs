@@ -5,7 +5,7 @@
 
 pub mod auth_gate;
 pub mod authenticate_leg;
-mod clock;
+pub mod clock;
 pub mod connect;
 pub mod connector;
 pub mod connector_impl;
@@ -21,6 +21,7 @@ pub mod urls;
 
 pub mod prelude {
     pub use crate::{
+        clock::Clock,
         connect::Connect,
         connector::Connector,
         connector_impl::ConnectorImpl,

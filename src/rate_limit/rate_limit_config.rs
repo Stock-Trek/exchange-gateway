@@ -1,8 +1,4 @@
-use crate::{
-    clock::Clock,
-    rate_limit::{rate_limit_type::RateLimitType, rate_limiter_state::RateLimiterState},
-};
-use std::sync::Arc;
+use crate::rate_limit::{rate_limit_type::RateLimitType, rate_limiter_state::RateLimiterState};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimitConfig {
@@ -12,9 +8,8 @@ pub(crate) struct RateLimitConfig {
 }
 
 impl RateLimitConfig {
-    pub fn to_state(&self, clock: Arc<Clock>) -> RateLimiterState {
+    pub fn to_state(&self) -> RateLimiterState {
         RateLimiterState::new(
-            clock,
             self.rate_limit_type,
             self.interval_nanos,
             self.capacity_per_interval,
