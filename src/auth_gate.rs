@@ -10,18 +10,15 @@ pub struct AuthGate {
     state: Mutex<AuthGateState>,
 }
 
-pub enum AuthGateAcquisition<'a> {
-    Acquired(AuthGateGuard<'a>),
+pub enum AuthGateAcquisition<'gate> {
+    Acquired(AuthGateGuard<'gate>),
     Blocked(AuthWaiter),
 }
 
-pub struct AuthGateGuard<'a> {
-    gate: &'a AuthGate,
+pub struct AuthGateGuard<'gate> {
+    gate: &'gate AuthGate,
     authenticated: bool,
 }
-
-#[derive(Clone, Default)]
-pub struct AuthWaiter(Arc<Mutex<AuthCompletedState>>);
 
 #[derive(Default)]
 struct AuthGateState {
@@ -34,6 +31,9 @@ struct AuthInFlight {
     waiter: AuthWaiter,
     epoch: u64,
 }
+
+#[derive(Clone, Default)]
+pub struct AuthWaiter(Arc<Mutex<AuthCompletedState>>);
 
 #[derive(Default)]
 struct AuthCompletedState {
@@ -60,14 +60,14 @@ impl AuthGate {
     }
 
     pub fn on_connection_established(&self) -> EGResult<()> {
-        self.bump_epoch()
+        self.bump_connection_epoch()
     }
 
     pub fn on_connection_lost(&self) -> EGResult<()> {
-        self.bump_epoch()
+        self.bump_connection_epoch()
     }
 
-    fn bump_epoch(&self) -> EGResult<()> {
+    fn bump_connection_epoch(&self) -> EGResult<()> {
         self.state
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
