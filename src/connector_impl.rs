@@ -183,13 +183,10 @@ where
             if !self.session_is_stale()? {
                 return Ok(());
             }
-            let on_complete = match self.auth_gate.acquire()? {
-                AuthGateAcquisition::Waiting(on_complete) => {
-                    on_complete.wait().await?;
-                    continue;
-                }
-                AuthGateAcquisition::Authenticator(on_complete) => on_complete,
-            };
+            if let AuthGateAcquisition::Waiting(on_complete) = self.auth_gate.acquire()? {
+                on_complete.wait().await?;
+                continue;
+            }
             let result = self.run_authentication(credentials).await;
             match result {
                 Err(_) => {
@@ -199,7 +196,6 @@ where
                     self.auth_gate.release()?;
                 }
             }
-            on_complete.notify();
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
