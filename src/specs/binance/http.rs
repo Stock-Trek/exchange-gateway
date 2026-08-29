@@ -167,9 +167,7 @@ fn to_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
                 Some(signed_query(params.query_params(true), signature)),
             )
         }
-        BinanceHttpUnsignedRequest::Ping(..) | BinanceHttpUnsignedRequest::Time(..) => {
-            (Method::GET, None)
-        }
+        BinanceHttpUnsignedRequest::Time(..) => (Method::GET, None),
     };
     Ok(HttpRequest {
         method,
@@ -223,7 +221,6 @@ fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
         BinanceHttpUnsignedRequest::AmendOrderRequest(..) => HttpEndpoint::AmendOrder,
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => HttpEndpoint::CancelAllOrders,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => HttpEndpoint::CancelOrder,
-        BinanceHttpUnsignedRequest::Ping(..) => HttpEndpoint::Ping,
         BinanceHttpUnsignedRequest::Time(..) => HttpEndpoint::Time,
     }
 }
@@ -236,7 +233,6 @@ fn endpoints() -> HashMap<HttpEndpoint, String> {
     endpoints.insert(HttpEndpoint::AmendOrder, "order/cancelReplace".into());
     endpoints.insert(HttpEndpoint::CancelAllOrders, "openOrders".into());
     endpoints.insert(HttpEndpoint::CancelOrder, "order".into());
-    endpoints.insert(HttpEndpoint::Ping, "ping".into());
     endpoints.insert(HttpEndpoint::Time, "time".into());
     endpoints
 }
@@ -276,7 +272,6 @@ fn sync_timestamp(
                 BinanceHttpUnsignedRequest::CancelOrderRequest(params)
             }
             request @ BinanceHttpUnsignedRequest::ExchangeInfo(..) => request,
-            request @ BinanceHttpUnsignedRequest::Ping(..) => request,
             request @ BinanceHttpUnsignedRequest::Time(..) => request,
         })
     })
@@ -319,7 +314,7 @@ fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<O
             let params_without_api_key = strip_api_key(params);
             Some(params_without_api_key.query_params(true).into_bytes())
         }
-        BinanceHttpUnsignedRequest::Ping(..) | BinanceHttpUnsignedRequest::Time(..) => None,
+        BinanceHttpUnsignedRequest::Time(..) => None,
     })
 }
 
@@ -458,7 +453,6 @@ fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
         BinanceHttpUnsignedRequest::AmendOrderRequest(..) => 2,
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => 1,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => 1,
-        BinanceHttpUnsignedRequest::Ping(..) => 1,
         BinanceHttpUnsignedRequest::Time(..) => 1,
     }
 }
@@ -492,7 +486,6 @@ mod test {
             BinanceExchangeInfoPermission, BinanceExchangeInfoResult,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
-        ping::BinancePingParams,
         rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
@@ -797,8 +790,6 @@ mod test {
         assert_eq!(request_weight(&order), 1);
         let time = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         assert_eq!(request_weight(&time), 1);
-        let ping = BinanceHttpUnsignedRequest::Ping(BinancePingParams {});
-        assert_eq!(request_weight(&ping), 1);
     }
 
     #[test]

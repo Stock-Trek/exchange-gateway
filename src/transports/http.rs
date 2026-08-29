@@ -39,7 +39,6 @@ pub(crate) enum HttpEndpoint {
     CancelAllOrders,
     CancelOrder,
     ExchangeInfo,
-    Ping,
     PlaceOrder,
     Time,
 }
