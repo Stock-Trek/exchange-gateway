@@ -183,7 +183,7 @@ where
             if !self.session_is_stale()? {
                 return Ok(());
             }
-            if let AuthGateAcquisition::Waiting(on_complete) = self.auth_gate.acquire()? {
+            if let AuthGateAcquisition::Blocked(on_complete) = self.auth_gate.acquire()? {
                 on_complete.wait().await?;
                 continue;
             }

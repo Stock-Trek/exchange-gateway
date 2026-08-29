@@ -18,17 +18,17 @@ pub struct AuthGateState {
 }
 
 struct AuthInFlight {
-    on_complete: AuthOnComplete,
+    waiter: AuthWaiter,
     epoch: u64,
 }
 
 pub enum AuthGateAcquisition {
-    Authenticator,
-    Waiting(AuthOnComplete),
+    Acquired,
+    Blocked(AuthWaiter),
 }
 
 #[derive(Clone, Default)]
-pub struct AuthOnComplete(Arc<Mutex<AuthCompletedState>>);
+pub struct AuthWaiter(Arc<Mutex<AuthCompletedState>>);
 
 #[derive(Default)]
 struct AuthCompletedState {
@@ -42,12 +42,12 @@ impl AuthGate {
         match &state.in_flight {
             None => {
                 state.in_flight = Some(AuthInFlight {
-                    on_complete: AuthOnComplete::default(),
+                    waiter: AuthWaiter::default(),
                     epoch: state.connection_epoch,
                 });
-                Ok(AuthGateAcquisition::Authenticator)
+                Ok(AuthGateAcquisition::Acquired)
             }
-            Some(in_flight) => Ok(AuthGateAcquisition::Waiting(in_flight.on_complete.clone())),
+            Some(in_flight) => Ok(AuthGateAcquisition::Blocked(in_flight.waiter.clone())),
         }
     }
 
@@ -57,7 +57,7 @@ impl AuthGate {
             return Err(EGError::NotAuthenticated);
         };
         state.authenticated_epoch = in_flight.epoch;
-        in_flight.on_complete.notify();
+        in_flight.waiter.notify();
         Ok(())
     }
 
@@ -66,7 +66,7 @@ impl AuthGate {
         let Some(in_flight) = state.in_flight.take() else {
             return Err(EGError::NotAuthenticated);
         };
-        in_flight.on_complete.notify();
+        in_flight.waiter.notify();
         Ok(())
     }
 
@@ -98,7 +98,7 @@ impl std::fmt::Debug for AuthGate {
     }
 }
 
-impl AuthOnComplete {
+impl AuthWaiter {
     pub fn wait(&self) -> impl Future<Output = EGResult<()>> + Send + '_ {
         let on_complete = self.clone();
         poll_fn(move |cx| {
@@ -139,7 +139,7 @@ mod tests {
         assert!(!gate.is_stale().unwrap());
 
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         gate.release().expect("Release must be Ok");
@@ -153,7 +153,7 @@ mod tests {
     fn losing_the_connection_invalidates_the_session() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         gate.release().expect("Release must be Ok");
@@ -170,7 +170,7 @@ mod tests {
     fn reconnect_during_authentication_is_detected() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
 
@@ -186,12 +186,12 @@ mod tests {
     fn second_acquire_waits_for_in_flight_authentication() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         assert!(matches!(
             gate.acquire().unwrap(),
-            AuthGateAcquisition::Waiting(_)
+            AuthGateAcquisition::Blocked(_)
         ));
         gate.release().expect("Release must be Ok");
     }
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn completing_without_an_in_flight_authentication_is_an_error() {
         let gate = AuthGate::default();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         gate.release().expect("Release must be Ok");
@@ -210,7 +210,7 @@ mod tests {
     fn cancelling_a_failed_authentication_keeps_the_session_stale() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
 
@@ -223,7 +223,7 @@ mod tests {
         // A waiter can immediately re-acquire and retry.
         assert!(matches!(
             gate.acquire().unwrap(),
-            AuthGateAcquisition::Authenticator
+            AuthGateAcquisition::Acquired
         ));
     }
 
@@ -237,10 +237,10 @@ mod tests {
     async fn release_notifies_waiters() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
-        let AuthGateAcquisition::Waiting(on_complete) = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Blocked(on_complete) = gate.acquire().unwrap() else {
             panic!("expected a waiting acquisition");
         };
         let waiter = tokio::spawn(async move { on_complete.wait().await.unwrap() });
@@ -255,10 +255,10 @@ mod tests {
     async fn cancel_notifies_waiters() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Authenticator = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
-        let AuthGateAcquisition::Waiting(on_complete) = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Blocked(on_complete) = gate.acquire().unwrap() else {
             panic!("expected a waiting acquisition");
         };
         let waiter = tokio::spawn(async move { on_complete.wait().await.unwrap() });
