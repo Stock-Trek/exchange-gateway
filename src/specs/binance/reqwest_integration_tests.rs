@@ -9,6 +9,7 @@ use crate::{
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
     specs::binance::{common::rate_limits, http::connector_with_client},
+    time_sync::TimeSync,
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},
@@ -67,13 +68,10 @@ impl ListenerTrait for IgnoreHttpListener {
     }
 }
 
-/// A scripted HTTP client: records every outgoing request (at the
-/// transport level, as the real reqwest client would receive it) and
-/// answers with a bare success so signed sends can complete without a
-/// network.
 #[derive(Clone)]
 struct MockHttpClient {
     sent: Arc<Mutex<Vec<HttpRequest>>>,
+    server_time_offset: i64,
 }
 
 #[async_trait]
@@ -87,6 +85,7 @@ impl HttpClientTrait for MockHttpClient {
         message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
+        let is_time = matches!(message.params, BinanceHttpUnsignedRequest::Time(..));
         self.sent.lock().unwrap().push(message);
         Ok(HttpResponse {
             status: 200,
@@ -98,8 +97,12 @@ impl HttpClientTrait for MockHttpClient {
 
 /// Builds an HTTP connector backed by the scripted mock client, handing
 /// the caller a handle to the client so sent requests can be inspected.
+/// `server_time_offset` shifts the clock the mock's `time` responses
+/// report, mirroring the production bootstrap (a server-time sync before
+/// any signed request).
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
+    server_time_offset: i64,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -115,6 +118,7 @@ fn mock_http_connector(
         Arc::new(Ok);
     let mock_client = MockHttpClient {
         sent: Arc::new(Mutex::new(Vec::new())),
+        server_time_offset,
     };
     let _ = client_handle.send(mock_client.clone());
     let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
@@ -140,7 +144,7 @@ fn asset_limits_request() -> BinanceHttpUnsignedRequest {
 #[tokio::test]
 async fn http_connector_installs_signer_on_connect() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector = mock_http_connector(client_tx).unwrap();
+    let connector = mock_http_connector(client_tx, 0).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
@@ -149,12 +153,55 @@ async fn http_connector_installs_signer_on_connect() {
         "connecting with credentials must install the request signer"
     );
 
+    // The only request during connect is the unsigned time bootstrap.
+    assert_eq!(client.sent.lock().unwrap().len(), 1);
+    assert!(matches!(
+        client.sent.lock().unwrap()[0].params,
+        BinanceHttpUnsignedRequest::Time(..)
+    ));
+    assert!(
+        client.sent.lock().unwrap()[0].signature.is_none(),
+        "the time bootstrap must be unsigned"
+    );
+
     // A signed request must not fail with NotAuthenticated.
     connector
         .send(asset_limits_request(), true, Duration::from_secs(5))
         .await
         .expect("signed send should succeed");
-    assert_eq!(client.sent.lock().unwrap().len(), 1);
+    assert_eq!(client.sent.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn http_connect_syncs_the_server_clock_before_signed_requests() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    // The server clock is 10 s ahead of the local clock: a signed request
+    // stamped with the raw local clock would be rejected with -1021.
+    let connector = mock_http_connector(client_tx, 10_000).unwrap();
+    let client = client_rx.recv().unwrap();
+
+    connector.connect().await.expect("connect should succeed");
+    assert!(matches!(
+        client.sent.lock().unwrap()[0].params,
+        BinanceHttpUnsignedRequest::Time(..)
+    ));
+
+    // A signed request is stamped with the server clock, not the raw local
+    // clock.
+    connector
+        .send(asset_limits_request(), true, Duration::from_secs(5))
+        .await
+        .expect("signed send should succeed");
+    let sent = client.sent.lock().unwrap();
+    let BinanceHttpUnsignedRequest::AssetLimits(asset_limits) = &sent[1].params else {
+        panic!("expected an asset limits request");
+    };
+    let local = TimeSync::default().now_millis();
+    assert!(
+        asset_limits.timestamp >= local + 10_000,
+        "timestamp {} must be near the server clock (local {local})",
+        asset_limits.timestamp
+    );
 }
 
 /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
