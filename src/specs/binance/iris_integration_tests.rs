@@ -137,9 +137,6 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     id: message.metadata.id,
                     rateLimits: vec![],
                     result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
-                        // Report the clock's already-offset view of server
-                        // time; re-adding the offset would report the raw
-                        // wall clock and wipe any pre-set skew on sync.
                         serverTime: self.clock.now_millis(),
                     })),
                     status: 200,
@@ -822,9 +819,6 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
         panic!("expected a logon");
     };
-    // `local` was captured before connect: the logon was stamped after it,
-    // so with the +10 s server skew it must still clear the floor. A wide
-    // cushion keeps the assertion timing-independent.
     assert!(
         logon.timestamp >= local + 10_000 - 60_000,
         "logon timestamp {} must be near the server clock (local {local})",

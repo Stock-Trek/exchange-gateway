@@ -46,7 +46,7 @@ tokio-stream = "0.1"
 tokio-websockets = { version = "0.13", features = ["server", "ring"] }
 
 [lints.clippy]
-new_ret_no_self = "allow"
+too_many_arguments = "allow"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"

@@ -146,7 +146,6 @@ where
     EGReq: Send,
     EGRes: Send + Sync + 'static,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         rate_limits: RateLimits,
         to_weight: fn(&EGUnsignedReq) -> u32,
@@ -183,18 +182,16 @@ where
             if !self.session_is_stale()? {
                 return Ok(());
             }
-            if let AuthGateAcquisition::Blocked(on_complete) = self.auth_gate.acquire()? {
-                on_complete.wait().await?;
-                continue;
-            }
+            let guard = match self.auth_gate.acquire()? {
+                AuthGateAcquisition::Acquired(guard) => guard,
+                AuthGateAcquisition::Blocked(on_complete) => {
+                    on_complete.wait().await?;
+                    continue;
+                }
+            };
             let result = self.run_authentication(credentials).await;
-            match result {
-                Err(_) => {
-                    self.auth_gate.cancel()?;
-                }
-                Ok(()) => {
-                    self.auth_gate.release()?;
-                }
+            if result.is_ok() {
+                guard.complete();
             }
             match result {
                 Err(error) => return Err(error),
