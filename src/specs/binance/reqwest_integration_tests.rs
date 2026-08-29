@@ -19,11 +19,12 @@ use async_trait::async_trait;
 use exchange_types::binance::{
     asset_limits::BinanceAssetLimitsParams,
     exchange_info::BinanceOrderType,
-    http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
+    http::{BinanceHttpResponse, BinanceHttpResponseResult, BinanceHttpUnsignedRequest},
     spot::{
         BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
         BinanceSpotOrderParams, BinanceTimeInForce,
     },
+    time::BinanceTimeResult,
 };
 use secrecy::SecretString;
 use std::{
@@ -71,6 +72,7 @@ impl ListenerTrait for IgnoreHttpListener {
 #[derive(Clone)]
 struct MockHttpClient {
     sent: Arc<Mutex<Vec<HttpRequest>>>,
+    clock: Arc<Clock>,
 }
 
 #[async_trait]
@@ -80,11 +82,26 @@ impl HttpClientTrait for MockHttpClient {
 
     async fn send_message(
         &self,
-        _endpoint: &str,
+        endpoint: &str,
         message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
         self.sent.lock().unwrap().push(message);
+        if endpoint == "time" {
+            // The connect flow bootstraps the signer clock from the
+            // unsigned `time` endpoint before any signed request: answer
+            // it with the clock's view of server time, as the real
+            // exchange would.
+            let body = serde_json::to_vec(&BinanceHttpResponseResult::Time(BinanceTimeResult {
+                serverTime: self.clock.now_millis(),
+            }))
+            .expect("serializing a time response should not fail");
+            return Ok(HttpResponse {
+                status: 200,
+                body,
+                headers: vec![],
+            });
+        }
         Ok(HttpResponse {
             status: 200,
             body: br#"[]"#.to_vec(),
@@ -111,6 +128,7 @@ fn mock_http_connector(
         Arc::new(Ok);
     let mock_client = MockHttpClient {
         sent: Arc::new(Mutex::new(Vec::new())),
+        clock: clock.clone(),
     };
     let _ = client_handle.send(mock_client.clone());
     let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
