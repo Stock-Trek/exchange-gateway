@@ -5,6 +5,7 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcTryConvertValue, TryConvertRef},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
+    resync::Resync,
     sign::{
         convert_signer::ConvertSigner,
         signer::{Signer, SignerTrait},
@@ -37,6 +38,7 @@ pub struct ConnectorImpl<
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+    resync: Option<Resync<EGUnsignedReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
 }
@@ -131,6 +133,39 @@ where
             }
         }
     }
+    async fn resync(&self) -> EGResult<()> {
+        let Some(resync) = &self.resync else {
+            return Ok(());
+        };
+        let (signed_message, weight, order_count, filter) = {
+            let (message, filter) = (resync.create_request)();
+            let weight = (self.to_weight)(&message);
+            let order_count = (self.to_order_count)(&message);
+            self.check_rate_limits(&message)?;
+            let signed_message = match self.signed_request(message, false) {
+                Ok(signed_message) => signed_message,
+                Err(error) => {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                    return Err(error);
+                }
+            };
+            (signed_message, weight, order_count, filter)
+        };
+        let start = Instant::now();
+        let response = match self
+            .transport
+            .send_and_wait_for(signed_message, resync.timeout, filter)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let _ = self.rate_limits.refund(weight, order_count);
+                return Err(error);
+            }
+        };
+        let round_trip_time = start.elapsed();
+        (resync.sync_clock)((response, round_trip_time))
+    }
 }
 impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
     ConnectorImpl<
@@ -157,6 +192,7 @@ where
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+        resync: Option<Resync<EGUnsignedReq, EGRes>>,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
@@ -170,6 +206,7 @@ where
             credentials,
             create_signer,
             authenticate_legs,
+            resync,
             signer: Arc::new(Mutex::new(None)),
             auth_gate,
         }
@@ -305,6 +342,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("credentials", &"<redacted>")
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
+            .field("resync", &self.resync)
             .field("signer", &"<redacted>")
             .field("auth_gate", &self.auth_gate)
             .finish()

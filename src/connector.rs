@@ -8,5 +8,6 @@ pub trait Connector<ExternalReq, ExternalRes> {
     fn is_connected(&self) -> EGResult<bool>;
     fn is_authenticated(&self) -> EGResult<bool>;
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()>;
+    async fn resync(&self) -> EGResult<()>;
     async fn disconnect(&self) -> EGResult<()>;
 }

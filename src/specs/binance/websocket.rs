@@ -12,6 +12,7 @@ use crate::{
         websocket_listener::WebsocketListener,
     },
     rate_limit::feedback::RateLimitFeedback,
+    resync::Resync,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
@@ -145,6 +146,7 @@ where
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
+        Some(time_resync(clock, Duration::from_secs(20))),
         auth_gate,
     ))
 }
@@ -246,30 +248,53 @@ pub(crate) fn time_bootstrap_leg(
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
 > {
-    let create_auth_attempt = {
-        Arc::new(move || {
-            let id = id();
-            let message = time_bootstrap_message(&id);
-            let filter: ArcPredicate<BinanceWebsocketResponse> =
-                Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
-            (message, filter)
-        })
-    };
+    let resync = time_resync(clock, timeout);
     let create_signer = {
+        let sync_clock = resync.sync_clock.clone();
         Arc::new(
             move |(message, round_trip_time)| -> EGResult<
                 Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
             > {
-                rejected_response_error(&message)?;
-                sync_from_time_response(&message, &clock, round_trip_time)?;
+                (sync_clock)((message, round_trip_time))?;
                 Ok(None)
             },
         )
     };
     AuthenticateLeg {
-        create_auth_attempt,
+        create_auth_attempt: resync.create_request,
+        timeout: resync.timeout,
         create_signer,
+    }
+}
+
+/// The capability to re-sync the server clock from the unsigned WebSocket
+/// `time` request: a fresh request (with its own id) whose response re-adopts
+/// the server's offset, so timestamps are stamped with the server clock even
+/// when the local clock is skewed beyond the recvWindow.
+fn time_resync(
+    clock: Arc<Clock>,
+    timeout: Duration,
+) -> Resync<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse> {
+    let create_request = Arc::new(move || {
+        let id = id();
+        let message = time_bootstrap_message(&id);
+        let filter: ArcPredicate<BinanceWebsocketResponse> =
+            Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
+        (message, filter)
+    });
+    let sync_clock = {
+        let clock = clock.clone();
+        Arc::new(
+            move |(message, round_trip_time): (BinanceWebsocketResponse, Duration)| -> EGResult<()> {
+                rejected_response_error(&message)?;
+                sync_from_time_response(&message, &clock, round_trip_time)
+            },
+        )
+    };
+    Resync {
+        create_request,
         timeout,
+        sync_clock,
     }
 }
 
