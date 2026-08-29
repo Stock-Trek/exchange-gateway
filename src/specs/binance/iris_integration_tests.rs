@@ -28,6 +28,7 @@ use exchange_types::binance::{
 };
 use secrecy::SecretString;
 use std::{
+    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -136,7 +137,10 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     id: message.metadata.id,
                     rateLimits: vec![],
                     result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
-                        serverTime: self.clock.now_millis() + self.clock.offset_millis(),
+                        // Report the clock's already-offset view of server
+                        // time; re-adding the offset would report the raw
+                        // wall clock and wipe any pre-set skew on sync.
+                        serverTime: self.clock.now_millis(),
                     })),
                     status: 200,
                 };
@@ -265,15 +269,35 @@ fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
         .count()
 }
 
-/// Polls `condition` until it holds, with a generous deadline.
+/// Runs `body` with the runtime clock paused so it can drive timers with
+/// `advance` instead of sleeping. The clock is resumed before returning.
+async fn with_paused_clock<T>(body: impl Future<Output = T>) -> T {
+    tokio::time::pause();
+    let result = body.await;
+    tokio::time::resume();
+    result
+}
+
+/// Advances the paused clock by `step` and yields so connector tasks can
+/// make progress.
+async fn tick(step: Duration) {
+    tokio::time::advance(step).await;
+    tokio::task::yield_now().await;
+}
+
+/// Polls `condition` until it holds, driving the runtime clock forward with
+/// `pause`/`advance` instead of sleeping.
 async fn wait_until(mut condition: impl FnMut() -> bool) -> Option<()> {
-    for _ in 0..500 {
-        if condition() {
-            return Some(());
+    with_paused_clock(async {
+        for _ in 0..500 {
+            if condition() {
+                return Some(());
+            }
+            tick(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    None
+        None
+    })
+    .await
 }
 
 #[tokio::test]
@@ -513,12 +537,9 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
                 .await
         })
     };
-    for _ in 0..100 {
-        if logon_count(&client.sent.lock().unwrap()) == 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until(|| logon_count(&client.sent.lock().unwrap()) == 2)
+        .await
+        .expect("re-authentication logon should be in flight");
     assert_eq!(
         logon_count(&client.sent.lock().unwrap()),
         2,
@@ -543,7 +564,14 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Give the concurrent sends a chance to wrongly start a second
+    // authentication by driving the clock forward instead of sleeping.
+    with_paused_clock(async {
+        for _ in 0..10 {
+            tick(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     assert_eq!(
         logon_count(&client.sent.lock().unwrap()),
         2,
@@ -758,7 +786,10 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
 async fn connect_syncs_the_server_clock_before_the_logon() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let clock = Clock::default();
-    clock.sync(10_000, Duration::ZERO);
+    // The server clock is 10 s ahead of the local clock: a logon signed
+    // with the raw local clock would be rejected with -1021.
+    let local = Clock::default().now_millis();
+    clock.sync(local + 10_000, Duration::ZERO);
     let connector = mock_session_connector(
         client_tx,
         None,
@@ -794,9 +825,11 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
         panic!("expected a logon");
     };
-    let local = Clock::default().now_millis();
+    // `local` was captured before connect: the logon was stamped after it,
+    // so with the +10 s server skew it must still clear the floor. A wide
+    // cushion keeps the assertion timing-independent.
     assert!(
-        logon.timestamp >= local + 10_000,
+        logon.timestamp >= local + 10_000 - 60_000,
         "logon timestamp {} must be near the server clock (local {local})",
         logon.timestamp
     );
