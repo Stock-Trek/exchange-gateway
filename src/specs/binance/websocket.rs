@@ -377,9 +377,41 @@ fn converter(unsigned: BinanceWebsocketUnsignedRequest) -> EGResult<BinanceWebso
     let BinanceWebsocketUnsignedRequest { metadata, params } = unsigned;
     let params = BinanceSignedParams {
         signature: None,
-        params,
+        params: session_params(params),
     };
     Ok(BinanceWebsocketRequest { metadata, params })
+}
+
+/// After `session.logon` the WebSocket API authenticates the connection, so
+/// post-logon requests must omit both `apiKey` and `signature`. Sending
+/// `apiKey` without `signature` is an undocumented combination and is
+/// rejected (-1022), so the session signer strips the `apiKey` the caller
+/// placed on the request.
+fn session_params(params: BinanceWebsocketUnsignedParams) -> BinanceWebsocketUnsignedParams {
+    match params {
+        BinanceWebsocketUnsignedParams::AmendOrderRequest(mut params) => {
+            params.apiKey = None;
+            BinanceWebsocketUnsignedParams::AmendOrderRequest(params)
+        }
+        BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(mut params) => {
+            params.apiKey = None;
+            BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params)
+        }
+        BinanceWebsocketUnsignedParams::CancelOrderRequest(mut params) => {
+            params.apiKey = None;
+            BinanceWebsocketUnsignedParams::CancelOrderRequest(params)
+        }
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(mut params) => {
+            params.apiKey = None;
+            BinanceWebsocketUnsignedParams::SpotOrderRequest(params)
+        }
+        // The `logon` (re-authentication goes through the full HMAC signer,
+        // never the session signer) and the unsigned requests carry no
+        // apiKey to strip.
+        params @ (BinanceWebsocketUnsignedParams::Logon(..)
+        | BinanceWebsocketUnsignedParams::ExchangeInfo(..)
+        | BinanceWebsocketUnsignedParams::Time(..)) => params,
+    }
 }
 
 fn response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitFeedback> {
@@ -430,6 +462,8 @@ mod test {
     use crate::{clock::Clock, rate_limit::rate_limit_type::RateLimitType};
     use exchange_types::binance::time::BinanceTimeResult;
     use exchange_types::binance::{
+        amend::BinanceAmendOrderParams,
+        cancel::{BinanceCancelAllOrdersParams, BinanceCancelOrderParams},
         error::BinanceError,
         exchange_info::{
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
@@ -602,6 +636,84 @@ mod test {
             (leg.create_signer)((unsuccessful_response_without_error, Duration::ZERO)),
             Err(EGError::ApiError { .. })
         ));
+    }
+
+    #[test]
+    fn converter_omits_api_key_and_signature_after_session_logon() {
+        // After session.logon the WebSocket API authenticates the connection:
+        // post-logon requests must omit both apiKey and signature. Sending
+        // apiKey without signature is an undocumented combination and is
+        // rejected (-1022), so the session signer must strip the apiKey the
+        // caller placed on the request.
+        let unsigned = BinanceWebsocketUnsignedRequest {
+            metadata: BinanceWebsocketMetadata {
+                id: "1".into(),
+                method: BinanceWebsocketMethodName::PlaceOrder,
+            },
+            params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
+        };
+        let signed = converter(unsigned).unwrap();
+        assert!(signed.params.signature.is_none());
+        let BinanceWebsocketUnsignedParams::SpotOrderRequest(params) = signed.params.params else {
+            panic!("expected a spot order request");
+        };
+        assert!(params.apiKey.is_none());
+    }
+
+    #[test]
+    fn converter_strips_api_key_from_every_signed_request_type() {
+        let params = vec![
+            BinanceWebsocketUnsignedParams::AmendOrderRequest(BinanceAmendOrderParams {
+                apiKey: Some("key".into()),
+                newClientOrderId: None,
+                newQty: Decimal::from(1),
+                orderId: Some(1),
+                origClientOrderId: None,
+                recvWindow: None,
+                symbol: "BTCUSDT".into(),
+                timestamp: 0,
+            }),
+            BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(BinanceCancelAllOrdersParams {
+                apiKey: Some("key".into()),
+                recvWindow: None,
+                symbol: "BTCUSDT".into(),
+                timestamp: 0,
+            }),
+            BinanceWebsocketUnsignedParams::CancelOrderRequest(BinanceCancelOrderParams {
+                apiKey: Some("key".into()),
+                cancelRestrictions: None,
+                newClientOrderId: None,
+                orderId: Some(1),
+                origClientOrderId: None,
+                recvWindow: None,
+                symbol: "BTCUSDT".into(),
+                timestamp: 0,
+            }),
+            BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
+        ];
+        for (index, params) in params.into_iter().enumerate() {
+            let unsigned = BinanceWebsocketUnsignedRequest {
+                metadata: BinanceWebsocketMetadata {
+                    id: index.to_string(),
+                    method: BinanceWebsocketMethodName::PlaceOrder,
+                },
+                params,
+            };
+            let signed = converter(unsigned).unwrap();
+            assert!(signed.params.signature.is_none());
+            let api_key = match &signed.params.params {
+                BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => &params.apiKey,
+                BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => &params.apiKey,
+                BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => &params.apiKey,
+                BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => &params.apiKey,
+                _ => panic!("unexpected request type"),
+            };
+            assert!(
+                api_key.is_none(),
+                "post-logon {:?} must omit apiKey: {api_key:?}",
+                signed.metadata.method
+            );
+        }
     }
 
     #[test]

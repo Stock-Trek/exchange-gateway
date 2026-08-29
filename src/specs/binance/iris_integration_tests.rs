@@ -295,6 +295,50 @@ async fn wait_until(mut condition: impl FnMut() -> bool) -> Option<()> {
 }
 
 #[tokio::test]
+async fn post_logon_requests_omit_api_key_and_signature() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let connector = mock_session_connector(
+        client_tx,
+        None,
+        None,
+        Duration::from_secs(20),
+        Arc::new(IgnoreListener),
+        Arc::new(Clock::default()),
+    )
+    .unwrap();
+    let client = client_rx.recv().unwrap();
+
+    connector.connect().await.expect("connect should succeed");
+    assert!(connector.is_authenticated().unwrap());
+    connector
+        .send(order_request(), true, Duration::from_secs(5))
+        .await
+        .expect("send should succeed");
+
+    // After session.logon the connection is authenticated, so the order must
+    // omit both apiKey and signature: apiKey without signature is an
+    // undocumented combination and is rejected (-1022).
+    let sent = client.sent.lock().unwrap();
+    let order = sent
+        .iter()
+        .find(|message| {
+            matches!(
+                message.metadata.method,
+                BinanceWebsocketMethodName::PlaceOrder
+            )
+        })
+        .expect("the order should have been sent");
+    assert!(order.params.signature.is_none());
+    let BinanceWebsocketUnsignedParams::SpotOrderRequest(params) = &order.params.params else {
+        panic!("expected a spot order request");
+    };
+    assert!(
+        params.apiKey.is_none(),
+        "post-logon requests must omit apiKey"
+    );
+}
+
+#[tokio::test]
 async fn reauthenticates_after_reconnect() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let connector = mock_session_connector(
