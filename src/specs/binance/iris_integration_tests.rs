@@ -895,11 +895,7 @@ async fn resync_syncs_the_server_clock_from_a_fresh_time_request() {
 
     connector.resync().await.expect("resync should succeed");
     let sent = client.sent.lock().unwrap();
-    assert_eq!(
-        sent.len(),
-        3,
-        "time bootstrap + logon + resync"
-    );
+    assert_eq!(sent.len(), 3, "time bootstrap + logon + resync");
     // The resync is a fresh unsigned time request, matched by its own id
     // rather than the bootstrap's.
     let resync = &sent[2];
