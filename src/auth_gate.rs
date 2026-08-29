@@ -114,8 +114,6 @@ impl AuthOnComplete {
             }
         })
     }
-    // The gate owns notification: release/cancel wake waiters themselves, so
-    // callers never need to notify a handle they hold.
     fn notify(&self) {
         let wakers = {
             let mut state = match self.0.lock() {
