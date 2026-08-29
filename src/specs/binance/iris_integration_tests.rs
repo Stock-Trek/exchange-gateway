@@ -1,11 +1,11 @@
 use crate::{
+    clock::Clock,
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
     specs::binance::websocket::connector_with_client_factory,
-    time_sync::TimeSync,
     transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
@@ -136,7 +136,7 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     id: message.metadata.id,
                     rateLimits: vec![],
                     result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
-                        serverTime: TimeSync::default().now_millis() + self.server_time_offset,
+                        serverTime: Clock::default().now_millis() + self.server_time_offset,
                     })),
                     status: 200,
                 };
@@ -790,7 +790,7 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
         panic!("expected a logon");
     };
-    let local = TimeSync::default().now_millis();
+    let local = Clock::default().now_millis();
     assert!(
         logon.timestamp >= local + 10_000,
         "logon timestamp {} must be near the server clock (local {local})",

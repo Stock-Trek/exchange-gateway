@@ -1,19 +1,23 @@
 use std::{
     sync::atomic::{AtomicI64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Default)]
-pub(crate) struct TimeSync {
+pub(crate) struct Clock {
     offset_millis: AtomicI64,
 }
 
-impl TimeSync {
+impl Clock {
     pub fn sync(&self, server_time_millis: i64) {
         self.offset_millis.store(
             server_time_millis - Self::system_time_millis(),
             Ordering::SeqCst,
         );
+    }
+
+    pub fn now(&self) -> Instant {
+        Instant::now()
     }
 
     pub fn now_millis(&self) -> i64 {
@@ -35,11 +39,11 @@ mod test {
     use super::*;
 
     #[test]
-    fn time_sync_applies_server_offset() {
-        let time_sync = TimeSync::default();
-        let local = time_sync.now_millis();
-        time_sync.sync(local + 10_000);
-        let synced = time_sync.now_millis();
+    fn clock_applies_server_offset() {
+        let clock = Clock::default();
+        let local = clock.now_millis();
+        clock.sync(local + 10_000);
+        let synced = clock.now_millis();
         assert!(synced >= local + 10_000, "synced: {synced}");
         assert!(synced < local + 10_000 + 60_000, "synced: {synced}");
     }

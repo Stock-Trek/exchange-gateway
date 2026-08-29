@@ -5,6 +5,7 @@
 
 pub mod auth_gate;
 pub mod authenticate_leg;
+mod clock;
 pub mod connect;
 pub mod connector;
 pub mod connector_impl;
@@ -15,7 +16,6 @@ pub mod listeners;
 pub mod rate_limit;
 pub mod sign;
 mod specs;
-mod time_sync;
 mod transports;
 pub mod urls;
 

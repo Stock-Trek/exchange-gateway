@@ -224,6 +224,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::clock::Clock;
+
+    fn clock() -> std::sync::Arc<Clock> {
+        std::sync::Arc::new(Clock::default())
+    }
     use super::*;
     use crate::rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
@@ -275,12 +280,15 @@ mod tests {
 
     fn rate_limits() -> RateLimits {
         RateLimits {
-            weight: RateLimiter::new(vec![RateLimitConfig {
-                rate_limit_type: RateLimitType::RequestWeight,
-                capacity_per_interval: 100,
-                interval_nanos: Duration::from_secs(60).as_nanos(),
-            }]),
-            orders: RateLimiter::new(vec![]),
+            weight: RateLimiter::new(
+                clock(),
+                vec![RateLimitConfig {
+                    rate_limit_type: RateLimitType::RequestWeight,
+                    capacity_per_interval: 100,
+                    interval_nanos: Duration::from_secs(60).as_nanos(),
+                }],
+            ),
+            orders: RateLimiter::new(clock(), vec![]),
         }
     }
 

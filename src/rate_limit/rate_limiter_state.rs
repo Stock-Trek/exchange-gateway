@@ -1,8 +1,9 @@
-use crate::rate_limit::rate_limit_type::RateLimitType;
-use std::time::Instant;
+use crate::{clock::Clock, rate_limit::rate_limit_type::RateLimitType};
+use std::{sync::Arc, time::Instant};
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimiterState {
+    clock: Arc<Clock>,
     rate_limit_type: RateLimitType,
     interval_nanos: u128,
     capacity_per_interval: u32,
@@ -14,6 +15,7 @@ pub(crate) struct RateLimiterState {
 
 impl RateLimiterState {
     pub fn new(
+        clock: Arc<Clock>,
         rate_limit_type: RateLimitType,
         interval_nanos: u128,
         capacity_per_interval: u32,
@@ -23,12 +25,14 @@ impl RateLimiterState {
             capacity_per_interval > 0,
             "capacity_per_interval cannot be zero"
         );
+        let now = clock.now();
         Self {
+            clock,
             rate_limit_type,
             interval_nanos,
             capacity_per_interval,
             current_capacity: capacity_per_interval,
-            last_calculation: Instant::now(),
+            last_calculation: now,
             excess_interval_nanos: 0,
             throttled_until: None,
         }
@@ -82,13 +86,13 @@ impl RateLimiterState {
             }
             (None, None) => {}
         }
-        self.last_calculation = Instant::now();
+        self.last_calculation = self.clock.now();
         self.excess_interval_nanos = 0;
     }
 
     fn is_throttled(&self) -> bool {
         self.throttled_until
-            .is_some_and(|throttled_until| Instant::now() < throttled_until)
+            .is_some_and(|throttled_until| self.clock.now() < throttled_until)
     }
     fn did_quick_consume(&mut self, cost: u32) -> bool {
         if cost > self.capacity_per_interval {
@@ -101,7 +105,7 @@ impl RateLimiterState {
         consumed
     }
     fn update_capacity(&mut self) {
-        let now = Instant::now();
+        let now = self.clock.now();
         if let Some(throttled_until) = self.throttled_until {
             if now < throttled_until {
                 return;
@@ -126,12 +130,16 @@ impl RateLimiterState {
 
 #[cfg(test)]
 mod tests {
+    fn clock() -> Arc<Clock> {
+        Arc::new(Clock::default())
+    }
     use super::*;
     use std::time::Duration;
 
     #[test]
     fn throttle_empties_bucket_until_deadline() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             10,
@@ -144,6 +152,7 @@ mod tests {
     #[test]
     fn throttle_expires_and_refills_from_deadline() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_millis(10).as_nanos(),
             10,
@@ -157,6 +166,7 @@ mod tests {
     #[test]
     fn sync_usage_realigns_capacity_and_limit() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -171,6 +181,7 @@ mod tests {
     #[test]
     fn sync_usage_without_limit_only_trims_capacity() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -186,6 +197,7 @@ mod tests {
     #[test]
     fn sync_usage_without_limit_never_adds_capacity() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -201,6 +213,7 @@ mod tests {
     #[test]
     fn sync_usage_keeps_throttle() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             10,
@@ -213,6 +226,7 @@ mod tests {
     #[test]
     fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -233,6 +247,7 @@ mod tests {
     #[test]
     fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_millis(10).as_nanos(),
             6000,
@@ -248,6 +263,7 @@ mod tests {
     #[test]
     fn sync_usage_with_limit_only_adopts_limit_without_refilling() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -264,6 +280,7 @@ mod tests {
     #[test]
     fn sync_usage_with_limit_only_never_adds_capacity() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -279,6 +296,7 @@ mod tests {
     #[test]
     fn sync_usage_with_limit_only_trims_capacity_above_new_limit() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -294,6 +312,7 @@ mod tests {
     #[test]
     fn sync_usage_without_usage_or_limit_is_noop() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
@@ -307,6 +326,7 @@ mod tests {
     #[test]
     fn sync_usage_with_usage_above_limit_drains_bucket() {
         let mut state = RateLimiterState::new(
+            clock(),
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             10,

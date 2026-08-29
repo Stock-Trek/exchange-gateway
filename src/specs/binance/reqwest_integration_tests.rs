@@ -1,4 +1,5 @@
 use crate::{
+    clock::Clock,
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
@@ -9,7 +10,6 @@ use crate::{
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
     specs::binance::{common::rate_limits, http::connector_with_client},
-    time_sync::TimeSync,
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},
@@ -123,9 +123,11 @@ fn mock_http_connector(
     let _ = client_handle.send(mock_client.clone());
     let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
         Arc::new(mock_client);
+    let clock = Arc::new(Clock::default());
     connector_with_client(
         client,
-        rate_limits(),
+        clock.clone(),
+        rate_limits(clock.clone()),
         to_unsigned_request,
         to_external_response,
         listener,
@@ -196,7 +198,7 @@ async fn http_connect_syncs_the_server_clock_before_signed_requests() {
     let BinanceHttpUnsignedRequest::AssetLimits(asset_limits) = &sent[1].params else {
         panic!("expected an asset limits request");
     };
-    let local = TimeSync::default().now_millis();
+    let local = Clock::default().now_millis();
     assert!(
         asset_limits.timestamp >= local + 10_000,
         "timestamp {} must be near the server clock (local {local})",
@@ -276,8 +278,10 @@ fn scripted_http_connector(
     let _ = client_handle.send(scripted_client.clone());
     let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
         Arc::new(scripted_client);
+    let clock = Arc::new(Clock::default());
     connector_with_client(
         client,
+        clock,
         rate_limits,
         to_unsigned_request,
         to_external_response,
@@ -288,16 +292,22 @@ fn scripted_http_connector(
 
 fn single_slot_rate_limits() -> RateLimits {
     RateLimits {
-        weight: RateLimiter::new(vec![RateLimitConfig {
-            rate_limit_type: RateLimitType::RequestWeight,
-            capacity_per_interval: 1,
-            interval_nanos: Duration::from_secs(60).as_nanos(),
-        }]),
-        orders: RateLimiter::new(vec![RateLimitConfig {
-            rate_limit_type: RateLimitType::Orders,
-            capacity_per_interval: 1,
-            interval_nanos: Duration::from_secs(10).as_nanos(),
-        }]),
+        weight: RateLimiter::new(
+            Arc::new(Clock::default()),
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }],
+        ),
+        orders: RateLimiter::new(
+            Arc::new(Clock::default()),
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }],
+        ),
     }
 }
 
