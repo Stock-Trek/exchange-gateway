@@ -93,11 +93,6 @@ impl HttpClientTrait for MockHttpClient {
     }
 }
 
-/// Builds an HTTP connector backed by the scripted mock client, handing
-/// the caller a handle to the client so sent requests can be inspected.
-/// `server_time_offset` shifts the clock the mock's `time` responses
-/// report, mirroring the production bootstrap (a server-time sync before
-/// any signed request).
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
     clock: Arc<Clock>,
