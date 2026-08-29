@@ -146,7 +146,6 @@ where
     EGReq: Send,
     EGRes: Send + Sync + 'static,
 {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         rate_limits: RateLimits,
         to_weight: fn(&EGUnsignedReq) -> u32,

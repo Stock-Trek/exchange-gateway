@@ -106,7 +106,6 @@ where
     EGReq: Send,
     EGRes: 'static,
 {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
