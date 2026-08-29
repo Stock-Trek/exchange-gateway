@@ -206,9 +206,6 @@ fn mock_session_connector(
         BinanceWebsocketResponse,
     > = Arc::new(Ok);
     let clock_for_factory = clock.clone();
-    // The production connector builds the internal response listener and
-    // hands it to the client factory, so the scripted client is wired into
-    // the same listener (and shared auth gate) the transport uses.
     let client_factory =
         move |websocket_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>| {
             let mock_client = MockWebsocketClient {

@@ -65,10 +65,6 @@ where
     )
 }
 
-/// Assembles the production HTTP connector around an injected transport
-/// client and rate limits. The production [`connector`] builds the real
-/// reqwest client; tests pass a scripted client (and custom limits) to
-/// exercise the same connector wiring without a network.
 pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
     rate_limits: RateLimits,
@@ -94,10 +90,6 @@ where
         rate_limits.clone(),
         response_feedback,
     );
-    // The clock is bootstrapped from the unsigned `GET /api/v3/time` endpoint
-    // on first connect (and again on every re-authentication), so a machine
-    // whose clock is skewed beyond the recvWindow can still sign requests:
-    // no signed request is ever sent before the server clock is known.
     let authenticate_legs = if credentials.is_some() {
         vec![time_bootstrap_leg(clock.clone(), Duration::from_secs(20))]
     } else {
@@ -317,8 +309,6 @@ fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<O
     })
 }
 
-/// REST signs the query string without the `apiKey` param (it is sent in
-/// the X-MBX-APIKEY header instead).
 fn strip_api_key<T>(params: &T) -> Cow<'_, T>
 where
     T: Clone + HasApiKey,
@@ -373,22 +363,12 @@ impl HasApiKey for BinanceCancelOrderParams {
     }
 }
 
-/// An authentication leg that fetches the server's clock over the unsigned
-/// `GET /api/v3/time` endpoint before any signed request can go out, so
-/// timestamps are stamped with the server clock even when the local clock is
-/// skewed beyond the recvWindow (a skewed signed request would otherwise be
-/// rejected with -1021 and never sync). It does not establish a session, so
-/// its signer is left as-is (`Ok(None)` keeps the signer the previous leg
-/// installed).
 pub(crate) fn time_bootstrap_leg(
     clock: Arc<Clock>,
     timeout: Duration,
 ) -> AuthenticateLeg<BinanceHttpUnsignedRequest, BinanceHttpRequest, BinanceHttpResponse> {
     let create_auth_attempt = Arc::new(|| {
         let message = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
-        // HTTP is request/response, so the next response belongs to this
-        // request: accept a Time result (to sync) or an error response (to
-        // surface the exchange's error).
         let filter: ArcPredicate<BinanceHttpResponse> = Arc::new(|response| {
             matches!(
                 response,
@@ -421,9 +401,6 @@ pub(crate) fn time_bootstrap_leg(
     }
 }
 
-/// Converts a rejected `time` response into the error the authenticating
-/// caller sees, so a failed time bootstrap surfaces as the exchange's actual
-/// error instead of a timeout or `BadResponse`.
 fn http_time_response_error(message: &BinanceHttpResponse) -> EGResult<()> {
     if let BinanceHttpResponse::Error(error) = message {
         return Err(EGError::ApiError {

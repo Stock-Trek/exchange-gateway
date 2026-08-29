@@ -183,13 +183,10 @@ where
             if !self.session_is_stale()? {
                 return Ok(());
             }
-            let on_complete = match self.auth_gate.acquire()? {
-                AuthGateAcquisition::Waiting(on_complete) => {
-                    on_complete.wait().await?;
-                    continue;
-                }
-                AuthGateAcquisition::Authenticator(on_complete) => on_complete,
-            };
+            if let AuthGateAcquisition::Blocked(on_complete) = self.auth_gate.acquire()? {
+                on_complete.wait().await?;
+                continue;
+            }
             let result = self.run_authentication(credentials).await;
             match result {
                 Err(_) => {
@@ -199,7 +196,6 @@ where
                     self.auth_gate.release()?;
                 }
             }
-            on_complete.notify();
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
@@ -243,8 +239,6 @@ where
             };
             let request_duration = start.elapsed();
             signer = match (leg.create_signer)((authentication_response, request_duration))? {
-                // A leg that only gathers information (e.g. a server-time
-                // bootstrap) keeps the signer the previous leg installed.
                 Some(next_signer) => next_signer,
                 None => signer,
             };
