@@ -1,11 +1,11 @@
 use crate::{
+    clock::Clock,
     error::EGResult,
     rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
     sign::encrypt::{data_signer::DataSigner, signing_algorithm::SigningAlgorithm},
-    time_sync::TimeSync,
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::{
@@ -36,9 +36,9 @@ pub(crate) fn exchange_urls() -> ExchangeUrls {
 pub(crate) fn sync_timestamp_fields(
     timestamp: &mut i64,
     recv_window: &mut Option<Decimal>,
-    time_sync: &TimeSync,
+    clock: &Clock,
 ) {
-    *timestamp = time_sync.now_millis();
+    *timestamp = clock.now_millis();
     if recv_window.is_none() {
         *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MILLIS));
     }

@@ -1,7 +1,7 @@
 #[cfg(feature = "iris")]
 use {
     crate::{
-        specs::binance::websocket::connector as binance_websocket_connector,
+        clock::Clock, specs::binance::websocket::connector as binance_websocket_connector,
         transports::iris::default_config,
     },
     exchange_types::binance::websocket::{
@@ -37,6 +37,7 @@ impl Connect {
         to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
+        clock: Arc<Clock>,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send,
@@ -48,6 +49,7 @@ impl Connect {
             to_external_response,
             listener,
             credentials,
+            clock,
         )
     }
 
@@ -60,6 +62,7 @@ impl Connect {
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
+        clock: Arc<Clock>,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + Sync,
@@ -73,6 +76,7 @@ impl Connect {
             credentials,
             use_session,
             default_config(),
+            clock,
         )
     }
 
@@ -87,6 +91,7 @@ impl Connect {
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
         iris_config: IrisConfig,
+        clock: Arc<Clock>,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + Sync,
@@ -100,6 +105,7 @@ impl Connect {
             credentials,
             use_session,
             iris_config,
+            clock,
         )
     }
 }

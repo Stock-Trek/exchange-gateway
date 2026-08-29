@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use std::{
     ops::Deref,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub struct ConnectorImpl<
@@ -229,6 +229,7 @@ where
                 };
                 (signed_auth_message, weight, order_count, filter)
             };
+            let start = Instant::now();
             let authentication_response = match self
                 .transport
                 .send_and_wait_for(signed_auth_message, leg.timeout, filter)
@@ -240,7 +241,8 @@ where
                     return Err(error);
                 }
             };
-            signer = match (leg.create_signer)(authentication_response)? {
+            let request_duration = start.elapsed();
+            signer = match (leg.create_signer)((authentication_response, request_duration))? {
                 // A leg that only gathers information (e.g. a server-time
                 // bootstrap) keeps the signer the previous leg installed.
                 Some(next_signer) => next_signer,
