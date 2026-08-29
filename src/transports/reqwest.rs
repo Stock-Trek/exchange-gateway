@@ -80,7 +80,7 @@ impl HttpClientTrait for ReqwestHttpClient {
             .await
             .map_err(|e| EGError::External(Box::new(e)))?;
         let status = response.status();
-        let headers = response
+        let headers: Vec<(String, String)> = response
             .headers()
             .iter()
             .map(|(name, value)| {
@@ -95,21 +95,20 @@ impl HttpClientTrait for ReqwestHttpClient {
             .await
             .map_err(|e| EGError::External(Box::new(e)))?
             .to_vec();
-        if status.is_success() {
-            Ok(HttpResponse {
-                status: status.as_u16(),
-                headers,
-                body,
-            })
-        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS
             || status == reqwest::StatusCode::IM_A_TEAPOT
         {
             Err(EGError::RateLimited(
                 rate_limit_feedback_from_status_and_headers(status.as_u16(), &headers),
             ))
         } else {
-            Err(EGError::HttpError {
+            // Deliver every other status (2xx, 3xx, 4xx, 5xx) to the exchange
+            // layer: it parses non-2xx bodies into `BinanceHttpResponse::Error`
+            // so business rejections surface as `ApiError { code, msg }` rather
+            // than as a raw `HttpError { status, body }`.
+            Ok(HttpResponse {
                 status: status.as_u16(),
+                headers,
                 body,
             })
         }
@@ -208,7 +207,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_message_maps_4xx_to_http_error() {
+    async fn send_message_delivers_4xx_as_response() {
         let request_log = Arc::new(Mutex::new(String::new()));
         let base_url = spawn_mock_server_with_response(
             request_log,
@@ -217,7 +216,10 @@ mod tests {
             br#"{"code":-2014,"msg":"API-key format invalid."}"#,
         );
         let client = ReqwestHttpClient::new(&base_url);
-        let error = client
+        // 4xx business rejections are delivered as responses so the exchange
+        // layer can parse the body into `BinanceHttpResponse::Error` (which in
+        // turn surfaces as `ApiError`), instead of a raw `HttpError`.
+        let response = client
             .send_message(
                 "order",
                 HttpRequest {
@@ -229,18 +231,13 @@ mod tests {
                 Duration::from_secs(5),
             )
             .await
-            .expect_err("400 should be returned as an error");
-        match error {
-            EGError::HttpError { status, body } => {
-                assert_eq!(status, 400);
-                assert_eq!(body, br#"{"code":-2014,"msg":"API-key format invalid."}"#);
-            }
-            other => panic!("expected HttpError, got: {other:?}"),
-        }
+            .expect("400 should be delivered as a response");
+        assert_eq!(response.status, 400);
+        assert_eq!(response.body, br#"{"code":-2014,"msg":"API-key format invalid."}"#);
     }
 
     #[tokio::test]
-    async fn send_message_maps_5xx_to_http_error() {
+    async fn send_message_delivers_5xx_as_response() {
         let request_log = Arc::new(Mutex::new(String::new()));
         let base_url = spawn_mock_server_with_response(
             request_log,
@@ -249,7 +246,7 @@ mod tests {
             br#"{"code":-1000,"msg":"down"}"#,
         );
         let client = ReqwestHttpClient::new(&base_url);
-        let error = client
+        let response = client
             .send_message(
                 "order",
                 HttpRequest {
@@ -261,11 +258,9 @@ mod tests {
                 Duration::from_secs(5),
             )
             .await
-            .expect_err("503 should be returned as an error");
-        match error {
-            EGError::HttpError { status, .. } => assert_eq!(status, 503),
-            other => panic!("expected HttpError, got: {other:?}"),
-        }
+            .expect("503 should be delivered as a response");
+        assert_eq!(response.status, 503);
+        assert_eq!(response.body, br#"{"code":-1000,"msg":"down"}"#);
     }
 
     fn spawn_mock_server_with_response(

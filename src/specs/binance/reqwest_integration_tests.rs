@@ -198,7 +198,9 @@ enum ScriptedOutcome {
     /// A server-side 429/418 rejection (not counted against the budget).
     RateLimited,
     /// A 4xx/5xx business rejection, e.g. -2010 insufficient balance
-    /// (counted against the budget).
+    /// (counted against the budget). The client delivers it as a response
+    /// (mirroring [`ReqwestHttpClient`]), so the connector parses it into an
+    /// `ApiError`.
     HttpError,
 }
 
@@ -229,9 +231,10 @@ impl HttpClientTrait for ScriptedHttpClient {
                 retry_after: Some(Duration::from_millis(50)),
                 usage: vec![],
             })),
-            ScriptedOutcome::HttpError => Err(EGError::HttpError {
+            ScriptedOutcome::HttpError => Ok(HttpResponse {
                 status: 400,
                 body: br#"{"code":-2010,"msg":"insufficient balance"}"#.to_vec(),
+                headers: vec![],
             }),
         }
     }
@@ -350,16 +353,20 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
     .unwrap();
     let client = client_rx.recv().unwrap();
 
-    // The order is rejected with a 4xx business error (-2010 etc.), but
-    // Binance counts its weight anyway: the locally-reserved capacity
-    // must not be refunded.
+    // The order is rejected with a 4xx business error (-2010 etc.), which
+    // Binance counts against the request-weight budget anyway: the
+    // locally-reserved capacity must not be refunded. The rejection surfaces
+    // as the parsed `ApiError { code, msg }`, not a raw `HttpError`.
     let result = connector
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;
-    assert!(matches!(
-        result,
-        Err(EGError::HttpError { status: 400, .. })
-    ));
+    match result {
+        Err(EGError::ApiError { code, message }) => {
+            assert_eq!(code, -2010);
+            assert_eq!(message, "insufficient balance");
+        }
+        other => panic!("expected ApiError, got: {other:?}"),
+    }
 
     // The budget stays exhausted, so the next send is rejected locally
     // and never reaches the transport.

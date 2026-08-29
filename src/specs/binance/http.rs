@@ -79,7 +79,10 @@ where
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
+        Arc::new(ConvertListener::new(
+            surface_as_api_error(to_external_response),
+            listener,
+        ));
     // AssetLimits (`myFilters`) is a USER_DATA endpoint whose params carry no
     // `apiKey` field, so its X-MBX-APIKEY header is supplied from the
     // connector's credentials instead of the request params.
@@ -209,10 +212,32 @@ fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
             .map_err(|error| EGError::External(Box::new(error)))?;
         Ok(BinanceHttpResponse::Result(result))
     } else {
-        let error = serde_json::from_slice(&response.body)
-            .map_err(|error| EGError::External(Box::new(error)))?;
-        Ok(BinanceHttpResponse::Error(error))
+        match serde_json::from_slice(&response.body) {
+            Ok(error) => Ok(BinanceHttpResponse::Error(error)),
+            // The body is not a Binance error payload (e.g. a proxy HTML
+            // page): fall back to the raw status/body so the failure is not
+            // reduced to a bare deserialization error.
+            Err(_) => Err(EGError::HttpError {
+                status: response.status,
+                body: response.body,
+            }),
+        }
     }
+}
+
+/// Guarantees that exchange error responses surface to the caller as
+/// `ApiError { code, msg }`, regardless of what the caller's own
+/// `to_external_response` does with a `BinanceHttpResponse::Error`.
+fn surface_as_api_error<ExternalRes: 'static>(
+    to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+) -> ArcTryConvertValue<BinanceHttpResponse, ExternalRes> {
+    Arc::new(move |response| match response {
+        BinanceHttpResponse::Error(error) => Err(EGError::ApiError {
+            code: error.code,
+            message: error.msg,
+        }),
+        response => (to_external_response)(response),
+    })
 }
 
 fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
@@ -793,6 +818,55 @@ mod test {
             }
             other => panic!("expected Error, got: {other:?}"),
         }
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn from_http_response_falls_back_to_http_error_for_unparseable_non_2xx() {
+        // A non-2xx body that is not a Binance error payload (e.g. a proxy
+        // HTML page) must keep the raw status/body instead of degrading to a
+        // bare deserialization error.
+        let response = HttpResponse {
+            status: 502,
+            body: br#"<html>Bad Gateway</html>"#.to_vec(),
+            headers: vec![],
+        };
+        let error = from_response(response).expect_err("502 should be an error");
+        match error {
+            EGError::HttpError { status, body } => {
+                assert_eq!(status, 502);
+                assert_eq!(body, br#"<html>Bad Gateway</html>"#);
+            }
+            other => panic!("expected HttpError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_responses_surface_as_api_error() {
+        let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
+            Arc::new(Ok);
+        let converter = surface_as_api_error(to_external_response);
+        let error = converter(BinanceHttpResponse::Error(BinanceError {
+            code: -2014,
+            msg: "API-key format invalid.".into(),
+        }))
+        .expect_err("error responses should surface as ApiError");
+        match error {
+            EGError::ApiError { code, message } => {
+                assert_eq!(code, -2014);
+                assert_eq!(message, "API-key format invalid.");
+            }
+            other => panic!("expected ApiError, got: {other:?}"),
+        }
+        // Successful results still pass through to the caller's converter.
+        let result = converter(BinanceHttpResponse::Result(
+            BinanceHttpResponseResult::Time(BinanceTimeResult { serverTime: 1 }),
+        ))
+        .expect("result responses should pass through");
+        assert!(matches!(
+            result,
+            BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(..))
+        ));
     }
 
     #[test]
