@@ -35,7 +35,7 @@ use exchange_types::binance::{
     },
     signed::BinanceSignedParams,
     spot::BinanceSpotOrderParams,
-    time::{BinanceTimeParams, BinanceTimeResult},
+    time::BinanceTimeParams,
 };
 use reqwest::Method;
 use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
@@ -163,9 +163,7 @@ fn to_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
                 Some(signed_query(params.query_params(true), signature)),
             )
         }
-        BinanceHttpUnsignedRequest::Ping(..) | BinanceHttpUnsignedRequest::Time(..) => {
-            (Method::GET, None)
-        }
+        BinanceHttpUnsignedRequest::Time(..) => (Method::GET, None),
     };
     Ok(HttpRequest {
         method,
@@ -199,20 +197,10 @@ fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
     pairs.join("&")
 }
 
-fn from_response(endpoint: HttpEndpoint, response: HttpResponse) -> EGResult<BinanceHttpResponse> {
+fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     if (200..300).contains(&response.status) {
-        let result = match endpoint {
-            // exchange-types' untagged result enum lists Ping before Time,
-            // and BinancePingResult ignores unknown fields, so a time
-            // response would be mis-parsed as Ping and the clock sync
-            // would never see the server time; parse it explicitly for the
-            // time endpoint.
-            HttpEndpoint::Time => serde_json::from_slice::<BinanceTimeResult>(&response.body)
-                .map(BinanceHttpResponseResult::Time)
-                .map_err(|error| EGError::External(Box::new(error)))?,
-            _ => serde_json::from_slice(&response.body)
-                .map_err(|error| EGError::External(Box::new(error)))?,
-        };
+        let result = serde_json::from_slice(&response.body)
+            .map_err(|error| EGError::External(Box::new(error)))?;
         Ok(BinanceHttpResponse::Result(result))
     } else {
         let error = serde_json::from_slice(&response.body)
@@ -229,7 +217,6 @@ fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
         BinanceHttpUnsignedRequest::AmendOrderRequest(..) => HttpEndpoint::AmendOrder,
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => HttpEndpoint::CancelAllOrders,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => HttpEndpoint::CancelOrder,
-        BinanceHttpUnsignedRequest::Ping(..) => HttpEndpoint::Ping,
         BinanceHttpUnsignedRequest::Time(..) => HttpEndpoint::Time,
     }
 }
@@ -242,7 +229,6 @@ fn endpoints() -> HashMap<HttpEndpoint, String> {
     endpoints.insert(HttpEndpoint::AmendOrder, "order/cancelReplace".into());
     endpoints.insert(HttpEndpoint::CancelAllOrders, "openOrders".into());
     endpoints.insert(HttpEndpoint::CancelOrder, "order".into());
-    endpoints.insert(HttpEndpoint::Ping, "ping".into());
     endpoints.insert(HttpEndpoint::Time, "time".into());
     endpoints
 }
@@ -282,7 +268,6 @@ fn sync_timestamp(
                 BinanceHttpUnsignedRequest::CancelOrderRequest(params)
             }
             request @ BinanceHttpUnsignedRequest::ExchangeInfo(..) => request,
-            request @ BinanceHttpUnsignedRequest::Ping(..) => request,
             request @ BinanceHttpUnsignedRequest::Time(..) => request,
         })
     })
@@ -325,7 +310,7 @@ fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<O
             let params_without_api_key = strip_api_key(params);
             Some(params_without_api_key.query_params(true).into_bytes())
         }
-        BinanceHttpUnsignedRequest::Ping(..) | BinanceHttpUnsignedRequest::Time(..) => None,
+        BinanceHttpUnsignedRequest::Time(..) => None,
     })
 }
 
@@ -462,7 +447,6 @@ fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
         BinanceHttpUnsignedRequest::AmendOrderRequest(..) => 2,
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => 1,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => 1,
-        BinanceHttpUnsignedRequest::Ping(..) => 1,
         BinanceHttpUnsignedRequest::Time(..) => 1,
     }
 }
@@ -496,7 +480,6 @@ mod test {
             BinanceExchangeInfoPermission, BinanceExchangeInfoResult,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
-        ping::BinancePingParams,
         rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
@@ -758,8 +741,7 @@ mod test {
             body: br#"{"code":-2014,"msg":"API-key format invalid."}"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(HttpEndpoint::ExchangeInfo, response)
-            .expect("400 should parse as an error");
+        let parsed = from_response(response).expect("400 should parse as an error");
         match parsed {
             BinanceHttpResponse::Error(error) => {
                 assert_eq!(error.code, -2014);
@@ -777,8 +759,7 @@ mod test {
             body: br#"[]"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(HttpEndpoint::ExchangeInfo, response)
-            .expect("201 should parse as a result");
+        let parsed = from_response(response).expect("201 should parse as a result");
         assert!(matches!(
             parsed,
             BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(ref filters))
@@ -798,7 +779,7 @@ mod test {
             body: br#"{"serverTime":1787964248237}"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(HttpEndpoint::Time, response).expect("time should parse");
+        let parsed = from_response(response).expect("time should parse");
         match parsed {
             BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(result)) => {
                 assert_eq!(result.serverTime, 1787964248237);
@@ -824,8 +805,6 @@ mod test {
         assert_eq!(request_weight(&order), 1);
         let time = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         assert_eq!(request_weight(&time), 1);
-        let ping = BinanceHttpUnsignedRequest::Ping(BinancePingParams {});
-        assert_eq!(request_weight(&ping), 1);
     }
 
     #[test]

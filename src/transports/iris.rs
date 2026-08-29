@@ -542,7 +542,7 @@ mod tests {
         // The fresh connection must be usable for round trips.
         let message = TestRequest {
             id: 1,
-            method: "ping".into(),
+            method: "time".into(),
         };
         client
             .send_message(message, Duration::from_secs(5))
