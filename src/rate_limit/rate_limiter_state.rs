@@ -38,31 +38,6 @@ impl RateLimiterState {
             now: Arc::new(Instant::now),
         }
     }
-    /// Constructs a limiter reading the clock through `now`, so tests can
-    /// drive time-dependent behaviour deterministically instead of sleeping.
-    #[cfg(test)]
-    pub(crate) fn with_clock(
-        rate_limit_type: RateLimitType,
-        interval_nanos: u128,
-        capacity_per_interval: u32,
-        now: Arc<dyn Fn() -> Instant + Send + Sync>,
-    ) -> Self {
-        assert!(interval_nanos > 0, "interval_nanos cannot be zero");
-        assert!(
-            capacity_per_interval > 0,
-            "capacity_per_interval cannot be zero"
-        );
-        Self {
-            rate_limit_type,
-            interval_nanos,
-            capacity_per_interval,
-            current_capacity: capacity_per_interval,
-            last_calculation: now(),
-            excess_interval_nanos: 0,
-            throttled_until: None,
-            now,
-        }
-    }
     pub fn rate_limit_type(&self) -> RateLimitType {
         self.rate_limit_type
     }
@@ -175,6 +150,33 @@ mod tests {
     use crate::test_utils::TestClock;
     use std::sync::Arc;
     use std::time::Duration;
+
+    impl RateLimiterState {
+        /// Constructs a limiter reading the clock through `now`, so tests can
+        /// drive time-dependent behaviour deterministically instead of sleeping.
+        pub(crate) fn with_clock(
+            rate_limit_type: RateLimitType,
+            interval_nanos: u128,
+            capacity_per_interval: u32,
+            now: Arc<dyn Fn() -> Instant + Send + Sync>,
+        ) -> Self {
+            assert!(interval_nanos > 0, "interval_nanos cannot be zero");
+            assert!(
+                capacity_per_interval > 0,
+                "capacity_per_interval cannot be zero"
+            );
+            Self {
+                rate_limit_type,
+                interval_nanos,
+                capacity_per_interval,
+                current_capacity: capacity_per_interval,
+                last_calculation: now(),
+                excess_interval_nanos: 0,
+                throttled_until: None,
+                now,
+            }
+        }
+    }
 
     #[test]
     fn throttle_empties_bucket_until_deadline() {

@@ -5,8 +5,6 @@ use crate::{
         rate_limiter_state::RateLimiterState,
     },
 };
-#[cfg(test)]
-use std::time::Instant;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -22,22 +20,6 @@ impl RateLimiter {
         Self {
             rate_limiters: Arc::new(Mutex::new(
                 rate_limits.iter().map(|rl| rl.to_state()).collect(),
-            )),
-        }
-    }
-    /// Like [`Self::new`], but reading the clock through `now` so tests can
-    /// drive time-dependent behaviour deterministically.
-    #[cfg(test)]
-    pub(crate) fn new_with_clock(
-        rate_limits: Vec<RateLimitConfig>,
-        now: Arc<dyn Fn() -> Instant + Send + Sync>,
-    ) -> Self {
-        Self {
-            rate_limiters: Arc::new(Mutex::new(
-                rate_limits
-                    .iter()
-                    .map(|rl| rl.to_state_with_clock(now.clone()))
-                    .collect(),
             )),
         }
     }
@@ -100,7 +82,25 @@ mod tests {
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    impl RateLimiter {
+        /// Like [`Self::new`], but reading the clock through `now` so tests can
+        /// drive time-dependent behaviour deterministically.
+        pub(crate) fn new_with_clock(
+            rate_limits: Vec<RateLimitConfig>,
+            now: Arc<dyn Fn() -> Instant + Send + Sync>,
+        ) -> Self {
+            Self {
+                rate_limiters: Arc::new(Mutex::new(
+                    rate_limits
+                        .iter()
+                        .map(|rl| rl.to_state_with_clock(now.clone()))
+                        .collect(),
+                )),
+            }
+        }
+    }
 
     #[test]
     fn refund_returns_consumed_capacity() {

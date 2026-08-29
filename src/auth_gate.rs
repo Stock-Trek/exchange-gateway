@@ -61,6 +61,10 @@ impl AuthGate {
         Ok(())
     }
 
+    /// Clears the in-flight authentication without advancing the
+    /// authenticated epoch: a failed authentication leaves the session stale
+    /// so waiters retry instead of treating the current connection as
+    /// authenticated.
     pub fn cancel(&self) -> EGResult<()> {
         let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
         let Some(_) = &state.in_flight.take() else {
@@ -73,6 +77,15 @@ impl AuthGate {
         self.bump_epoch()
     }
 
+    /// Marks the current connection as lost, bumping the connection epoch so
+    /// any session bound to the lost connection is stale immediately.
+    ///
+    /// Bumping on disconnect as well as on (re)connect means staleness is
+    /// detected as soon as the connection drops rather than only after a
+    /// reconnect fires `on_connected`, so a signed request sent while the
+    /// connection is down is always forced through re-authentication (which
+    /// fails fast with iris's `ConnectionClosed` while the client is
+    /// reconnecting) instead of slipping out under a dead session.
     pub fn on_connection_lost(&self) -> EGResult<()> {
         self.bump_epoch()
     }
