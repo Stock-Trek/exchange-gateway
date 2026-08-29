@@ -183,19 +183,19 @@ where
             if !self.session_is_stale()? {
                 return Ok(());
             }
-            if let AuthGateAcquisition::Blocked(on_complete) = self.auth_gate.acquire()? {
-                on_complete.wait().await?;
-                continue;
-            }
+            let guard = match self.auth_gate.acquire()? {
+                AuthGateAcquisition::Acquired(guard) => guard,
+                AuthGateAcquisition::Blocked(on_complete) => {
+                    on_complete.wait().await?;
+                    continue;
+                }
+            };
             let result = self.run_authentication(credentials).await;
-            match result {
-                Err(_) => {
-                    self.auth_gate.cancel()?;
-                }
-                Ok(()) => {
-                    self.auth_gate.release()?;
-                }
+            if result.is_ok() {
+                guard.complete();
             }
+            // Dropping the guard cancels a failed authentication and completes
+            // a successful one, waking any blocked callers either way.
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
