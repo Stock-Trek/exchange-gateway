@@ -29,7 +29,7 @@ use exchange_types::binance::{
 use secrecy::SecretString;
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn spot_order_params() -> BinanceSpotOrderParams {
@@ -110,6 +110,11 @@ impl HttpClientTrait for MockHttpClient {
     }
 }
 
+/// Builds an HTTP connector backed by the mock client, handing the caller
+/// a handle to the client so sent requests can be inspected. The mock
+/// reports the given clock as the server clock on `time` responses,
+/// mirroring the production bootstrap (a server-time sync before any
+/// signed request).
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
     clock: Arc<Clock>,
@@ -274,6 +279,49 @@ fn single_slot_rate_limits() -> RateLimits {
     }
 }
 
+/// A controllable clock: `advance` moves `now` forward, so tests can drive
+/// time-based throttle expiry without sleeping.
+#[derive(Clone)]
+struct ManualClock {
+    now: Arc<Mutex<Instant>>,
+}
+
+impl ManualClock {
+    fn new() -> Self {
+        Self {
+            now: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+    fn advance(&self, duration: Duration) {
+        *self.now.lock().expect("mutex should not be poisoned") += duration;
+    }
+    fn now(&self) -> Instant {
+        *self.now.lock().expect("mutex should not be poisoned")
+    }
+}
+
+fn single_slot_rate_limits_with_clock(clock: ManualClock) -> RateLimits {
+    let clock = Arc::new(move || clock.now());
+    RateLimits {
+        weight: RateLimiter::with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }],
+            clock.clone(),
+        ),
+        orders: RateLimiter::with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }],
+            clock,
+        ),
+    }
+}
+
 fn spot_order_request() -> BinanceHttpUnsignedRequest {
     BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()))
 }
@@ -313,10 +361,11 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
 #[tokio::test]
 async fn http_send_refunds_local_reservation_on_rate_limited() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let clock = ManualClock::new();
     let connector = scripted_http_connector(
         client_tx,
         ScriptedOutcome::RateLimited,
-        single_slot_rate_limits(),
+        single_slot_rate_limits_with_clock(clock.clone()),
         Arc::new(Clock::default()),
     )
     .unwrap();
@@ -332,8 +381,9 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
 
     // Once the server's Retry-After has elapsed, the refunded budget
     // admits the next request: it reaches the transport again instead of
-    // being rejected by the local limiter.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // being rejected by the local limiter. The limiter's clock is the
+    // manual clock, so the throttle expires without sleeping.
+    clock.advance(Duration::from_millis(100));
     let result = connector
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;

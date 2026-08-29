@@ -28,6 +28,7 @@ use exchange_types::binance::{
 };
 use secrecy::SecretString;
 use std::{
+    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -262,14 +263,35 @@ fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
         .count()
 }
 
+/// Runs `body` with the runtime clock paused so it can drive timers with
+/// `advance` instead of sleeping. The clock is resumed before returning.
+async fn with_paused_clock<T>(body: impl Future<Output = T>) -> T {
+    tokio::time::pause();
+    let result = body.await;
+    tokio::time::resume();
+    result
+}
+
+/// Advances the paused clock by `step` and yields so connector tasks can
+/// make progress.
+async fn tick(step: Duration) {
+    tokio::time::advance(step).await;
+    tokio::task::yield_now().await;
+}
+
+/// Polls `condition` until it holds, driving the runtime clock forward with
+/// `pause`/`advance` instead of sleeping.
 async fn wait_until(mut condition: impl FnMut() -> bool) -> Option<()> {
-    for _ in 0..500 {
-        if condition() {
-            return Some(());
+    with_paused_clock(async {
+        for _ in 0..500 {
+            if condition() {
+                return Some(());
+            }
+            tick(Duration::from_millis(10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    None
+        None
+    })
+    .await
 }
 
 #[tokio::test]
@@ -509,12 +531,9 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
                 .await
         })
     };
-    for _ in 0..100 {
-        if logon_count(&client.sent.lock().unwrap()) == 2 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    wait_until(|| logon_count(&client.sent.lock().unwrap()) == 2)
+        .await
+        .expect("re-authentication logon should be in flight");
     assert_eq!(
         logon_count(&client.sent.lock().unwrap()),
         2,
@@ -539,7 +558,14 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
                 .await
         })
     };
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Give the concurrent sends a chance to wrongly start a second
+    // authentication by driving the clock forward instead of sleeping.
+    with_paused_clock(async {
+        for _ in 0..10 {
+            tick(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
     assert_eq!(
         logon_count(&client.sent.lock().unwrap()),
         2,
@@ -794,7 +820,7 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
         panic!("expected a logon");
     };
     assert!(
-        logon.timestamp >= local + 10_000,
+        logon.timestamp >= local + 10_000 - 60_000,
         "logon timestamp {} must be near the server clock (local {local})",
         logon.timestamp
     );

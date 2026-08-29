@@ -41,7 +41,7 @@ ctor = "0.2"
 futures = "0.3"
 rustls = { version = "0.23", features = ["ring"] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time", "test-util"] }
 tokio-stream = "0.1"
 tokio-websockets = { version = "0.13", features = ["server", "ring"] }
 

@@ -279,16 +279,36 @@ mod tests {
             .with_pong_timeout(Duration::from_secs(3600))
     }
 
+    /// Runs `body` with the runtime clock paused so it can drive timers with
+    /// `advance` instead of sleeping. The clock is resumed before returning,
+    /// so the rest of the test runs on real time.
+    async fn with_paused_clock<T>(body: impl Future<Output = T>) -> T {
+        tokio::time::pause();
+        let result = body.await;
+        tokio::time::resume();
+        result
+    }
+
+    /// Advances the paused clock by `step` and yields so other tasks (real
+    /// I/O handlers, reconnect timers) can make progress.
+    async fn tick(step: Duration) {
+        tokio::time::advance(step).await;
+        tokio::task::yield_now().await;
+    }
+
     async fn wait_until_connected(
         client: &dyn WebsocketClientTrait<TransportReq = TestRequest, TransportRes = TestResponse>,
     ) {
-        for _ in 0..100 {
-            if client.is_connected() {
-                return;
+        with_paused_clock(async {
+            for _ in 0..100 {
+                if client.is_connected() {
+                    return;
+                }
+                tick(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        panic!("client did not connect within timeout");
+            panic!("client did not connect within timeout");
+        })
+        .await;
     }
 
     /// A listener that counts how often the connection was established and
@@ -440,11 +460,9 @@ mod tests {
     /// Waits until `connections` has reached `expected`, driving the runtime
     /// clock forward with `pause`/`advance` instead of sleeping so the
     /// client's reconnect backoff timers fire without spending wall-clock
-    /// time. The clock is resumed before returning, so the rest of the test
-    /// runs on real time.
+    /// time.
     async fn wait_until_connection_count(connections: &Arc<AtomicUsize>, expected: usize) {
-        tokio::time::pause();
-        let result = async {
+        let result = with_paused_clock(async {
             for _ in 0..200 {
                 if connections.load(Ordering::SeqCst) >= expected {
                     return Ok(());
@@ -452,13 +470,11 @@ mod tests {
                 // Fire any reconnect backoff timers due in the next window
                 // and let the client's tasks run; the fresh websocket
                 // handshake itself is real I/O and proceeds as usual.
-                tokio::time::advance(Duration::from_millis(10)).await;
-                tokio::task::yield_now().await;
+                tick(Duration::from_millis(10)).await;
             }
             Err(connections.load(Ordering::SeqCst))
-        }
+        })
         .await;
-        tokio::time::resume();
         if let Err(actual) = result {
             panic!("on_connected did not fire {expected} times, fired {actual} times");
         }
@@ -504,8 +520,8 @@ mod tests {
             .send_message(message, Duration::from_secs(5))
             .await
             .expect("send on the fresh connection should succeed");
-        let response = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
+        let response = with_paused_clock(async {
+            for _ in 0..100 {
                 let response = {
                     let received = received.lock().expect("mutex should not be poisoned");
                     received.first().cloned()
@@ -513,11 +529,11 @@ mod tests {
                 if let Some(response) = response {
                     return response;
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tick(Duration::from_millis(50)).await;
             }
+            panic!("should receive a response on the fresh connection");
         })
-        .await
-        .expect("should receive a response on the fresh connection");
+        .await;
         assert_eq!(response, TestResponse { id: 1, status: 200 });
         client
             .disconnect()
@@ -548,12 +564,15 @@ mod tests {
         // `ServerCloseBehavior::Reconnect` the client starts reconnecting.
         // Every later handshake is stalled, so the client stays in the
         // reconnecting state and `is_connected` remains false.
-        for _ in 0..200 {
-            if !client.is_connected() {
-                break;
+        with_paused_clock(async {
+            for _ in 0..200 {
+                if !client.is_connected() {
+                    return;
+                }
+                tick(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        })
+        .await;
         assert!(
             !client.is_connected(),
             "client should drop into the reconnecting state after the server close"
@@ -617,8 +636,8 @@ mod tests {
             .send_message(message, Duration::from_secs(5))
             .await
             .expect("send should succeed");
-        let response = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
+        let response = with_paused_clock(async {
+            for _ in 0..100 {
                 let response = {
                     let received = received.lock().expect("mutex should not be poisoned");
                     received.first().cloned()
@@ -626,11 +645,11 @@ mod tests {
                 if let Some(response) = response {
                     return response;
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tick(Duration::from_millis(50)).await;
             }
+            panic!("should receive a response");
         })
-        .await
-        .expect("should receive a response");
+        .await;
         assert_eq!(response, TestResponse { id: 1, status: 200 });
         client
             .disconnect()
