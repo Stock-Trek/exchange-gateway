@@ -113,12 +113,7 @@ where
         auth_gate.clone(),
     ));
     let client = client_factory(websocket_listener.clone());
-    let transport = WebsocketTransport::new(
-        client,
-        Arc::new(to_request),
-        Arc::new(from_response),
-        websocket_listener,
-    );
+    let transport = WebsocketTransport::new(client, Arc::new(to_request), websocket_listener);
     let time_sync = Arc::new(TimeSync::default());
     let authenticate_legs = if use_session {
         let api_key = match &credentials {

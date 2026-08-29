@@ -27,7 +27,6 @@ pub(crate) trait WebsocketClientTrait: Send + Sync {
 pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-    convert_response: ArcTryConvertValue<TransportRes, EGRes>,
     websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
 }
 
@@ -41,9 +40,6 @@ where
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
         (self.convert_request)(request)
-    }
-    fn try_convert_response(&self, response: TransportRes) -> EGResult<EGRes> {
-        (self.convert_response)(response)
     }
     async fn connect(&self) -> EGResult<()> {
         self.client.connect().await
@@ -84,13 +80,11 @@ where
             dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>,
         >,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-        convert_response: ArcTryConvertValue<TransportRes, EGRes>,
         websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
     ) -> Self {
         Self {
             client,
             convert_request,
-            convert_response,
             websocket_listener,
         }
     }
@@ -118,7 +112,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
         f.debug_struct("WebsocketTransport")
             .field("client", &"<HttpClientTrait>")
             .field("convert_request", &"<function>")
-            .field("convert_response", &"<function>")
             .field("websocket_listener", &self.websocket_listener)
             .finish()
     }

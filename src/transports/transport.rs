@@ -14,7 +14,6 @@ pub(crate) enum Transport<EGReq, TransportReq, TransportRes, EGRes> {
 #[async_trait]
 pub(crate) trait TransportTrait<EGReq, TransportReq, TransportRes, EGRes> {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq>;
-    fn try_convert_response(&self, response_dto: TransportRes) -> EGResult<EGRes>;
     async fn connect(&self) -> EGResult<()>;
     fn is_connected(&self) -> bool;
     async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()>;
@@ -39,12 +38,6 @@ where
         match self {
             Self::Http(transport) => transport.try_convert_request(request),
             Self::Websocket(transport) => transport.try_convert_request(request),
-        }
-    }
-    fn try_convert_response(&self, response: TransportRes) -> EGResult<EGRes> {
-        match self {
-            Self::Http(transport) => transport.try_convert_response(response),
-            Self::Websocket(transport) => transport.try_convert_response(response),
         }
     }
     async fn connect(&self) -> EGResult<()> {

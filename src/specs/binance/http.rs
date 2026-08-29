@@ -35,7 +35,7 @@ use exchange_types::binance::{
     },
     signed::BinanceSignedParams,
     spot::BinanceSpotOrderParams,
-    time::BinanceTimeParams,
+    time::{BinanceTimeParams, BinanceTimeResult},
 };
 use reqwest::Method;
 use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
@@ -199,10 +199,20 @@ fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
     pairs.join("&")
 }
 
-fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
+fn from_response(endpoint: HttpEndpoint, response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     if (200..300).contains(&response.status) {
-        let result = serde_json::from_slice(&response.body)
-            .map_err(|error| EGError::External(Box::new(error)))?;
+        let result = match endpoint {
+            // exchange-types' untagged result enum lists Ping before Time,
+            // and BinancePingResult ignores unknown fields, so a time
+            // response would be mis-parsed as Ping and the clock sync
+            // would never see the server time; parse it explicitly for the
+            // time endpoint.
+            HttpEndpoint::Time => serde_json::from_slice::<BinanceTimeResult>(&response.body)
+                .map(BinanceHttpResponseResult::Time)
+                .map_err(|error| EGError::External(Box::new(error)))?,
+            _ => serde_json::from_slice(&response.body)
+                .map_err(|error| EGError::External(Box::new(error)))?,
+        };
         Ok(BinanceHttpResponse::Result(result))
     } else {
         let error = serde_json::from_slice(&response.body)
@@ -748,7 +758,8 @@ mod test {
             body: br#"{"code":-2014,"msg":"API-key format invalid."}"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(response).expect("400 should parse as an error");
+        let parsed = from_response(HttpEndpoint::ExchangeInfo, response)
+            .expect("400 should parse as an error");
         match parsed {
             BinanceHttpResponse::Error(error) => {
                 assert_eq!(error.code, -2014);
@@ -766,12 +777,34 @@ mod test {
             body: br#"[]"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(response).expect("201 should parse as a result");
+        let parsed = from_response(HttpEndpoint::ExchangeInfo, response)
+            .expect("201 should parse as a result");
         assert!(matches!(
             parsed,
             BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(ref filters))
                 if filters.is_empty()
         ));
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn from_response_parses_the_time_endpoint_as_a_time_result() {
+        // exchange-types' untagged result enum lists Ping before Time and
+        // BinancePingResult ignores unknown fields, so a bare time response
+        // would otherwise be mis-parsed as Ping and the clock sync would
+        // never see the server time.
+        let response = HttpResponse {
+            status: 200,
+            body: br#"{"serverTime":1787964248237}"#.to_vec(),
+            headers: vec![],
+        };
+        let parsed = from_response(HttpEndpoint::Time, response).expect("time should parse");
+        match parsed {
+            BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(result)) => {
+                assert_eq!(result.serverTime, 1787964248237);
+            }
+            other => panic!("expected Time, got: {other:?}"),
+        }
     }
 
     #[test]

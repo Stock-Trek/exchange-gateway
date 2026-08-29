@@ -1,7 +1,10 @@
 use crate::rate_limit::rate_limit_type::RateLimitType;
-use std::time::Instant;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct RateLimiterState {
     rate_limit_type: RateLimitType,
     interval_nanos: u128,
@@ -10,6 +13,7 @@ pub(crate) struct RateLimiterState {
     last_calculation: Instant,
     excess_interval_nanos: u128,
     throttled_until: Option<Instant>,
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
 
 impl RateLimiterState {
@@ -31,6 +35,32 @@ impl RateLimiterState {
             last_calculation: Instant::now(),
             excess_interval_nanos: 0,
             throttled_until: None,
+            now: Arc::new(Instant::now),
+        }
+    }
+    /// Constructs a limiter reading the clock through `now`, so tests can
+    /// drive time-dependent behaviour deterministically instead of sleeping.
+    #[cfg(test)]
+    pub(crate) fn with_clock(
+        rate_limit_type: RateLimitType,
+        interval_nanos: u128,
+        capacity_per_interval: u32,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        assert!(interval_nanos > 0, "interval_nanos cannot be zero");
+        assert!(
+            capacity_per_interval > 0,
+            "capacity_per_interval cannot be zero"
+        );
+        Self {
+            rate_limit_type,
+            interval_nanos,
+            capacity_per_interval,
+            current_capacity: capacity_per_interval,
+            last_calculation: now(),
+            excess_interval_nanos: 0,
+            throttled_until: None,
+            now,
         }
     }
     pub fn rate_limit_type(&self) -> RateLimitType {
@@ -54,7 +84,8 @@ impl RateLimiterState {
     pub fn refund(&mut self, cost: u32) {
         self.current_capacity = (self.current_capacity + cost).min(self.capacity_per_interval);
     }
-    pub fn throttle(&mut self, until: Instant) {
+    pub fn throttle(&mut self, retry_after: Option<Duration>) {
+        let until = (self.now)() + retry_after.unwrap_or(Duration::from_secs(1));
         self.current_capacity = 0;
         self.throttled_until = Some(until);
     }
@@ -82,13 +113,13 @@ impl RateLimiterState {
             }
             (None, None) => {}
         }
-        self.last_calculation = Instant::now();
+        self.last_calculation = (self.now)();
         self.excess_interval_nanos = 0;
     }
 
     fn is_throttled(&self) -> bool {
         self.throttled_until
-            .is_some_and(|throttled_until| Instant::now() < throttled_until)
+            .is_some_and(|throttled_until| (self.now)() < throttled_until)
     }
     fn did_quick_consume(&mut self, cost: u32) -> bool {
         if cost > self.capacity_per_interval {
@@ -101,7 +132,7 @@ impl RateLimiterState {
         consumed
     }
     fn update_capacity(&mut self) {
-        let now = Instant::now();
+        let now = (self.now)();
         if let Some(throttled_until) = self.throttled_until {
             if now < throttled_until {
                 return;
@@ -124,9 +155,25 @@ impl RateLimiterState {
     }
 }
 
+impl std::fmt::Debug for RateLimiterState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimiterState")
+            .field("rate_limit_type", &self.rate_limit_type)
+            .field("interval_nanos", &self.interval_nanos)
+            .field("capacity_per_interval", &self.capacity_per_interval)
+            .field("current_capacity", &self.current_capacity)
+            .field("last_calculation", &self.last_calculation)
+            .field("excess_interval_nanos", &self.excess_interval_nanos)
+            .field("throttled_until", &self.throttled_until)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::TestClock;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -137,19 +184,21 @@ mod tests {
             10,
         );
         assert!(state.did_consume(1));
-        state.throttle(Instant::now() + Duration::from_secs(60));
+        state.throttle(Some(Duration::from_secs(60)));
         assert!(!state.did_consume(1));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn throttle_expires_and_refills_from_deadline() {
-        let mut state = RateLimiterState::new(
+    #[test]
+    fn throttle_expires_and_refills_from_deadline() {
+        let clock = Arc::new(TestClock::new());
+        let mut state = RateLimiterState::with_clock(
             RateLimitType::RequestWeight,
             Duration::from_millis(10).as_nanos(),
             10,
+            clock.now_fn(),
         );
-        state.throttle(Instant::now() + Duration::from_millis(20));
-        tokio::time::advance(Duration::from_millis(30)).await;
+        state.throttle(Some(Duration::from_millis(20)));
+        clock.advance(Duration::from_millis(30));
         // Bucket refills from the throttle deadline, so capacity returns.
         assert!(state.did_consume(10));
     }
@@ -205,41 +254,45 @@ mod tests {
             Duration::from_secs(60).as_nanos(),
             10,
         );
-        state.throttle(Instant::now() + Duration::from_secs(60));
+        state.throttle(Some(Duration::from_secs(60)));
         state.sync_usage(Some(0), Some(10));
         assert!(!state.did_consume(10));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
-        let mut state = RateLimiterState::new(
+    #[test]
+    fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
+        let clock = Arc::new(TestClock::new());
+        let mut state = RateLimiterState::with_clock(
             RateLimitType::RequestWeight,
             Duration::from_secs(60).as_nanos(),
             6000,
+            clock.now_fn(),
         );
-        state.throttle(Instant::now() + Duration::from_millis(20));
+        state.throttle(Some(Duration::from_millis(20)));
         // Limit-carrying usage arriving inside the throttle window (e.g. a
         // concurrent exchangeInfo response while a 429/Retry-After is active)
         // must not repopulate the bucket: it stays empty and refills from
         // zero after the deadline instead of instantly granting limit - used.
         state.sync_usage(Some(1200), Some(6000));
-        tokio::time::advance(Duration::from_millis(30)).await;
+        clock.advance(Duration::from_millis(30));
         // Throttle elapsed, but the 60s refill window has barely started:
         // the bucket must not grant the full remaining quota at once.
         assert!(!state.did_consume(4800));
         assert!(!state.did_consume(1));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
-        let mut state = RateLimiterState::new(
+    #[test]
+    fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
+        let clock = Arc::new(TestClock::new());
+        let mut state = RateLimiterState::with_clock(
             RateLimitType::RequestWeight,
             Duration::from_millis(10).as_nanos(),
             6000,
+            clock.now_fn(),
         );
-        state.throttle(Instant::now() + Duration::from_millis(20));
+        state.throttle(Some(Duration::from_millis(20)));
         state.sync_usage(Some(1200), Some(6000));
-        tokio::time::advance(Duration::from_millis(50)).await;
+        clock.advance(Duration::from_millis(50));
         // The bucket refills from the throttle deadline up to the newly
         // reported limit rather than staying stuck at zero.
         assert!(state.did_consume(6000));

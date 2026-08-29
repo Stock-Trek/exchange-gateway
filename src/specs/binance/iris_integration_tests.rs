@@ -780,6 +780,9 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
+    // The raw local clock, captured before the bootstrap, for the skew
+    // check below.
+    let local = TimeSync::default().now_millis();
 
     connector.connect().await.expect("connect should succeed");
     assert!(connector.is_authenticated().unwrap());
@@ -803,9 +806,12 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
         panic!("expected a logon");
     };
-    let local = TimeSync::default().now_millis();
+    // The logon timestamp sits at least the 10 s skew past the raw local
+    // clock (one millisecond of slack covers truncation across the
+    // bootstrap round-trip) and at most a minute beyond it.
+    let skew = logon.timestamp - local;
     assert!(
-        logon.timestamp >= local + 10_000,
+        (9_999..=10_000 + 60_000).contains(&skew),
         "logon timestamp {} must be near the server clock (local {local})",
         logon.timestamp
     );

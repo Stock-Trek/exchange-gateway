@@ -5,9 +5,11 @@ use crate::{
         rate_limiter_state::RateLimiterState,
     },
 };
+#[cfg(test)]
+use std::time::Instant;
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Debug, Clone)]
@@ -20,6 +22,22 @@ impl RateLimiter {
         Self {
             rate_limiters: Arc::new(Mutex::new(
                 rate_limits.iter().map(|rl| rl.to_state()).collect(),
+            )),
+        }
+    }
+    /// Like [`Self::new`], but reading the clock through `now` so tests can
+    /// drive time-dependent behaviour deterministically.
+    #[cfg(test)]
+    pub(crate) fn new_with_clock(
+        rate_limits: Vec<RateLimitConfig>,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            rate_limiters: Arc::new(Mutex::new(
+                rate_limits
+                    .iter()
+                    .map(|rl| rl.to_state_with_clock(now.clone()))
+                    .collect(),
             )),
         }
     }
@@ -64,13 +82,12 @@ impl RateLimiter {
         Ok(())
     }
     pub fn throttle(&self, retry_after: Option<Duration>) -> EGResult<()> {
-        let until = Instant::now() + retry_after.unwrap_or(Duration::from_secs(1));
         let mut limiters_guard = self
             .rate_limiters
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
         for limiter in limiters_guard.iter_mut() {
-            limiter.throttle(until);
+            limiter.throttle(retry_after);
         }
         Ok(())
     }

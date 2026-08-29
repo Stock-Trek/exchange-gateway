@@ -44,10 +44,17 @@ pub(crate) enum HttpEndpoint {
     Time,
 }
 
+/// Converts a transport response to the exchange's response type. The
+/// endpoint that produced the response is supplied, so conversion can
+/// special-case endpoint-specific payloads (e.g. Binance's `time` endpoint,
+/// whose body exchange-types would otherwise mis-parse as a ping).
+type HttpTryConvertResponse<TransportRes, EGRes> =
+    Arc<dyn Fn(HttpEndpoint, TransportRes) -> EGResult<EGRes> + Send + Sync + 'static>;
+
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-    convert_response: ArcTryConvertValue<TransportRes, EGRes>,
+    convert_response: HttpTryConvertResponse<TransportRes, EGRes>,
     listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
@@ -66,9 +73,6 @@ where
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
         (self.convert_request)(request)
-    }
-    fn try_convert_response(&self, response: TransportRes) -> EGResult<EGRes> {
-        (self.convert_response)(response)
     }
     async fn connect(&self) -> EGResult<()> {
         self.is_connected.store(true, Ordering::SeqCst);
@@ -111,7 +115,7 @@ where
     pub fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-        convert_response: ArcTryConvertValue<TransportRes, EGRes>,
+        convert_response: HttpTryConvertResponse<TransportRes, EGRes>,
         listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
         to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
         endpoints: HashMap<HttpEndpoint, String>,
@@ -149,7 +153,7 @@ where
             }
         };
         let header_feedback = self.client.rate_limit_feedback(&response_dto);
-        let response = self.try_convert_response(response_dto)?;
+        let response = (self.convert_response)(http_endpoint, response_dto)?;
         let mut feedback = header_feedback;
         let exchange_feedback = (self.feedback)(&response)?;
         feedback.usage.extend(exchange_feedback.usage);
@@ -327,7 +331,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
             Arc::new(Ok),
-            Arc::new(Ok),
+            Arc::new(|_: HttpEndpoint, response| Ok(response)),
             Arc::new(NoopListener),
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
@@ -347,7 +351,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(ThrottledClient),
             Arc::new(Ok),
-            Arc::new(Ok),
+            Arc::new(|_: HttpEndpoint, response| Ok(response)),
             Arc::new(NoopListener),
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
@@ -438,7 +442,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(RejectingClient),
             Arc::new(Ok),
-            Arc::new(Ok),
+            Arc::new(|_: HttpEndpoint, response| Ok(response)),
             Arc::new(NoopListener),
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,

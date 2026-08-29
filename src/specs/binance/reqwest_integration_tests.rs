@@ -9,6 +9,7 @@ use crate::{
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
     specs::binance::{common::rate_limits, http::connector_with_client},
+    test_utils::TestClock,
     time_sync::TimeSync,
     transports::{
         http::HttpClientTrait,
@@ -28,7 +29,7 @@ use exchange_types::binance::{
 use secrecy::SecretString;
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn spot_order_params() -> BinanceSpotOrderParams {
@@ -68,6 +69,12 @@ impl ListenerTrait for IgnoreHttpListener {
     }
 }
 
+/// A scripted HTTP client: records every outgoing request (at the
+/// transport level, as the real reqwest client would receive it) and
+/// answers with a bare success so signed sends can complete without a
+/// network. The unsigned time bootstrap is answered with the server clock
+/// shifted by `server_time_offset`, so the connector's clock sync can
+/// observe the skew.
 #[derive(Clone)]
 struct MockHttpClient {
     sent: Arc<Mutex<Vec<HttpRequest>>>,
@@ -81,15 +88,20 @@ impl HttpClientTrait for MockHttpClient {
 
     async fn send_message(
         &self,
-        _endpoint: &str,
+        endpoint: &str,
         message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        let is_time = matches!(message.params, BinanceHttpUnsignedRequest::Time(..));
+        let body = if endpoint == "time" {
+            let server_time = TimeSync::default().now_millis() + self.server_time_offset;
+            format!(r#"{{"serverTime":{server_time}}}"#).into_bytes()
+        } else {
+            br#"[]"#.to_vec()
+        };
         self.sent.lock().unwrap().push(message);
         Ok(HttpResponse {
             status: 200,
-            body: br#"[]"#.to_vec(),
+            body,
             headers: vec![],
         })
     }
@@ -153,16 +165,18 @@ async fn http_connector_installs_signer_on_connect() {
         "connecting with credentials must install the request signer"
     );
 
-    // The only request during connect is the unsigned time bootstrap.
-    assert_eq!(client.sent.lock().unwrap().len(), 1);
-    assert!(matches!(
-        client.sent.lock().unwrap()[0].params,
-        BinanceHttpUnsignedRequest::Time(..)
-    ));
-    assert!(
-        client.sent.lock().unwrap()[0].signature.is_none(),
-        "the time bootstrap must be unsigned"
-    );
+    // The only request during connect is the unsigned time bootstrap: a
+    // bare GET with no query (and therefore no signature).
+    {
+        let sent = client.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let bootstrap = &sent[0];
+        assert_eq!(bootstrap.method, reqwest::Method::GET);
+        assert!(
+            bootstrap.query.is_none(),
+            "the time bootstrap must carry no query"
+        );
+    }
 
     // A signed request must not fail with NotAuthenticated.
     connector
@@ -180,11 +194,16 @@ async fn http_connect_syncs_the_server_clock_before_signed_requests() {
     let connector = mock_http_connector(client_tx, 10_000).unwrap();
     let client = client_rx.recv().unwrap();
 
+    // The raw local clock, captured before the bootstrap, for the skew
+    // check below.
+    let local = TimeSync::default().now_millis();
     connector.connect().await.expect("connect should succeed");
-    assert!(matches!(
-        client.sent.lock().unwrap()[0].params,
-        BinanceHttpUnsignedRequest::Time(..)
-    ));
+    {
+        let sent = client.sent.lock().unwrap();
+        let bootstrap = &sent[0];
+        assert_eq!(bootstrap.method, reqwest::Method::GET);
+        assert!(bootstrap.query.is_none());
+    }
 
     // A signed request is stamped with the server clock, not the raw local
     // clock.
@@ -193,14 +212,27 @@ async fn http_connect_syncs_the_server_clock_before_signed_requests() {
         .await
         .expect("signed send should succeed");
     let sent = client.sent.lock().unwrap();
-    let BinanceHttpUnsignedRequest::AssetLimits(asset_limits) = &sent[1].params else {
-        panic!("expected an asset limits request");
-    };
-    let local = TimeSync::default().now_millis();
+    let query = sent[1]
+        .query
+        .as_deref()
+        .expect("signed request must carry a query");
     assert!(
-        asset_limits.timestamp >= local + 10_000,
-        "timestamp {} must be near the server clock (local {local})",
-        asset_limits.timestamp
+        query.contains("signature="),
+        "signed request must carry a signature"
+    );
+    let timestamp = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("timestamp="))
+        .and_then(|value| value.parse::<i64>().ok())
+        .expect("query must carry a timestamp");
+    // The signed timestamp sits at least the 10 s skew past the raw local
+    // clock (one millisecond of slack covers truncation across the
+    // bootstrap round-trip) and at most a minute beyond it: a raw-local
+    // timestamp would fail the lower bound, a wrong offset the upper one.
+    let skew = timestamp - local;
+    assert!(
+        (9_999..=10_000 + 60_000).contains(&skew),
+        "timestamp {timestamp} must be near the server clock (local {local})"
     );
 }
 
@@ -286,19 +318,29 @@ fn scripted_http_connector(
     )
 }
 
-fn single_slot_rate_limits() -> RateLimits {
+fn single_slot_rate_limits_with_clock(now: Arc<dyn Fn() -> Instant + Send + Sync>) -> RateLimits {
     RateLimits {
-        weight: RateLimiter::new(vec![RateLimitConfig {
-            rate_limit_type: RateLimitType::RequestWeight,
-            capacity_per_interval: 1,
-            interval_nanos: Duration::from_secs(60).as_nanos(),
-        }]),
-        orders: RateLimiter::new(vec![RateLimitConfig {
-            rate_limit_type: RateLimitType::Orders,
-            capacity_per_interval: 1,
-            interval_nanos: Duration::from_secs(10).as_nanos(),
-        }]),
+        weight: RateLimiter::new_with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }],
+            now.clone(),
+        ),
+        orders: RateLimiter::new_with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }],
+            now,
+        ),
     }
+}
+
+fn single_slot_rate_limits() -> RateLimits {
+    single_slot_rate_limits_with_clock(Arc::new(std::time::Instant::now))
 }
 
 fn spot_order_request() -> BinanceHttpUnsignedRequest {
@@ -336,13 +378,14 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
     assert_eq!(client.sent.lock().unwrap().len(), 1);
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn http_send_refunds_local_reservation_on_rate_limited() {
+    let clock = Arc::new(TestClock::new());
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let connector = scripted_http_connector(
         client_tx,
         ScriptedOutcome::RateLimited,
-        single_slot_rate_limits(),
+        single_slot_rate_limits_with_clock(clock.now_fn()),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
@@ -357,9 +400,9 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
 
     // Once the server's Retry-After has elapsed, the refunded budget
     // admits the next request: it reaches the transport again instead of
-    // being rejected by the local limiter. The clock starts paused, so
-    // jump it past the retry window instead of sleeping.
-    tokio::time::advance(Duration::from_millis(100)).await;
+    // being rejected by the local limiter. The limiters read the injected
+    // clock, so advance it past the retry window instead of sleeping.
+    clock.advance(Duration::from_millis(100));
     let result = connector
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;
