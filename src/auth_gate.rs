@@ -10,8 +10,18 @@ pub struct AuthGate {
     state: Mutex<AuthGateState>,
 }
 
+pub enum AuthGateAcquisition<'gate> {
+    Acquired(AuthGateGuard<'gate>),
+    Blocked(AuthWaiter),
+}
+
+pub struct AuthGateGuard<'gate> {
+    gate: &'gate AuthGate,
+    authenticated: bool,
+}
+
 #[derive(Default)]
-pub struct AuthGateState {
+struct AuthGateState {
     connection_epoch: u64,
     authenticated_epoch: u64,
     in_flight: Option<AuthInFlight>,
@@ -20,11 +30,6 @@ pub struct AuthGateState {
 struct AuthInFlight {
     waiter: AuthWaiter,
     epoch: u64,
-}
-
-pub enum AuthGateAcquisition {
-    Acquired,
-    Blocked(AuthWaiter),
 }
 
 #[derive(Clone, Default)]
@@ -37,7 +42,7 @@ struct AuthCompletedState {
 }
 
 impl AuthGate {
-    pub fn acquire(&self) -> EGResult<AuthGateAcquisition> {
+    pub fn acquire(&self) -> EGResult<AuthGateAcquisition<'_>> {
         let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
         match &state.in_flight {
             None => {
@@ -45,40 +50,24 @@ impl AuthGate {
                     waiter: AuthWaiter::default(),
                     epoch: state.connection_epoch,
                 });
-                Ok(AuthGateAcquisition::Acquired)
+                Ok(AuthGateAcquisition::Acquired(AuthGateGuard {
+                    gate: self,
+                    authenticated: false,
+                }))
             }
             Some(in_flight) => Ok(AuthGateAcquisition::Blocked(in_flight.waiter.clone())),
         }
     }
 
-    pub fn release(&self) -> EGResult<()> {
-        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-        let Some(in_flight) = state.in_flight.take() else {
-            return Err(EGError::NotAuthenticated);
-        };
-        state.authenticated_epoch = in_flight.epoch;
-        in_flight.waiter.notify();
-        Ok(())
-    }
-
-    pub fn cancel(&self) -> EGResult<()> {
-        let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-        let Some(in_flight) = state.in_flight.take() else {
-            return Err(EGError::NotAuthenticated);
-        };
-        in_flight.waiter.notify();
-        Ok(())
-    }
-
     pub fn on_connection_established(&self) -> EGResult<()> {
-        self.bump_epoch()
+        self.bump_connection_epoch()
     }
 
     pub fn on_connection_lost(&self) -> EGResult<()> {
-        self.bump_epoch()
+        self.bump_connection_epoch()
     }
 
-    fn bump_epoch(&self) -> EGResult<()> {
+    fn bump_connection_epoch(&self) -> EGResult<()> {
         self.state
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
@@ -89,6 +78,28 @@ impl AuthGate {
     pub fn is_stale(&self) -> EGResult<bool> {
         let state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
         Ok(state.connection_epoch != state.authenticated_epoch)
+    }
+}
+
+impl AuthGateGuard<'_> {
+    pub fn complete(mut self) {
+        self.authenticated = true;
+    }
+}
+
+impl Drop for AuthGateGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = match self.gate.state.lock() {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+        let Some(in_flight) = state.in_flight.take() else {
+            return;
+        };
+        if self.authenticated {
+            state.authenticated_epoch = in_flight.epoch;
+        }
+        in_flight.waiter.notify();
     }
 }
 
@@ -139,10 +150,10 @@ mod tests {
         assert!(!gate.is_stale().unwrap());
 
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
-        gate.release().expect("Release must be Ok");
+        guard.complete();
         assert!(!gate.is_stale().unwrap());
 
         gate.on_connection_established().unwrap();
@@ -153,10 +164,10 @@ mod tests {
     fn losing_the_connection_invalidates_the_session() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
-        gate.release().expect("Release must be Ok");
+        guard.complete();
         assert!(!gate.is_stale().unwrap());
 
         // The connection is lost without a reconnect yet: the session bound
@@ -170,7 +181,7 @@ mod tests {
     fn reconnect_during_authentication_is_detected() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
 
@@ -178,7 +189,7 @@ mod tests {
         // records the completion against the acquire-time epoch, not the
         // current one, so the session is detected as stale.
         gate.on_connection_established().unwrap();
-        gate.release().expect("Release must be Ok");
+        guard.complete();
         assert!(gate.is_stale().unwrap());
     }
 
@@ -186,86 +197,71 @@ mod tests {
     fn second_acquire_waits_for_in_flight_authentication() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         assert!(matches!(
             gate.acquire().unwrap(),
             AuthGateAcquisition::Blocked(_)
         ));
-        gate.release().expect("Release must be Ok");
+        guard.complete();
     }
 
     #[test]
-    fn completing_without_an_in_flight_authentication_is_an_error() {
-        let gate = AuthGate::default();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
-            panic!("expected an authenticator acquisition");
-        };
-        gate.release().expect("Release must be Ok");
-        assert!(matches!(gate.release(), Err(EGError::NotAuthenticated)));
-    }
-
-    #[test]
-    fn cancelling_a_failed_authentication_keeps_the_session_stale() {
+    fn cancelled_authentication_keeps_the_session_stale() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
 
-        // A failed authentication must not advance the authenticated epoch:
-        // the session stays stale so a waiter retries against the current
-        // connection instead of treating it as authenticated.
-        gate.cancel().expect("Cancel must be Ok");
+        // Dropping the guard without completing the authentication must not
+        // advance the authenticated epoch: the session stays stale so a waiter
+        // retries against the current connection instead of treating it as
+        // authenticated.
+        drop(guard);
         assert!(gate.is_stale().unwrap());
 
         // A waiter can immediately re-acquire and retry.
         assert!(matches!(
             gate.acquire().unwrap(),
-            AuthGateAcquisition::Acquired
+            AuthGateAcquisition::Acquired(_)
         ));
     }
 
-    #[test]
-    fn cancelling_without_an_in_flight_authentication_is_an_error() {
-        let gate = AuthGate::default();
-        assert!(matches!(gate.cancel(), Err(EGError::NotAuthenticated)));
-    }
-
     #[tokio::test]
-    async fn release_notifies_waiters() {
+    async fn completing_notifies_waiters() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         let AuthGateAcquisition::Blocked(on_complete) = gate.acquire().unwrap() else {
             panic!("expected a waiting acquisition");
         };
         let waiter = tokio::spawn(async move { on_complete.wait().await.unwrap() });
-        gate.release().expect("Release must be Ok");
+        guard.complete();
         tokio::time::timeout(Duration::from_secs(1), waiter)
             .await
-            .expect("release must wake the waiter")
+            .expect("completing must wake the waiter")
             .expect("wait must be Ok");
     }
 
     #[tokio::test]
-    async fn cancel_notifies_waiters() {
+    async fn dropping_the_guard_notifies_waiters() {
         let gate = AuthGate::default();
         gate.on_connection_established().unwrap();
-        let AuthGateAcquisition::Acquired = gate.acquire().unwrap() else {
+        let AuthGateAcquisition::Acquired(guard) = gate.acquire().unwrap() else {
             panic!("expected an authenticator acquisition");
         };
         let AuthGateAcquisition::Blocked(on_complete) = gate.acquire().unwrap() else {
             panic!("expected a waiting acquisition");
         };
         let waiter = tokio::spawn(async move { on_complete.wait().await.unwrap() });
-        gate.cancel().expect("Cancel must be Ok");
+        drop(guard);
         tokio::time::timeout(Duration::from_secs(1), waiter)
             .await
-            .expect("cancel must wake the waiter")
+            .expect("dropping the guard must wake the waiter")
             .expect("wait must be Ok");
     }
 }

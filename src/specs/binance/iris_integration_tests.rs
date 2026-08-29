@@ -136,7 +136,7 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     id: message.metadata.id,
                     rateLimits: vec![],
                     result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
-                        serverTime: self.clock.now_millis() + self.clock.offset_millis(),
+                        serverTime: self.clock.now_millis(),
                     })),
                     status: 200,
                 };
@@ -754,7 +754,10 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
 async fn connect_syncs_the_server_clock_before_the_logon() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let clock = Clock::default();
-    clock.sync(10_000, Duration::ZERO);
+    // The server clock is 10 s ahead of the local clock: a logon signed
+    // with the raw local clock would be rejected with -1021.
+    let local = Clock::default().now_millis();
+    clock.sync(local + 10_000, Duration::ZERO);
     let connector = mock_session_connector(
         client_tx,
         None,
@@ -790,7 +793,6 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
         panic!("expected a logon");
     };
-    let local = Clock::default().now_millis();
     assert!(
         logon.timestamp >= local + 10_000,
         "logon timestamp {} must be near the server clock (local {local})",

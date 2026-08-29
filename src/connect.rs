@@ -81,7 +81,6 @@ impl Connect {
     }
 
     #[cfg(feature = "iris")]
-    #[allow(clippy::too_many_arguments)]
     pub fn binance_websocket_with_config<ExternalReq, ExternalRes>(
         &self,
         trading_mode: TradingMode,
