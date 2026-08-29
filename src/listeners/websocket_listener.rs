@@ -224,11 +224,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::clock::Clock;
-
-    fn clock() -> std::sync::Arc<Clock> {
-        std::sync::Arc::new(Clock::default())
-    }
     use super::*;
     use crate::rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,

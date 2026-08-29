@@ -181,11 +181,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
 
 #[cfg(test)]
 mod tests {
-    use crate::clock::Clock;
-
-    fn clock() -> std::sync::Arc<Clock> {
-        std::sync::Arc::new(Clock::default())
-    }
     use super::*;
     use crate::{
         error::EGError,
