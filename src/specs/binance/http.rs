@@ -80,9 +80,15 @@ where
 {
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
+    // AssetLimits (`myFilters`) is a USER_DATA endpoint whose params carry no
+    // `apiKey` field, so its X-MBX-APIKEY header is supplied from the
+    // connector's credentials instead of the request params.
+    let api_key = credentials
+        .as_ref()
+        .map(|credentials| credentials.api_key.clone());
     let transport = HttpTransport::new(
         client,
-        Arc::new(to_request),
+        Arc::new(move |request: BinanceHttpRequest| to_request(request, api_key.as_deref())),
         Arc::new(from_response),
         response_listener,
         request_to_endpoint,
@@ -110,17 +116,22 @@ where
     ))
 }
 
-fn to_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
+fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
     let mut headers = Vec::new();
     let (method, query) = match params {
         BinanceHttpUnsignedRequest::ExchangeInfo(params) => {
             (Method::GET, Some(exchange_info_query(&params)))
         }
-        BinanceHttpUnsignedRequest::AssetLimits(params) => (
-            Method::GET,
-            Some(signed_query(params.query_params(true), signature)),
-        ),
+        BinanceHttpUnsignedRequest::AssetLimits(params) => {
+            if let Some(api_key) = api_key {
+                headers.push(("X-MBX-APIKEY".into(), api_key.into()));
+            }
+            (
+                Method::GET,
+                Some(signed_query(params.query_params(true), signature)),
+            )
+        }
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
             let mut params = *params;
             if let Some(api_key) = params.apiKey.take() {
@@ -570,7 +581,7 @@ mod test {
             }),
             signature: None,
         };
-        let request = to_request(request).unwrap();
+        let request = to_request(request, None).unwrap();
         assert_eq!(request.method, Method::GET);
         assert_eq!(
             request.query.as_deref(),
@@ -588,8 +599,59 @@ mod test {
             }),
             signature: None,
         };
-        let request = to_request(request).unwrap();
+        let request = to_request(request, None).unwrap();
         assert_eq!(request.query.as_deref(), Some("symbolStatus=TRADING"));
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn asset_limits_request_carries_the_api_key_header() {
+        // `/api/v3/myFilters` is a USER_DATA endpoint: the signed query must
+        // be accompanied by the X-MBX-APIKEY header taken from the
+        // connector's credentials (the params carry no `apiKey` field).
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+                recvWindow: None,
+                symbols: None,
+                timestamp: 1700000000000,
+            }),
+            signature: Some("signature".into()),
+        };
+        let request = to_request(request, Some("my-api-key")).unwrap();
+        assert_eq!(request.method, Method::GET);
+        assert!(
+            request
+                .headers
+                .contains(&("X-MBX-APIKEY".into(), "my-api-key".into())),
+            "headers: {:?}",
+            request.headers
+        );
+        assert_eq!(
+            request.query.as_deref(),
+            Some("timestamp=1700000000000&signature=signature")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "reqwest")]
+    fn asset_limits_request_without_credentials_omits_the_api_key_header() {
+        let request = BinanceHttpRequest {
+            params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+                recvWindow: None,
+                symbols: None,
+                timestamp: 1700000000000,
+            }),
+            signature: Some("signature".into()),
+        };
+        let request = to_request(request, None).unwrap();
+        assert!(
+            !request
+                .headers
+                .iter()
+                .any(|(name, _)| name == "X-MBX-APIKEY"),
+            "headers: {:?}",
+            request.headers
+        );
     }
 
     #[test]
@@ -775,7 +837,7 @@ mod test {
             signature: None,
         };
         // GET /api/v3/time with no query string and nothing to sign.
-        let transport_request = to_request(request).unwrap();
+        let transport_request = to_request(request, None).unwrap();
         assert_eq!(transport_request.method, Method::GET);
         assert_eq!(transport_request.query, None);
         assert!(

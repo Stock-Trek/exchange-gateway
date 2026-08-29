@@ -178,6 +178,18 @@ async fn http_connector_installs_signer_on_connect() {
         .await
         .expect("signed send should succeed");
     assert_eq!(client.sent.lock().unwrap().len(), 2);
+
+    // AssetLimits (`myFilters`) is a USER_DATA endpoint: the request must
+    // carry the X-MBX-APIKEY header from the connector's credentials even
+    // though the params have no `apiKey` field.
+    let asset_limits = &client.sent.lock().unwrap()[1];
+    assert!(
+        asset_limits
+            .headers
+            .contains(&("X-MBX-APIKEY".into(), "api-key".into())),
+        "headers: {:?}",
+        asset_limits.headers
+    );
 }
 
 /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
