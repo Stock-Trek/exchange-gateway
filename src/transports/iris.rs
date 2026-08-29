@@ -607,10 +607,17 @@ mod tests {
             "send while reconnecting should fail fast with ConnectionClosed, got: {result:?}"
         );
 
+        // The client is stuck in the reconnecting state with every handshake
+        // stalled, so there is no live connection to close gracefully. iris's
+        // graceful `disconnect` would wait out the full disconnect timeout
+        // (10s by default) and then force-abort the connection task, which is
+        // what made this test an order of magnitude slower than the others.
+        // Abort the connection task right away instead.
         client
-            .disconnect()
+            .client
+            .force_disconnect()
             .await
-            .expect("disconnect should succeed");
+            .expect("force disconnect should succeed");
     }
 
     #[tokio::test]
