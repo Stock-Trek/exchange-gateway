@@ -194,8 +194,6 @@ where
             if result.is_ok() {
                 guard.complete();
             }
-            // Dropping the guard cancels a failed authentication and completes
-            // a successful one, waking any blocked callers either way.
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
@@ -239,8 +237,6 @@ where
             };
             let request_duration = start.elapsed();
             signer = match (leg.create_signer)((authentication_response, request_duration))? {
-                // A leg that only gathers information (e.g. a server-time
-                // bootstrap) keeps the signer the previous leg installed.
                 Some(next_signer) => next_signer,
                 None => signer,
             };

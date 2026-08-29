@@ -10,18 +10,6 @@ pub struct AuthGate {
     state: Mutex<AuthGateState>,
 }
 
-#[derive(Default)]
-pub struct AuthGateState {
-    connection_epoch: u64,
-    authenticated_epoch: u64,
-    in_flight: Option<AuthInFlight>,
-}
-
-struct AuthInFlight {
-    waiter: AuthWaiter,
-    epoch: u64,
-}
-
 pub enum AuthGateAcquisition<'a> {
     Acquired(AuthGateGuard<'a>),
     Blocked(AuthWaiter),
@@ -34,6 +22,18 @@ pub struct AuthGateGuard<'a> {
 
 #[derive(Clone, Default)]
 pub struct AuthWaiter(Arc<Mutex<AuthCompletedState>>);
+
+#[derive(Default)]
+struct AuthGateState {
+    connection_epoch: u64,
+    authenticated_epoch: u64,
+    in_flight: Option<AuthInFlight>,
+}
+
+struct AuthInFlight {
+    waiter: AuthWaiter,
+    epoch: u64,
+}
 
 #[derive(Default)]
 struct AuthCompletedState {
@@ -82,12 +82,6 @@ impl AuthGate {
 }
 
 impl AuthGateGuard<'_> {
-    /// Mark the in-flight authentication as successful and consume the guard.
-    ///
-    /// The session is recorded as authenticated for the acquire-time connection
-    /// epoch and all blocked callers are woken. Dropping the guard without
-    /// calling this cancels the authentication: the session stays stale and
-    /// blocked callers are woken so one of them can retry.
     pub fn complete(mut self) {
         self.authenticated = true;
     }
