@@ -78,11 +78,9 @@ where
     ExternalReq: Send,
     ExternalRes: Clone + Send + Sync + 'static,
 {
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(ConvertListener::new(
-            surface_as_api_error(to_external_response),
-            listener,
-        ));
+    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> = Arc::new(
+        ConvertListener::new(surface_as_api_error(to_external_response), listener),
+    );
     // AssetLimits (`myFilters`) is a USER_DATA endpoint whose params carry no
     // `apiKey` field, so its X-MBX-APIKEY header is supplied from the
     // connector's credentials instead of the request params.

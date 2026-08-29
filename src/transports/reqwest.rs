@@ -233,7 +233,10 @@ mod tests {
             .await
             .expect("400 should be delivered as a response");
         assert_eq!(response.status, 400);
-        assert_eq!(response.body, br#"{"code":-2014,"msg":"API-key format invalid."}"#);
+        assert_eq!(
+            response.body,
+            br#"{"code":-2014,"msg":"API-key format invalid."}"#
+        );
     }
 
     #[tokio::test]
