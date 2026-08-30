@@ -1,9 +1,10 @@
 use crate::{
     auth_gate::{AuthGate, AuthGateAcquisition},
     authenticate_leg::AuthenticateLeg,
+    clock::Clock,
     connector::Connector,
     error::{EGError, EGResult},
-    functions::{ArcTryConvertValue, TryConvertRef},
+    functions::{ArcTryConvertValue, ArcTryConvertValueWithClock, TryConvertRef},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner,
@@ -29,10 +30,11 @@ pub struct ConnectorImpl<
     EGRes,
 > {
     rate_limits: RateLimits,
+    clock: Arc<Clock>,
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-    sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+    sync_timestamp_fields: ArcTryConvertValueWithClock<EGUnsignedReq, EGUnsignedReq>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
@@ -102,7 +104,7 @@ where
             }
         };
         let round_trip_time = start.elapsed();
-        (self.sync_clock.sync)((response, round_trip_time))
+        (self.sync_clock.sync)(&self.clock, (response, round_trip_time))
     }
     async fn authenticate(&self) -> EGResult<()> {
         let Some(credentials) = &self.credentials else {
@@ -162,7 +164,7 @@ where
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             let unsigned = if signed {
-                (self.sync_timestamp_fields)(unsigned)?
+                (self.sync_timestamp_fields)(&self.clock, unsigned)?
             } else {
                 unsigned
             };
@@ -210,10 +212,11 @@ where
 {
     pub(crate) fn new(
         rate_limits: RateLimits,
+        clock: Arc<Clock>,
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-        sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+        sync_timestamp_fields: ArcTryConvertValueWithClock<EGUnsignedReq, EGUnsignedReq>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
@@ -224,6 +227,7 @@ where
     ) -> Self {
         Self {
             rate_limits,
+            clock,
             to_weight,
             to_order_count,
             to_unsigned_request,
@@ -243,7 +247,7 @@ where
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
             let (signed_auth_message, weight, order_count, filter) = {
-                let (auth_message, filter) = (leg.create_auth_attempt)();
+                let (auth_message, filter) = (leg.create_auth_attempt)(&self.clock);
                 self.check_rate_limits(&auth_message)?;
                 let weight = (self.to_weight)(&auth_message);
                 let order_count = (self.to_order_count)(&auth_message);
@@ -328,6 +332,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Connector")
             .field("rate_limits", &self.rate_limits)
+            .field("clock", &self.clock)
             .field("to_weight", &"<function>")
             .field("to_order_count", &"<function>")
             .field("to_unsigned_request", &"<function>")

@@ -1,10 +1,10 @@
-use crate::functions::{ArcCreateAuthAttempt, ArcTryConvertValue};
+use crate::functions::{ArcCreateAuthAttempt, ArcTryConvertValueWithClock};
 use std::time::Duration;
 
 pub(crate) struct SyncClock<EGUnsignedReq, EGRes> {
     pub create_request: ArcCreateAuthAttempt<EGUnsignedReq, EGRes>,
     pub timeout: Duration,
-    pub sync: ArcTryConvertValue<(EGRes, Duration), ()>,
+    pub sync: ArcTryConvertValueWithClock<(EGRes, Duration), ()>,
 }
 
 impl<EGUnsignedReq, EGRes> std::fmt::Debug for SyncClock<EGUnsignedReq, EGRes> {
