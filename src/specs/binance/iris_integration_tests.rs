@@ -435,10 +435,10 @@ async fn logon_weight_counts_against_weight_rate_limit() {
         .await
         .expect("authentication should succeed");
 
-    // exchangeInfo costs 4, so exactly 1499 requests fit in the remaining
+    // exchangeInfo costs 20, so exactly 299 requests fit in the remaining
     // 5998. If the logon weight were not counted, a 1500th request would
     // still fit.
-    for _ in 0..1499 {
+    for _ in 0..299 {
         connector
             .send(exchange_info_request(), false, Duration::from_secs(5))
             .await

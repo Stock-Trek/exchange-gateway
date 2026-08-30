@@ -796,7 +796,7 @@ mod test {
                 symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
             }),
         };
-        assert_eq!(request_weight(&exchange_info), 4);
+        assert_eq!(request_weight(&exchange_info), 20);
         let time = BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
                 id: "3".into(),

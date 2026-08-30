@@ -550,7 +550,7 @@ mod test {
         });
         let payload =
             String::from_utf8(unsigned_request_to_bytes(&request).unwrap().unwrap()).unwrap();
-        assert_eq!(payload, "timestamp=1700000000000");
+        assert_eq!(payload, "symbol=BNBUSDT&timestamp=1700000000000");
     }
 
     #[test]
@@ -619,7 +619,7 @@ mod test {
         );
         assert_eq!(
             request.query.as_deref(),
-            Some("timestamp=1700000000000&signature=signature")
+            Some("symbol=BNBUSDT&timestamp=1700000000000&signature=signature")
         );
     }
 
