@@ -91,9 +91,17 @@ impl RateLimiterState {
         }
         match (used, limit) {
             (Some(used), Some(limit)) => {
-                if self.throttled_until.is_some() {
+                if self.is_throttled() {
+                    // Still inside the Retry-After window: keep the bucket
+                    // empty so it refills from the deadline instead of
+                    // instantly granting limit - used.
                     self.current_capacity = 0;
                 } else {
+                    // The deadline has passed (or there was none): realign to
+                    // the server-reported usage. Clear the stale deadline so
+                    // the next refill doesn't bank capacity from before the
+                    // feedback arrived.
+                    self.throttled_until = None;
                     self.current_capacity =
                         self.capacity_per_interval.saturating_sub(used.min(limit));
                 }
@@ -294,6 +302,36 @@ mod tests {
         // The bucket refills from the throttle deadline up to the newly
         // reported limit rather than staying stuck at zero.
         assert!(state.did_consume(6000));
+    }
+
+    #[test]
+    fn sync_usage_after_throttle_deadline_realigns_to_usage() {
+        let clock = ManualClock::new();
+        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
+        state.throttle(clock.now() + Duration::from_millis(20));
+        clock.advance(Duration::from_millis(30));
+        // Usage feedback arrives after the Retry-After deadline with no
+        // intervening consume: the throttle is no longer active, so the
+        // bucket realigns to the server-reported usage instead of staying
+        // zeroed until the next full-interval boundary.
+        state.sync_usage(Some(1200), Some(6000));
+        assert!(state.did_consume(4800));
+        assert!(!state.did_consume(1));
+    }
+
+    #[test]
+    fn sync_usage_after_throttle_deadline_drops_stale_deadline() {
+        let clock = ManualClock::new();
+        let mut state = state_with(Duration::from_millis(10), 6000, &clock);
+        state.throttle(clock.now() + Duration::from_millis(20));
+        clock.advance(Duration::from_millis(50));
+        state.sync_usage(Some(1200), Some(6000));
+        // The stale deadline must not linger: refilling from it would grant
+        // the elapsed intervals on top of the server-reported remaining
+        // capacity, overshooting what the server says is available.
+        assert!(!state.did_consume(6000));
+        assert!(state.did_consume(4800));
+        assert!(!state.did_consume(1));
     }
 
     #[test]
