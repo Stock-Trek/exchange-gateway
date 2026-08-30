@@ -1,6 +1,5 @@
 use crate::{
     auth_gate::AuthGate,
-    authenticate_leg::AuthenticateLeg,
     clock::Clock,
     connector::Connector,
     connector_impl::ConnectorImpl,
@@ -17,6 +16,7 @@ use crate::{
     },
     specs::binance::common::{data_signer, order_weight, rate_limit_usage, sync_timestamp_fields},
     specs::binance::common::{exchange_urls, rate_limits},
+    sync_clock::SyncClock,
     transports::http::{HttpClientTrait, HttpEndpoint},
     transports::transport::Transport,
     transports::{
@@ -80,9 +80,6 @@ where
 {
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
-    // AssetLimits (`myFilters`) is a USER_DATA endpoint whose params carry no
-    // `apiKey` field, so its X-MBX-APIKEY header is supplied from the
-    // connector's credentials instead of the request params.
     let api_key = credentials
         .as_ref()
         .map(|credentials| credentials.api_key.clone());
@@ -96,11 +93,7 @@ where
         rate_limits.clone(),
         response_feedback,
     );
-    let authenticate_legs = if credentials.is_some() {
-        vec![time_bootstrap_leg(clock.clone(), Duration::from_secs(20))]
-    } else {
-        vec![]
-    };
+    let authenticate_legs = vec![];
     Ok(ConnectorImpl::new(
         rate_limits,
         request_weight,
@@ -112,6 +105,7 @@ where
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
+        sync_clock(clock, Duration::from_secs(20)),
         Arc::new(AuthGate::default()),
     ))
 }
@@ -381,11 +375,11 @@ impl HasApiKey for BinanceCancelOrderParams {
     }
 }
 
-pub(crate) fn time_bootstrap_leg(
+fn sync_clock(
     clock: Arc<Clock>,
     timeout: Duration,
-) -> AuthenticateLeg<BinanceHttpUnsignedRequest, BinanceHttpRequest, BinanceHttpResponse> {
-    let create_auth_attempt = Arc::new(|| {
+) -> SyncClock<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
+    let create_request = Arc::new(|| {
         let message = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         let filter: ArcPredicate<BinanceHttpResponse> = Arc::new(|response| {
             matches!(
@@ -396,37 +390,27 @@ pub(crate) fn time_bootstrap_leg(
         });
         (message, filter)
     });
-    let create_signer = {
-        let signer_clock = clock.clone();
-        Arc::new(
-            move |(message, round_trip_time)| -> EGResult<
-                Option<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>>,
-            > {
-                http_time_response_error(&message)?;
-                if let BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) =
-                    &message
-                {
-                    signer_clock.sync(result.serverTime, round_trip_time);
+    let sync = {
+        let clock = clock.clone();
+        Arc::new(move |(message, round_trip_time)| -> EGResult<()> {
+            match message {
+                BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) => {
+                    clock.sync(result.serverTime, round_trip_time);
+                    Ok(())
                 }
-                Ok(None)
-            },
-        )
+                BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
+                    code: error.code,
+                    message: error.msg.clone(),
+                }),
+                _ => Err(EGError::BadResponse),
+            }
+        })
     };
-    AuthenticateLeg {
-        create_auth_attempt,
-        create_signer,
+    SyncClock {
+        create_request,
         timeout,
+        sync,
     }
-}
-
-fn http_time_response_error(message: &BinanceHttpResponse) -> EGResult<()> {
-    if let BinanceHttpResponse::Failure(error) = message {
-        return Err(EGError::ApiError {
-            code: error.code,
-            message: error.msg.clone(),
-        });
-    }
-    Ok(())
 }
 
 fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
@@ -873,10 +857,10 @@ mod test {
     }
 
     #[test]
-    fn time_bootstrap_leg_syncs_the_server_clock() {
+    fn time_sync_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
-        let leg = time_bootstrap_leg(clock.clone(), Duration::from_secs(20));
-        let (message, filter) = (leg.create_auth_attempt)();
+        let sync_clock = sync_clock(clock.clone(), Duration::from_secs(20));
+        let (message, filter) = (sync_clock.create_request)();
         assert!(matches!(message, BinanceHttpUnsignedRequest::Time(..)));
         let local = clock.now_millis();
         let response =
@@ -884,10 +868,7 @@ mod test {
                 serverTime: local + 10_000,
             }));
         assert!(filter(&response));
-        // The bootstrap records the server clock but installs no signer
-        // (`Ok(None)` keeps the signer the previous leg installed).
-        let signer = (leg.create_signer)((response, Duration::ZERO)).unwrap();
-        assert!(signer.is_none());
+        (sync_clock.sync)((response, Duration::ZERO)).unwrap();
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",
@@ -896,18 +877,18 @@ mod test {
     }
 
     #[test]
-    fn time_bootstrap_leg_surfaces_the_time_error() {
+    fn time_sync_surfaces_the_time_error() {
         let clock = Arc::new(Clock::default());
-        let leg = time_bootstrap_leg(clock, Duration::from_secs(20));
-        let (_, filter) = (leg.create_auth_attempt)();
+        let sync_clock = sync_clock(clock, Duration::from_secs(20));
+        let (_, filter) = (sync_clock.create_request)();
         let response = BinanceHttpResponse::Failure(BinanceError {
             code: -1021,
             msg: "Timestamp for this request is outside of the recvWindow.".into(),
         });
         assert!(filter(&response));
-        let signer = (leg.create_signer)((response, Duration::ZERO));
-        assert!(signer.is_err(), "expected ApiError");
-        let Err(EGError::ApiError { code, message }) = signer else {
+        let result = (sync_clock.sync)((response, Duration::ZERO));
+        assert!(result.is_err(), "expected ApiError");
+        let Err(EGError::ApiError { code, message }) = result else {
             panic!("expected an ApiError");
         };
         assert_eq!(code, -1021);

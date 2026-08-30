@@ -8,7 +8,7 @@ use std::time::Duration;
 pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
     pub create_auth_attempt: ArcCreateAuthAttempt<EGUnsignedReq, EGRes>,
     pub timeout: Duration,
-    pub create_signer: ArcTryConvertValue<(EGRes, Duration), Option<Signer<EGUnsignedReq, EGReq>>>,
+    pub create_signer: ArcTryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
 }
 
 impl<EGUnsignedReq, EGReq, EGRes> std::fmt::Debug for AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {

@@ -869,3 +869,45 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
         logon.timestamp
     );
 }
+
+#[tokio::test]
+async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let clock = Arc::new(Clock::default());
+    let connector = mock_session_connector(
+        client_tx,
+        None,
+        None,
+        Duration::from_secs(20),
+        Arc::new(IgnoreListener),
+        clock.clone(),
+    )
+    .unwrap();
+    let client = client_rx.recv().unwrap();
+
+    connector.connect().await.expect("connect should succeed");
+    assert!(connector.is_authenticated().unwrap());
+    assert_eq!(
+        client.sent.lock().unwrap().len(),
+        2,
+        "time bootstrap + logon"
+    );
+
+    connector
+        .sync_clock()
+        .await
+        .expect("sync_clock should succeed");
+    let sent = client.sent.lock().unwrap();
+    assert_eq!(sent.len(), 3, "time bootstrap + logon + sync_clock");
+    // The sync is a fresh unsigned time request, matched by its own id
+    // rather than the bootstrap's.
+    let sync_clock = &sent[2];
+    assert!(
+        matches!(sync_clock.metadata.method, BinanceWebsocketMethodName::Time),
+        "sync_clock must send a time request"
+    );
+    assert!(
+        sync_clock.params.signature.is_none(),
+        "the sync_clock request must be unsigned"
+    );
+}

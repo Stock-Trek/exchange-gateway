@@ -9,6 +9,7 @@ use crate::{
         convert_signer::ConvertSigner,
         signer::{Signer, SignerTrait},
     },
+    sync_clock::SyncClock,
     transports::transport::{Transport, TransportTrait},
 };
 use async_trait::async_trait;
@@ -31,12 +32,13 @@ pub struct ConnectorImpl<
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-    sync_timestamp: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+    sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+    sync_clock: SyncClock<EGUnsignedReq, EGRes>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
 }
@@ -71,10 +73,41 @@ where
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
+        <Self as Connector<ExternalReq, ExternalRes>>::sync_clock(self).await?;
         self.authenticate().await
     }
     fn is_connected(&self) -> EGResult<bool> {
         Ok(self.transport.is_connected())
+    }
+    async fn sync_clock(&self) -> EGResult<()> {
+        let (signed_message, weight, order_count, filter) = {
+            let (message, filter) = (self.sync_clock.create_request)();
+            let weight = (self.to_weight)(&message);
+            let order_count = (self.to_order_count)(&message);
+            self.check_rate_limits(&message)?;
+            let signed_message = match self.signed_request(message, false) {
+                Ok(signed_message) => signed_message,
+                Err(error) => {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                    return Err(error);
+                }
+            };
+            (signed_message, weight, order_count, filter)
+        };
+        let start = Instant::now();
+        let response = match self
+            .transport
+            .send_and_wait_for(signed_message, self.sync_clock.timeout, filter)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let _ = self.rate_limits.refund(weight, order_count);
+                return Err(error);
+            }
+        };
+        let round_trip_time = start.elapsed();
+        (self.sync_clock.sync)((response, round_trip_time))
     }
     fn is_authenticated(&self) -> EGResult<bool> {
         if !self.transport.is_connected() {
@@ -85,7 +118,7 @@ where
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
             .is_some();
-        Ok(has_signer && !self.session_is_stale()?)
+        Ok(has_signer && !self.is_authentication_stale()?)
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
@@ -95,13 +128,13 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
-        if signed && self.session_is_stale()? {
+        if signed && self.is_authentication_stale()? {
             self.authenticate().await?;
         }
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             let unsigned = if signed {
-                (self.sync_timestamp)(unsigned)?
+                (self.sync_timestamp_fields)(unsigned)?
             } else {
                 unsigned
             };
@@ -151,12 +184,13 @@ where
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-        sync_timestamp: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+        sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
+        sync_clock: SyncClock<EGUnsignedReq, EGRes>,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
@@ -164,12 +198,13 @@ where
             to_weight,
             to_order_count,
             to_unsigned_request,
-            sync_timestamp,
+            sync_timestamp_fields,
             transport,
             null_signer,
             credentials,
             create_signer,
             authenticate_legs,
+            sync_clock,
             signer: Arc::new(Mutex::new(None)),
             auth_gate,
         }
@@ -179,7 +214,7 @@ where
             return Ok(());
         };
         loop {
-            if !self.session_is_stale()? {
+            if !self.is_authentication_stale()? {
                 return Ok(());
             }
             let guard = match self.auth_gate.acquire()? {
@@ -196,7 +231,7 @@ where
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
-                    if self.session_is_stale()? {
+                    if self.is_authentication_stale()? {
                         continue;
                     }
                     return Ok(());
@@ -222,7 +257,6 @@ where
                 };
                 (signed_auth_message, weight, order_count, filter)
             };
-            let start = Instant::now();
             let authentication_response = match self
                 .transport
                 .send_and_wait_for(signed_auth_message, leg.timeout, filter)
@@ -234,8 +268,7 @@ where
                     return Err(error);
                 }
             };
-            let request_duration = start.elapsed();
-            signer = match (leg.create_signer)((authentication_response, request_duration))? {
+            signer = match (leg.create_signer)(authentication_response)? {
                 Some(next_signer) => next_signer,
                 None => signer,
             };
@@ -246,7 +279,7 @@ where
         }
         Ok(())
     }
-    fn session_is_stale(&self) -> EGResult<bool> {
+    fn is_authentication_stale(&self) -> EGResult<bool> {
         let has_signer = self
             .signer
             .lock()
@@ -305,6 +338,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("credentials", &"<redacted>")
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
+            .field("sync_clock", &self.sync_clock)
             .field("signer", &"<redacted>")
             .field("auth_gate", &self.auth_gate)
             .finish()

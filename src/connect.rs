@@ -40,7 +40,7 @@ impl Connect {
         clock: Arc<Clock>,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
-        ExternalReq: Send,
+        ExternalReq: Send + 'static,
         ExternalRes: Clone + Send + Sync + 'static,
     {
         binance_http_connector(

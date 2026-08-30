@@ -192,6 +192,34 @@ async fn http_connector_installs_signer_on_connect() {
     );
 }
 
+#[tokio::test]
+async fn http_connector_sync_clock_syncs_the_server_clock() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let clock = Arc::new(Clock::default());
+    let connector = mock_http_connector(client_tx, clock.clone()).unwrap();
+    let client = client_rx.recv().unwrap();
+
+    connector.connect().await.expect("connect should succeed");
+    assert!(!clock.should_sync(), "connect bootstraps the clock");
+
+    // Sync clock issues a fresh unsigned time request and re-adopts the
+    // server clock (the mock reports the clock's view of server time).
+    connector
+        .sync_clock()
+        .await
+        .expect("sync_clock should succeed");
+    assert!(
+        !clock.should_sync(),
+        "sync_clock must refresh the clock sync time"
+    );
+    let sent = client.sent.lock().unwrap();
+    assert_eq!(sent.len(), 2, "connect time bootstrap + sync_clock");
+    assert_eq!(
+        sent[1].query, None,
+        "the sync_clock must be an unsigned time request"
+    );
+}
+
 /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
 #[derive(Clone)]
 enum ScriptedOutcome {
