@@ -800,7 +800,7 @@ mod test {
     }
 
     #[test]
-    fn time_sync_syncs_the_server_clock() {
+    fn sync_lock_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
         let sync_clock = sync_clock(clock.clone(), Duration::from_secs(20));
         let (message, filter) = (sync_clock.create_request)();
@@ -808,7 +808,7 @@ mod test {
             message.params,
             BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {})
         ));
-        // The time sync is unsigned: the request carries no payload to sign
+        // The sync clock is unsigned: the request carries no payload to sign
         // (the transport sends it without an API key).
         let id = message.metadata.id;
         let local = clock.now_millis();

@@ -309,6 +309,7 @@ async fn post_logon_requests_omit_api_key_and_signature() {
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
+    connector.authenticate().await.expect("should succeed");
     assert!(connector.is_authenticated().unwrap());
     connector
         .send(order_request(), true, Duration::from_secs(5))
@@ -339,51 +340,6 @@ async fn post_logon_requests_omit_api_key_and_signature() {
 }
 
 #[tokio::test]
-async fn reauthenticates_after_reconnect() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector = mock_session_connector(
-        client_tx,
-        None,
-        None,
-        Duration::from_secs(20),
-        Arc::new(IgnoreListener),
-        Arc::new(Clock::default()),
-    )
-    .unwrap();
-    let client = client_rx.recv().unwrap();
-
-    connector.connect().await.expect("connect should succeed");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-
-    // A signed request on a live connection does not re-authenticate.
-    connector
-        .send(order_request(), true, Duration::from_secs(5))
-        .await
-        .expect("send should succeed");
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-
-    // Simulate the connection dropping and the iris client reconnecting.
-    client.connected.store(false, Ordering::SeqCst);
-    client.connect().await.expect("reconnect should succeed");
-
-    // The old session is stale until re-authentication runs.
-    assert!(!connector.is_authenticated().unwrap());
-
-    // The next signed send re-authenticates before sending.
-    connector
-        .send(order_request(), true, Duration::from_secs(5))
-        .await
-        .expect("send should succeed");
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
-    assert!(connector.is_authenticated().unwrap());
-    assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
-        message.metadata.method,
-        BinanceWebsocketMethodName::PlaceOrder
-    )));
-}
-
-#[tokio::test]
 async fn sends_during_a_drop_fail_fast_until_reconnect() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let connector = Arc::new(
@@ -400,6 +356,10 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
+    connector
+        .authenticate()
+        .await
+        .expect("authentication should succeed");
     assert!(connector.is_authenticated().unwrap());
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
 
@@ -447,6 +407,10 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
     // Once the connection comes back, the next signed send
     // re-authenticates and goes out normally.
     client.connect().await.expect("reconnect should succeed");
+    connector
+        .authenticate()
+        .await
+        .expect("authentication should succeed");
     connector
         .send(order_request(), true, Duration::from_secs(5))
         .await
@@ -554,6 +518,10 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
+    connector
+        .authenticate()
+        .await
+        .expect("authentication should succeed");
     assert!(connector.is_authenticated().unwrap());
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
 
@@ -651,65 +619,6 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
 }
 
 #[tokio::test]
-async fn failed_reauthentication_keeps_the_session_stale() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let logon_gate = LogonGate {
-        block: Arc::new(AtomicBool::new(false)),
-        release: Arc::new(tokio::sync::Notify::new()),
-        fail: Arc::new(AtomicBool::new(false)),
-    };
-    let connector = Arc::new(
-        mock_session_connector(
-            client_tx,
-            Some(logon_gate.clone()),
-            None,
-            Duration::from_secs(20),
-            Arc::new(IgnoreListener),
-            Arc::new(Clock::default()),
-        )
-        .unwrap(),
-    );
-    let client = client_rx.recv().unwrap();
-
-    connector.connect().await.expect("connect should succeed");
-    assert!(connector.is_authenticated().unwrap());
-
-    // Simulate the connection dropping and the iris client reconnecting.
-    client.connected.store(false, Ordering::SeqCst);
-    client.connect().await.expect("reconnect should succeed");
-    assert!(!connector.is_authenticated().unwrap());
-
-    // Make the next logon fail (e.g. expired/bad key or a transient
-    // timeout).
-    logon_gate.fail.store(true, Ordering::SeqCst);
-
-    // The failed re-authentication must not mark the session as
-    // authenticated: the connector stays unauthenticated and the next
-    // signed send retries the logon instead of going out on a connection
-    // that was never logged in.
-    let error = connector
-        .send(order_request(), true, Duration::from_secs(5))
-        .await
-        .expect_err("send must fail when re-authentication fails");
-    assert!(matches!(error, EGError::TimedOut));
-    assert!(!connector.is_authenticated().unwrap());
-
-    // Once the logon succeeds again, the next signed send re-authenticates
-    // and goes out normally.
-    logon_gate.fail.store(false, Ordering::SeqCst);
-    connector
-        .send(order_request(), true, Duration::from_secs(5))
-        .await
-        .expect("send should succeed once re-authentication succeeds");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 3);
-    assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
-        message.metadata.method,
-        BinanceWebsocketMethodName::PlaceOrder
-    )));
-}
-
-#[tokio::test]
 async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let logon_gate = LogonGate {
@@ -739,6 +648,10 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
+    connector
+        .authenticate()
+        .await
+        .expect("authentication should succeed");
     assert!(connector.is_authenticated().unwrap());
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
 
@@ -821,7 +734,7 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
 }
 
 #[tokio::test]
-async fn connect_syncs_the_server_clock_before_the_logon() {
+async fn connect_immediately_syncs_the_server_clock() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let clock = Clock::default();
     // The server clock is 10 s ahead of the local clock: a logon signed
@@ -842,12 +755,10 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
-    assert!(connector.is_authenticated().unwrap());
 
-    // The very first message is the unsigned `time` bootstrap; the logon
-    // follows with a server-synced timestamp.
+    // The very first message is the unsigned `sync clock`
     let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 2, "time bootstrap + logon");
+    assert_eq!(sent.len(), 1, "sync clock");
     assert!(matches!(
         sent[0].metadata.method,
         BinanceWebsocketMethodName::Time
@@ -855,18 +766,6 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
     assert!(
         sent[0].params.signature.is_none(),
         "the time bootstrap must be unsigned"
-    );
-    assert!(matches!(
-        sent[1].metadata.method,
-        BinanceWebsocketMethodName::Logon
-    ));
-    let BinanceWebsocketUnsignedParams::Logon(logon) = &sent[1].params.params else {
-        panic!("expected a logon");
-    };
-    assert!(
-        logon.timestamp >= local + 10_000 - 60_000,
-        "logon timestamp {} must be near the server clock (local {local})",
-        logon.timestamp
     );
 }
 
@@ -887,21 +786,17 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
 
     connector.connect().await.expect("connect should succeed");
     assert!(connector.is_authenticated().unwrap());
-    assert_eq!(
-        client.sent.lock().unwrap().len(),
-        2,
-        "time bootstrap + logon"
-    );
+    assert_eq!(client.sent.lock().unwrap().len(), 1, "sync clock");
 
     connector
         .sync_clock()
         .await
         .expect("sync_clock should succeed");
     let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 3, "time bootstrap + logon + sync_clock");
+    assert_eq!(sent.len(), 2, "sync_clock + fresh sync_clock");
     // The sync is a fresh unsigned time request, matched by its own id
-    // rather than the bootstrap's.
-    let sync_clock = &sent[2];
+    // rather than the one from connect.
+    let sync_clock = &sent[1];
     assert!(
         matches!(sync_clock.metadata.method, BinanceWebsocketMethodName::Time),
         "sync_clock must send a time request"

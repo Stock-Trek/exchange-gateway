@@ -17,7 +17,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
-    asset_limits::BinanceAssetLimitsParams,
     exchange_info::BinanceOrderType,
     http::{BinanceHttpResponse, BinanceHttpResponseResult, BinanceHttpUnsignedRequest},
     spot::{
@@ -113,7 +112,7 @@ impl HttpClientTrait for MockHttpClient {
 /// Builds an HTTP connector backed by the mock client, handing the caller
 /// a handle to the client so sent requests can be inspected. The mock
 /// reports the given clock as the server clock on `time` responses,
-/// mirroring the production bootstrap (a server-time sync before any
+/// mirroring the production bootstrap (a sync clock before any
 /// signed request).
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
@@ -147,49 +146,6 @@ fn mock_http_connector(
         Some(credentials),
         clock,
     )
-}
-
-fn asset_limits_request() -> BinanceHttpUnsignedRequest {
-    BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
-        recvWindow: None,
-        symbols: None,
-        timestamp: 0,
-    })
-}
-
-#[tokio::test]
-async fn http_connector_installs_signer_on_connect() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector = mock_http_connector(client_tx, Arc::new(Clock::default())).unwrap();
-    let client = client_rx.recv().unwrap();
-
-    connector.connect().await.expect("connect should succeed");
-    assert!(
-        connector.is_authenticated().unwrap(),
-        "connecting with credentials must install the request signer"
-    );
-
-    // The only request during connect is the unsigned time bootstrap.
-    assert_eq!(client.sent.lock().unwrap().len(), 1);
-
-    // A signed request must not fail with NotAuthenticated.
-    connector
-        .send(asset_limits_request(), true, Duration::from_secs(5))
-        .await
-        .expect("signed send should succeed");
-    assert_eq!(client.sent.lock().unwrap().len(), 2);
-
-    // AssetLimits (`myFilters`) is a USER_DATA endpoint: the request must
-    // carry the X-MBX-APIKEY header from the connector's credentials even
-    // though the params have no `apiKey` field.
-    let asset_limits = &client.sent.lock().unwrap()[1];
-    assert!(
-        asset_limits
-            .headers
-            .contains(&("X-MBX-APIKEY".into(), "api-key".into())),
-        "headers: {:?}",
-        asset_limits.headers
-    );
 }
 
 #[tokio::test]

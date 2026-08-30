@@ -857,7 +857,7 @@ mod test {
     }
 
     #[test]
-    fn time_sync_syncs_the_server_clock() {
+    fn sync_clock_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
         let sync_clock = sync_clock(clock.clone(), Duration::from_secs(20));
         let (message, filter) = (sync_clock.create_request)();
@@ -877,7 +877,7 @@ mod test {
     }
 
     #[test]
-    fn time_sync_surfaces_the_time_error() {
+    fn sync_clock_surfaces_the_time_error() {
         let clock = Arc::new(Clock::default());
         let sync_clock = sync_clock(clock, Duration::from_secs(20));
         let (_, filter) = (sync_clock.create_request)();
