@@ -1,6 +1,6 @@
 [package]
 name = "exchange-gateway"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 description = "A gateway library for connecting to cryptocurrency exchange APIs over HTTP and WebSocket, with authentication, rate limiting, and request/response handling"
 repository = "https://github.com/Stock-Trek/exchange-gateway"
