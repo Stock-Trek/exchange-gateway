@@ -871,7 +871,7 @@ async fn connect_syncs_the_server_clock_before_the_logon() {
 }
 
 #[tokio::test]
-async fn resync_syncs_the_server_clock_from_a_fresh_time_request() {
+async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let clock = Arc::new(Clock::default());
     let connector = mock_session_connector(
@@ -893,18 +893,18 @@ async fn resync_syncs_the_server_clock_from_a_fresh_time_request() {
         "time bootstrap + logon"
     );
 
-    connector.resync().await.expect("resync should succeed");
+    connector.sync_clock().await.expect("sync_clock should succeed");
     let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 3, "time bootstrap + logon + resync");
-    // The resync is a fresh unsigned time request, matched by its own id
+    assert_eq!(sent.len(), 3, "time bootstrap + logon + sync_clock");
+    // The sync is a fresh unsigned time request, matched by its own id
     // rather than the bootstrap's.
-    let resync = &sent[2];
+    let sync_clock = &sent[2];
     assert!(
-        matches!(resync.metadata.method, BinanceWebsocketMethodName::Time),
-        "resync must send a time request"
+        matches!(sync_clock.metadata.method, BinanceWebsocketMethodName::Time),
+        "sync_clock must send a time request"
     );
     assert!(
-        resync.params.signature.is_none(),
-        "the resync must be unsigned"
+        sync_clock.params.signature.is_none(),
+        "the sync_clock request must be unsigned"
     );
 }

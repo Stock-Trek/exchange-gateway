@@ -5,11 +5,11 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcTryConvertValue, TryConvertRef},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
-    resync::Resync,
     sign::{
         convert_signer::ConvertSigner,
         signer::{Signer, SignerTrait},
     },
+    sync_clock::SyncClock,
     transports::transport::{Transport, TransportTrait},
 };
 use async_trait::async_trait;
@@ -38,7 +38,7 @@ pub struct ConnectorImpl<
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-    resync: Option<Resync<EGUnsignedReq, EGRes>>,
+    sync_clock: Option<SyncClock<EGUnsignedReq, EGRes>>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
 }
@@ -73,6 +73,7 @@ where
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
+        <Self as Connector<ExternalReq, ExternalRes>>::sync_clock(self).await?;
         self.authenticate().await
     }
     fn is_connected(&self) -> EGResult<bool> {
@@ -133,12 +134,12 @@ where
             }
         }
     }
-    async fn resync(&self) -> EGResult<()> {
-        let Some(resync) = &self.resync else {
+    async fn sync_clock(&self) -> EGResult<()> {
+        let Some(sync_clock) = &self.sync_clock else {
             return Ok(());
         };
         let (signed_message, weight, order_count, filter) = {
-            let (message, filter) = (resync.create_request)();
+            let (message, filter) = (sync_clock.create_request)();
             let weight = (self.to_weight)(&message);
             let order_count = (self.to_order_count)(&message);
             self.check_rate_limits(&message)?;
@@ -154,7 +155,7 @@ where
         let start = Instant::now();
         let response = match self
             .transport
-            .send_and_wait_for(signed_message, resync.timeout, filter)
+            .send_and_wait_for(signed_message, sync_clock.timeout, filter)
             .await
         {
             Ok(response) => response,
@@ -164,7 +165,7 @@ where
             }
         };
         let round_trip_time = start.elapsed();
-        (resync.sync_clock)((response, round_trip_time))
+        (sync_clock.sync)((response, round_trip_time))
     }
 }
 impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
@@ -192,7 +193,7 @@ where
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-        resync: Option<Resync<EGUnsignedReq, EGRes>>,
+        sync_clock: Option<SyncClock<EGUnsignedReq, EGRes>>,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
@@ -206,7 +207,7 @@ where
             credentials,
             create_signer,
             authenticate_legs,
-            resync,
+            sync_clock,
             signer: Arc::new(Mutex::new(None)),
             auth_gate,
         }
@@ -342,7 +343,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("credentials", &"<redacted>")
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
-            .field("resync", &self.resync)
+            .field("sync_clock", &self.sync_clock)
             .field("signer", &"<redacted>")
             .field("auth_gate", &self.auth_gate)
             .finish()

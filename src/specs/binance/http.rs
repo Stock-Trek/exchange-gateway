@@ -1,6 +1,5 @@
 use crate::{
     auth_gate::AuthGate,
-    authenticate_leg::AuthenticateLeg,
     clock::Clock,
     connector::Connector,
     connector_impl::ConnectorImpl,
@@ -11,13 +10,13 @@ use crate::{
     listeners::listener::ListenerTrait,
     rate_limit::feedback::RateLimitFeedback,
     rate_limit::rate_limits::RateLimits,
-    resync::Resync,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
     },
     specs::binance::common::{data_signer, order_weight, rate_limit_usage, sync_timestamp_fields},
     specs::binance::common::{exchange_urls, rate_limits},
+    sync_clock::SyncClock,
     transports::http::{HttpClientTrait, HttpEndpoint},
     transports::transport::Transport,
     transports::{
@@ -97,11 +96,7 @@ where
         rate_limits.clone(),
         response_feedback,
     );
-    let authenticate_legs = if credentials.is_some() {
-        vec![time_bootstrap_leg(clock.clone(), Duration::from_secs(20))]
-    } else {
-        vec![]
-    };
+    let authenticate_legs = vec![];
     Ok(ConnectorImpl::new(
         rate_limits,
         request_weight,
@@ -113,7 +108,7 @@ where
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
-        Some(time_resync(clock, Duration::from_secs(20))),
+        Some(time_sync(clock, Duration::from_secs(20))),
         Arc::new(AuthGate::default()),
     ))
 }
@@ -376,37 +371,14 @@ impl HasApiKey for BinanceCancelOrderParams {
     }
 }
 
-pub(crate) fn time_bootstrap_leg(
-    clock: Arc<Clock>,
-    timeout: Duration,
-) -> AuthenticateLeg<BinanceHttpUnsignedRequest, BinanceHttpRequest, BinanceHttpResponse> {
-    let resync = time_resync(clock, timeout);
-    let create_signer = {
-        let sync_clock = resync.sync_clock.clone();
-        Arc::new(
-            move |(message, round_trip_time)| -> EGResult<
-                Option<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>>,
-            > {
-                (sync_clock)((message, round_trip_time))?;
-                Ok(None)
-            },
-        )
-    };
-    AuthenticateLeg {
-        create_auth_attempt: resync.create_request,
-        timeout: resync.timeout,
-        create_signer,
-    }
-}
-
-/// The capability to re-sync the server clock from the unsigned
+/// The capability to sync the server clock from the unsigned
 /// `GET /api/v3/time` endpoint: a fresh `time` request whose response re-adopts
 /// the server's offset, so timestamps are stamped with the server clock even
 /// when the local clock is skewed beyond the recvWindow.
-fn time_resync(
+fn time_sync(
     clock: Arc<Clock>,
     timeout: Duration,
-) -> Resync<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
+) -> SyncClock<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
     let create_request = Arc::new(|| {
         let message = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         // HTTP is request/response, so the next response belongs to this
@@ -421,7 +393,7 @@ fn time_resync(
         });
         (message, filter)
     });
-    let sync_clock = {
+    let sync = {
         let clock = clock.clone();
         Arc::new(
             move |(message, round_trip_time): (BinanceHttpResponse, Duration)| -> EGResult<()> {
@@ -435,10 +407,10 @@ fn time_resync(
             },
         )
     };
-    Resync {
+    SyncClock {
         create_request,
         timeout,
-        sync_clock,
+        sync,
     }
 }
 
@@ -897,10 +869,10 @@ mod test {
     }
 
     #[test]
-    fn time_resync_syncs_the_server_clock() {
+    fn time_sync_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
-        let resync = time_resync(clock.clone(), Duration::from_secs(20));
-        let (message, filter) = (resync.create_request)();
+        let sync_clock = time_sync(clock.clone(), Duration::from_secs(20));
+        let (message, filter) = (sync_clock.create_request)();
         assert!(matches!(message, BinanceHttpUnsignedRequest::Time(..)));
         let local = clock.now_millis();
         let response =
@@ -908,7 +880,7 @@ mod test {
                 serverTime: local + 10_000,
             }));
         assert!(filter(&response));
-        (resync.sync_clock)((response, Duration::ZERO)).unwrap();
+        (sync_clock.sync)((response, Duration::ZERO)).unwrap();
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",
@@ -917,60 +889,18 @@ mod test {
     }
 
     #[test]
-    fn time_resync_surfaces_the_time_error() {
+    fn time_sync_surfaces_the_time_error() {
         let clock = Arc::new(Clock::default());
-        let resync = time_resync(clock, Duration::from_secs(20));
-        let (_, filter) = (resync.create_request)();
+        let sync_clock = time_sync(clock, Duration::from_secs(20));
+        let (_, filter) = (sync_clock.create_request)();
         let response = BinanceHttpResponse::Error(BinanceError {
             code: -1021,
             msg: "Timestamp for this request is outside of the recvWindow.".into(),
         });
         assert!(filter(&response));
-        let result = (resync.sync_clock)((response, Duration::ZERO));
+        let result = (sync_clock.sync)((response, Duration::ZERO));
         assert!(result.is_err(), "expected ApiError");
         let Err(EGError::ApiError { code, message }) = result else {
-            panic!("expected an ApiError");
-        };
-        assert_eq!(code, -1021);
-        assert!(message.contains("recvWindow"));
-    }
-
-    #[test]
-    fn time_bootstrap_leg_syncs_the_server_clock() {
-        let clock = Arc::new(Clock::default());
-        let leg = time_bootstrap_leg(clock.clone(), Duration::from_secs(20));
-        let (message, filter) = (leg.create_auth_attempt)();
-        assert!(matches!(message, BinanceHttpUnsignedRequest::Time(..)));
-        let local = clock.now_millis();
-        let response =
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(BinanceTimeResult {
-                serverTime: local + 10_000,
-            }));
-        assert!(filter(&response));
-        // The bootstrap records the server clock but installs no signer
-        // (`Ok(None)` keeps the signer the previous leg installed).
-        let signer = (leg.create_signer)((response, Duration::ZERO)).unwrap();
-        assert!(signer.is_none());
-        assert!(
-            clock.now_millis() >= local + 10_000,
-            "now: {}",
-            clock.now_millis()
-        );
-    }
-
-    #[test]
-    fn time_bootstrap_leg_surfaces_the_time_error() {
-        let clock = Arc::new(Clock::default());
-        let leg = time_bootstrap_leg(clock, Duration::from_secs(20));
-        let (_, filter) = (leg.create_auth_attempt)();
-        let response = BinanceHttpResponse::Error(BinanceError {
-            code: -1021,
-            msg: "Timestamp for this request is outside of the recvWindow.".into(),
-        });
-        assert!(filter(&response));
-        let signer = (leg.create_signer)((response, Duration::ZERO));
-        assert!(signer.is_err(), "expected ApiError");
-        let Err(EGError::ApiError { code, message }) = signer else {
             panic!("expected an ApiError");
         };
         assert_eq!(code, -1021);

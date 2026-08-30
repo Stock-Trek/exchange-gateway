@@ -12,7 +12,6 @@ use crate::{
         websocket_listener::WebsocketListener,
     },
     rate_limit::feedback::RateLimitFeedback,
-    resync::Resync,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
@@ -21,6 +20,7 @@ use crate::{
         data_signer, exchange_urls, id, order_weight, rate_limit_usage, rate_limits,
         sync_timestamp_fields,
     },
+    sync_clock::SyncClock,
     transports::{
         iris::IrisWebsocketClient, transport::Transport, websocket::WebsocketClientTrait,
         websocket::WebsocketTransport,
@@ -128,10 +128,7 @@ where
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        vec![
-            time_bootstrap_leg(clock.clone(), Duration::from_secs(20)),
-            authenticate_leg(api_key, clock.clone(), logon_timeout),
-        ]
+        vec![authenticate_leg(api_key, clock.clone(), logon_timeout)]
     } else {
         vec![]
     };
@@ -146,7 +143,7 @@ where
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
-        Some(time_resync(clock, Duration::from_secs(20))),
+        Some(time_sync(clock, Duration::from_secs(20))),
         auth_gate,
     ))
 }
@@ -240,41 +237,14 @@ fn rejected_response_error(message: &BinanceWebsocketResponse) -> EGResult<()> {
     Ok(())
 }
 
-pub(crate) fn time_bootstrap_leg(
-    clock: Arc<Clock>,
-    timeout: Duration,
-) -> AuthenticateLeg<
-    BinanceWebsocketUnsignedRequest,
-    BinanceWebsocketRequest,
-    BinanceWebsocketResponse,
-> {
-    let resync = time_resync(clock, timeout);
-    let create_signer = {
-        let sync_clock = resync.sync_clock.clone();
-        Arc::new(
-            move |(message, round_trip_time)| -> EGResult<
-                Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
-            > {
-                (sync_clock)((message, round_trip_time))?;
-                Ok(None)
-            },
-        )
-    };
-    AuthenticateLeg {
-        create_auth_attempt: resync.create_request,
-        timeout: resync.timeout,
-        create_signer,
-    }
-}
-
-/// The capability to re-sync the server clock from the unsigned WebSocket
+/// The capability to sync the server clock from the unsigned WebSocket
 /// `time` request: a fresh request (with its own id) whose response re-adopts
 /// the server's offset, so timestamps are stamped with the server clock even
 /// when the local clock is skewed beyond the recvWindow.
-fn time_resync(
+fn time_sync(
     clock: Arc<Clock>,
     timeout: Duration,
-) -> Resync<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse> {
+) -> SyncClock<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse> {
     let create_request = Arc::new(move || {
         let id = id();
         let message = time_bootstrap_message(&id);
@@ -282,7 +252,7 @@ fn time_resync(
             Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
         (message, filter)
     });
-    let sync_clock = {
+    let sync = {
         let clock = clock.clone();
         Arc::new(
             move |(message, round_trip_time): (BinanceWebsocketResponse, Duration)| -> EGResult<()> {
@@ -291,10 +261,10 @@ fn time_resync(
             },
         )
     };
-    Resync {
+    SyncClock {
         create_request,
         timeout,
-        sync_clock,
+        sync,
     }
 }
 
@@ -893,20 +863,16 @@ mod test {
     }
 
     #[test]
-    fn time_bootstrap_leg_syncs_the_server_clock() {
+    fn time_sync_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
-        let leg = time_bootstrap_leg(clock.clone(), Duration::from_secs(20));
-        let (message, filter) = (leg.create_auth_attempt)();
+        let sync_clock = time_sync(clock.clone(), Duration::from_secs(20));
+        let (message, filter) = (sync_clock.create_request)();
         assert!(matches!(
             message.params,
             BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {})
         ));
-        // The time bootstrap is unsigned: the request carries no payload to
-        // sign (the transport sends it without an API key).
-        assert!(matches!(
-            message.params,
-            BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {})
-        ));
+        // The time sync is unsigned: the request carries no payload to sign
+        // (the transport sends it without an API key).
         let id = message.metadata.id;
         let local = clock.now_millis();
         let response = BinanceWebsocketResponse {
@@ -919,10 +885,7 @@ mod test {
             status: 200,
         };
         assert!(filter(&response));
-        // The bootstrap records the server clock but installs no signer
-        // (`Ok(None)` keeps the signer the previous leg installed).
-        let signer = (leg.create_signer)((response, Duration::ZERO)).unwrap();
-        assert!(signer.is_none());
+        (sync_clock.sync)((response, Duration::ZERO)).unwrap();
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",
