@@ -79,6 +79,36 @@ where
     fn is_connected(&self) -> EGResult<bool> {
         Ok(self.transport.is_connected())
     }
+    async fn sync_clock(&self) -> EGResult<()> {
+        let (signed_message, weight, order_count, filter) = {
+            let (message, filter) = (self.sync_clock.create_request)();
+            let weight = (self.to_weight)(&message);
+            let order_count = (self.to_order_count)(&message);
+            self.check_rate_limits(&message)?;
+            let signed_message = match self.signed_request(message, false) {
+                Ok(signed_message) => signed_message,
+                Err(error) => {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                    return Err(error);
+                }
+            };
+            (signed_message, weight, order_count, filter)
+        };
+        let start = Instant::now();
+        let response = match self
+            .transport
+            .send_and_wait_for(signed_message, self.sync_clock.timeout, filter)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let _ = self.rate_limits.refund(weight, order_count);
+                return Err(error);
+            }
+        };
+        let round_trip_time = start.elapsed();
+        (self.sync_clock.sync)((response, round_trip_time))
+    }
     fn is_authenticated(&self) -> EGResult<bool> {
         if !self.transport.is_connected() {
             return Ok(false);
@@ -133,36 +163,6 @@ where
                 Err(error)
             }
         }
-    }
-    async fn sync_clock(&self) -> EGResult<()> {
-        let (signed_message, weight, order_count, filter) = {
-            let (message, filter) = (self.sync_clock.create_request)();
-            let weight = (self.to_weight)(&message);
-            let order_count = (self.to_order_count)(&message);
-            self.check_rate_limits(&message)?;
-            let signed_message = match self.signed_request(message, false) {
-                Ok(signed_message) => signed_message,
-                Err(error) => {
-                    let _ = self.rate_limits.refund(weight, order_count);
-                    return Err(error);
-                }
-            };
-            (signed_message, weight, order_count, filter)
-        };
-        let start = Instant::now();
-        let response = match self
-            .transport
-            .send_and_wait_for(signed_message, self.sync_clock.timeout, filter)
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                let _ = self.rate_limits.refund(weight, order_count);
-                return Err(error);
-            }
-        };
-        let round_trip_time = start.elapsed();
-        (self.sync_clock.sync)((response, round_trip_time))
     }
 }
 impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>

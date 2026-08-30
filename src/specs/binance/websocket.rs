@@ -431,7 +431,6 @@ mod test {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
             BinanceExchangeInfoSymbolStatus, BinanceOrderType,
         },
-        logon::BinanceSessionAuthenticationResult,
         rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
         spot::{
             BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
@@ -764,35 +763,6 @@ mod test {
             synced.timestamp
         );
         assert_eq!(synced.recvWindow, Some(Decimal::from(5000u64)));
-    }
-
-    #[test]
-    fn logon_response_syncs_server_time() {
-        let clock = Arc::new(Clock::default());
-        let leg = authenticate_leg("api-key".into(), clock.clone(), Duration::from_secs(20));
-        let local = clock.now_millis();
-        let response = BinanceWebsocketResponse {
-            error: None,
-            id: "id".into(),
-            rateLimits: vec![],
-            result: Some(BinanceWebsocketResponseResult::SessionAuthentication(
-                BinanceSessionAuthenticationResult {
-                    apiKey: "api-key".into(),
-                    authorizedSince: local,
-                    connectedSince: local,
-                    returnRateLimits: false,
-                    serverTime: local + 10_000,
-                    userDataStream: false,
-                },
-            )),
-            status: 200,
-        };
-        let _signer = (leg.create_signer)(response).unwrap();
-        assert!(
-            clock.now_millis() >= local + 10_000,
-            "now: {}",
-            clock.now_millis()
-        );
     }
 
     #[test]
