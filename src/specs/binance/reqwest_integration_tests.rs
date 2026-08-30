@@ -87,10 +87,8 @@ impl HttpClientTrait for MockHttpClient {
     ) -> EGResult<Self::TransportRes> {
         self.sent.lock().unwrap().push(message);
         if endpoint == "time" {
-            // The connect flow bootstraps the signer clock from the
-            // unsigned `time` endpoint before any signed request: answer
-            // it with the clock's view of server time, as the real
-            // exchange would.
+            // sync_clock hits the unsigned `time` endpoint: answer it with
+            // the clock's view of server time, as the real exchange would.
             let body = serde_json::to_vec(&BinanceHttpResponseResult::Time(BinanceTimeResult {
                 serverTime: self.clock.now_millis(),
             }))
@@ -111,9 +109,8 @@ impl HttpClientTrait for MockHttpClient {
 
 /// Builds an HTTP connector backed by the mock client, handing the caller
 /// a handle to the client so sent requests can be inspected. The mock
-/// reports the given clock as the server clock on `time` responses,
-/// mirroring the production bootstrap (a sync clock before any
-/// signed request).
+/// reports the given clock as the server clock on `time` responses, as the
+/// production exchange does.
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
     clock: Arc<Clock>,
@@ -155,10 +152,12 @@ async fn http_connector_sync_clock_syncs_the_server_clock() {
     let connector = mock_http_connector(client_tx, clock.clone()).unwrap();
     let client = client_rx.recv().unwrap();
 
+    // Connect establishes the transport only: clock syncing is
+    // user-invoked, so the clock is untouched until sync_clock is called.
     connector.connect().await.expect("connect should succeed");
-    assert!(!clock.should_sync(), "connect bootstraps the clock");
+    assert!(clock.should_sync(), "connect must not sync the clock");
 
-    // Sync clock issues a fresh unsigned time request and re-adopts the
+    // Sync clock issues a fresh unsigned time request and adopts the
     // server clock (the mock reports the clock's view of server time).
     connector
         .sync_clock()
@@ -169,9 +168,9 @@ async fn http_connector_sync_clock_syncs_the_server_clock() {
         "sync_clock must refresh the clock sync time"
     );
     let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 2, "connect time bootstrap + sync_clock");
+    assert_eq!(sent.len(), 1, "sync_clock");
     assert_eq!(
-        sent[1].query, None,
+        sent[0].query, None,
         "the sync_clock must be an unsigned time request"
     );
 }
