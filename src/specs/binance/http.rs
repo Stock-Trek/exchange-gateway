@@ -425,12 +425,12 @@ fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedba
 
 fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
     match request {
+        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => 4,
         BinanceHttpUnsignedRequest::AssetLimits(..) => 40,
-        BinanceHttpUnsignedRequest::ExchangeInfo(..) => 20,
-        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
-        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => 2,
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => 1,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => 1,
+        BinanceHttpUnsignedRequest::ExchangeInfo(..) => 20,
+        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
         BinanceHttpUnsignedRequest::Time(..) => 1,
     }
 }
@@ -545,7 +545,7 @@ mod test {
         // `/api/v3/myFilters` is a signed endpoint; a payload must exist.
         let request = BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
             recvWindow: None,
-            symbols: None,
+            symbol: "BNBUSDT".into(),
             timestamp: 1700000000000,
         });
         let payload =
@@ -603,7 +603,7 @@ mod test {
         let request = BinanceHttpRequest {
             params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
                 recvWindow: None,
-                symbols: None,
+                symbol: "BNBUSDT".into(),
                 timestamp: 1700000000000,
             }),
             signature: Some("signature".into()),
@@ -629,7 +629,7 @@ mod test {
         let request = BinanceHttpRequest {
             params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
                 recvWindow: None,
-                symbols: None,
+                symbol: "BNBUSDT".into(),
                 timestamp: 1700000000000,
             }),
             signature: Some("signature".into()),
@@ -810,7 +810,7 @@ mod test {
         assert_eq!(request_weight(&exchange_info), 20);
         let asset_limits = BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
             recvWindow: None,
-            symbols: None,
+            symbol: "BNBUSDT".into(),
             timestamp: 0,
         });
         assert_eq!(request_weight(&asset_limits), 40);

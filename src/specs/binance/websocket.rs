@@ -282,6 +282,9 @@ fn sync_timestamp(
             BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
             }
+            BinanceWebsocketUnsignedParams::AssetLimits(params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+            }
             BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => {
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
             }
@@ -321,6 +324,9 @@ fn unsigned_request_params_to_bytes(
 ) -> EGResult<Option<Vec<u8>>> {
     Ok(match &request.params {
         BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::AssetLimits(params) => {
             Some(params.query_params(true).into_bytes())
         }
         BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => {
@@ -370,7 +376,8 @@ fn session_params(params: BinanceWebsocketUnsignedParams) -> BinanceWebsocketUns
         // The `logon` (re-authentication goes through the full HMAC signer,
         // never the session signer) and the unsigned requests carry no
         // apiKey to strip.
-        params @ (BinanceWebsocketUnsignedParams::ExchangeInfo(..)
+        params @ (BinanceWebsocketUnsignedParams::AssetLimits(..)
+        | BinanceWebsocketUnsignedParams::ExchangeInfo(..)
         | BinanceWebsocketUnsignedParams::Logon(..)
         | BinanceWebsocketUnsignedParams::Time(..)) => params,
     }
@@ -386,10 +393,11 @@ fn response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitF
 
 fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     match &request.params {
-        BinanceWebsocketUnsignedParams::AmendOrderRequest(..) => 2,
+        BinanceWebsocketUnsignedParams::AmendOrderRequest(..) => 4,
+        BinanceWebsocketUnsignedParams::AssetLimits(..) => 40,
         BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(..) => 1,
         BinanceWebsocketUnsignedParams::CancelOrderRequest(..) => 1,
-        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 4,
+        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 20,
         BinanceWebsocketUnsignedParams::Logon(..) => 2,
         BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
         BinanceWebsocketUnsignedParams::Time(..) => 1,
