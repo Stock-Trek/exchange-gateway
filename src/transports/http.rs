@@ -147,12 +147,28 @@ where
             }
         };
         let header_feedback = self.client.rate_limit_feedback(&response_dto);
-        let response = self.try_convert_response(response_dto)?;
         let mut feedback = header_feedback;
-        let exchange_feedback = (self.feedback)(&response)?;
-        feedback.usage.extend(exchange_feedback.usage);
-        feedback.retry_after = feedback.retry_after.or(exchange_feedback.retry_after);
-        feedback.is_throttled |= exchange_feedback.is_throttled;
+        let response = match self.try_convert_response(response_dto) {
+            Ok(response) => {
+                let exchange_feedback = (self.feedback)(&response)?;
+                feedback.usage.extend(exchange_feedback.usage);
+                feedback.retry_after = feedback.retry_after.or(exchange_feedback.retry_after);
+                feedback.is_throttled |= exchange_feedback.is_throttled;
+                response
+            }
+            Err(error) => {
+                // The response body could not be converted (e.g. a 2xx
+                // response carrying an error body, which Binance maps to an
+                // API error). The transport-level header feedback (X-MBX-*
+                // usage) is still valid, so apply it before surfacing the
+                // conversion error.
+                self.rate_limits.apply_feedback(&feedback)?;
+                if feedback.has_retry_feedback() {
+                    return Err(EGError::RateLimited(feedback));
+                }
+                return Err(error);
+            }
+        };
         self.rate_limits.apply_feedback(&feedback)?;
         if feedback.has_retry_feedback() {
             return Err(EGError::RateLimited(feedback));
@@ -182,7 +198,7 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
 mod tests {
     use super::*;
     use crate::{
-        error::EGError,
+        error::{EGError, EGResult},
         listeners::listener::ListenerTrait,
         rate_limit::{
             feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
@@ -426,6 +442,47 @@ mod tests {
             .await
             .expect_err("retry feedback should be an error");
         assert!(matches!(error, EGError::RateLimited(..)));
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_applies_header_feedback_when_body_converts_to_error() {
+        // Regression test: Binance answers with a 2xx status and an error
+        // body (e.g. `{"code":-2015,"msg":"Invalid API-key."}`), which
+        // converts to an ApiError. The X-MBX-* header usage on that response
+        // must still be fed back to the local limiter.
+        let mut endpoints = HashMap::new();
+        endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
+        let rate_limits = rate_limits();
+        let transport = HttpTransport::new(
+            Arc::new(UsageClient),
+            Arc::new(Ok),
+            Arc::new(|_: TestRes| -> EGResult<TestRes> {
+                Err(EGError::ApiError {
+                    code: -2015,
+                    message: "Invalid API-key.".into(),
+                })
+            }),
+            Arc::new(NoopListener),
+            |_| HttpEndpoint::ExchangeInfo,
+            endpoints,
+            rate_limits.clone(),
+            |_: &TestRes| Ok(RateLimitFeedback::default()),
+        );
+        assert!(rate_limits.weight.did_acquire(40).unwrap());
+        let error = transport
+            .send_and_wait_for(
+                TestReq { id: 1 },
+                Duration::from_secs(5),
+                Arc::new(|_: &TestRes| true),
+            )
+            .await
+            .expect_err("2xx error body should surface as an ApiError");
+        assert!(matches!(error, EGError::ApiError { .. }));
+        // The usage reported by the server headers is applied even though
+        // the response body mapped to an error: remaining capacity is
+        // trimmed to 100 - 42 = 58.
+        assert!(rate_limits.weight.did_acquire(58).unwrap());
+        assert!(!rate_limits.weight.did_acquire(1).unwrap());
     }
 
     #[tokio::test]
