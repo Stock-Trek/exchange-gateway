@@ -373,12 +373,11 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
         .expect("disconnect should succeed");
     assert!(!connector.is_authenticated().unwrap());
 
-    // A signed send while the connection is down must fail fast: iris
-    // rejects sends with `ConnectionClosed` as soon as the connected flag
-    // is down, so the re-authentication logon never goes out and the
-    // order is never queued under a dead session. (Before the fix the
-    // stale check saw the old epoch, skipped re-auth, and queued the
-    // order under a dead session.)
+    // A signed send while the connection is down must fail fast with
+    // `NotAuthenticated`: authentication is user-invoked rather than
+    // automatic, so no re-authentication logon is attempted while the
+    // connection is down and the order is never queued under a dead
+    // session.
     let error = tokio::time::timeout(
         Duration::from_secs(1),
         connector.send(order_request(), true, Duration::from_secs(5)),
@@ -386,15 +385,7 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
     .await
     .expect("send while the connection is down should fail fast, not hang")
     .expect_err("send must fail while the connection is down");
-    assert!(matches!(
-        &error,
-        EGError::External(e)
-            if e
-                .downcast_ref::<iris::ConnectionError>()
-                .is_some_and(|error| {
-                    matches!(error, iris::ConnectionError::ConnectionClosed)
-                })
-    ));
+    assert!(matches!(error, EGError::NotAuthenticated));
     // Neither the logon nor the order was ever recorded: the fail-fast
     // happens before any message reaches the transport.
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
@@ -404,8 +395,8 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
     )));
     assert!(!connector.is_authenticated().unwrap());
 
-    // Once the connection comes back, the next signed send
-    // re-authenticates and goes out normally.
+    // Once the connection comes back, the user re-authenticates and the
+    // signed send goes out normally.
     client.connect().await.expect("reconnect should succeed");
     connector
         .authenticate()
@@ -437,10 +428,16 @@ async fn logon_weight_counts_against_weight_rate_limit() {
     .unwrap();
 
     connector.connect().await.expect("connect should succeed");
+    // Authentication is user-invoked, not automatic: the logon it sends
+    // consumes 2 of the 6000 weight budget.
+    connector
+        .authenticate()
+        .await
+        .expect("authentication should succeed");
 
-    // The logon consumes 2 of the 6000 weight budget; exchangeInfo costs 4,
-    // so exactly 1499 more requests fit in the remaining 5998. If the logon
-    // weight were not counted, a 1500th request would still fit.
+    // exchangeInfo costs 4, so exactly 1499 requests fit in the remaining
+    // 5998. If the logon weight were not counted, a 1500th request would
+    // still fit.
     for _ in 0..1499 {
         connector
             .send(exchange_info_request(), false, Duration::from_secs(5))
@@ -454,7 +451,7 @@ async fn logon_weight_counts_against_weight_rate_limit() {
 }
 
 #[tokio::test]
-async fn rejected_logon_fails_connect_and_does_not_leak_to_listener() {
+async fn rejected_logon_fails_authentication_and_does_not_leak_to_listener() {
     let (client_tx, _client_rx) = std::sync::mpsc::channel();
     let received = Arc::new(Mutex::new(Vec::new()));
     let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
@@ -474,13 +471,15 @@ async fn rejected_logon_fails_connect_and_does_not_leak_to_listener() {
     )
     .unwrap();
 
-    // The rejected logon must surface as the exchange's actual error
-    // (not EGError::TimedOut after the full 20 s logon timeout) and fail
-    // promptly.
-    let error = tokio::time::timeout(Duration::from_secs(1), connector.connect())
+    // Connect only establishes the transport; authentication is
+    // user-invoked, so the rejected logon surfaces from `authenticate` as
+    // the exchange's actual error (not EGError::TimedOut after the full
+    // 20 s logon timeout) and fails promptly.
+    connector.connect().await.expect("connect should succeed");
+    let error = tokio::time::timeout(Duration::from_secs(1), connector.authenticate())
         .await
         .expect("rejected logon should fail quickly, not time out")
-        .expect_err("connect should fail");
+        .expect_err("authentication should fail");
     match error {
         EGError::ApiError { code, message } => {
             assert_eq!(code, -2014);
@@ -533,16 +532,22 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
     // Hold logon responses so the next re-authentication stays in flight.
     logon_gate.block.store(true, Ordering::SeqCst);
 
-    // The first signed send starts re-authentication and blocks on the
-    // held logon response.
-    let first = {
-        let connector = connector.clone();
-        tokio::spawn(async move {
-            connector
-                .send(order_request(), true, Duration::from_secs(5))
-                .await
+    // Authentication is user-invoked, so each concurrent signed send
+    // re-authenticates before sending. The first one starts the
+    // re-authentication logon and blocks on the held logon response; the
+    // others wait for the in-flight attempt instead of starting a second
+    // one.
+    let sends = (0..3)
+        .map(|_| {
+            let connector = connector.clone();
+            tokio::spawn(async move {
+                connector.authenticate().await?;
+                connector
+                    .send(order_request(), true, Duration::from_secs(5))
+                    .await
+            })
         })
-    };
+        .collect::<Vec<_>>();
     wait_until(|| logon_count(&client.sent.lock().unwrap()) == 2)
         .await
         .expect("re-authentication logon should be in flight");
@@ -551,25 +556,6 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
         2,
         "re-authentication logon should be in flight"
     );
-
-    // Two more signed sends arrive while authentication is in flight:
-    // they must wait for it to finish instead of starting a second one.
-    let second = {
-        let connector = connector.clone();
-        tokio::spawn(async move {
-            connector
-                .send(order_request(), true, Duration::from_secs(5))
-                .await
-        })
-    };
-    let third = {
-        let connector = connector.clone();
-        tokio::spawn(async move {
-            connector
-                .send(order_request(), true, Duration::from_secs(5))
-                .await
-        })
-    };
     // Give the concurrent sends a chance to wrongly start a second
     // authentication by driving the clock forward instead of sleeping.
     with_paused_clock(async {
@@ -588,18 +574,11 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
     logon_gate.block.store(false, Ordering::SeqCst);
     logon_gate.release.notify_one();
 
-    first
-        .await
-        .expect("first send task should not panic")
-        .expect("first send should succeed");
-    second
-        .await
-        .expect("second send task should not panic")
-        .expect("second send should succeed");
-    third
-        .await
-        .expect("third send task should not panic")
-        .expect("third send should succeed");
+    for send in sends {
+        send.await
+            .expect("send task should not panic")
+            .expect("send should succeed");
+    }
 
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
     assert!(connector.is_authenticated().unwrap());
@@ -621,25 +600,17 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
 #[tokio::test]
 async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let logon_gate = LogonGate {
-        block: Arc::new(AtomicBool::new(false)),
-        release: Arc::new(tokio::sync::Notify::new()),
-        fail: Arc::new(AtomicBool::new(false)),
-    };
     let received = Arc::new(Mutex::new(Vec::new()));
     let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
         Arc::new(RecordingListener {
             received: received.clone(),
         });
-    // A short logon waiter: if the reconnecting logon were buffered for
-    // the fresh connection it would time out after 50 ms, but fail-fast
-    // rejects it immediately, so the waiter never gets a chance to fire.
     let connector = Arc::new(
         mock_session_connector(
             client_tx,
-            Some(logon_gate.clone()),
             None,
-            Duration::from_millis(50),
+            None,
+            Duration::from_secs(20),
             listener,
             Arc::new(Clock::default()),
         )
@@ -662,10 +633,9 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
         .expect("disconnect should succeed");
     assert!(!connector.is_authenticated().unwrap());
 
-    // A signed send while the connection is down must fail fast: iris
-    // rejects the logon with `ConnectionClosed` instead of buffering it
-    // for the fresh connection, so the send fails immediately rather than
-    // waiting out its logon timeout, and no logon is left queued to
+    // A signed send while the connection is down must fail fast with
+    // `NotAuthenticated`: authentication is user-invoked, so no logon is
+    // attempted for the dead connection and nothing is left queued to
     // resolve (or confuse) a later authentication.
     let error = tokio::time::timeout(
         Duration::from_secs(1),
@@ -673,29 +643,26 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
     )
     .await
     .expect("send while reconnecting should fail fast, not hang until its timeout")
-    .expect_err("the failed logon must fail the send");
-    assert!(matches!(
-        &error,
-        EGError::External(e)
-            if e
-                .downcast_ref::<iris::ConnectionError>()
-                .is_some_and(|error| {
-                    matches!(error, iris::ConnectionError::ConnectionClosed)
-                })
-    ));
+    .expect_err("the stale session must fail the send");
+    assert!(matches!(error, EGError::NotAuthenticated));
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
     assert!(!connector.is_authenticated().unwrap());
 
     // The connection comes back and the session is stale again, so the
-    // next signed send starts a fresh authentication attempt with a logon
-    // id distinct from the initial one.
+    // user's next authentication sends a fresh logon with an id distinct
+    // from the initial one, and the signed send goes out normally.
     client.connect().await.expect("reconnect should succeed");
     let retried_send = {
         let connector = connector.clone();
         tokio::spawn(async move {
             connector
+                .authenticate()
+                .await
+                .expect("authentication should succeed");
+            connector
                 .send(order_request(), true, Duration::from_secs(5))
                 .await
+                .expect("the retried send should succeed against its own logon")
         })
     };
     wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 2)
@@ -716,17 +683,12 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
         "each authentication attempt must use a fresh logon id"
     );
 
-    // The retried attempt's own logon response resolves its waiter and
-    // the send completes normally.
-    retried_send
-        .await
-        .expect("send task should not panic")
-        .expect("the retried send should succeed against its own logon");
+    retried_send.await.expect("send task should not panic");
     assert!(connector.is_authenticated().unwrap());
 
-    // No logon response leaked to the user's listener: the reconnecting
-    // logon was never accepted (so it has no response to deliver), and
-    // the retried logon was consumed by its own waiter.
+    // No logon response leaked to the user's listener: the failed send
+    // never attempted a logon for the dead connection, and the retried
+    // logon was consumed by its own waiter.
     assert!(
         received.lock().unwrap().is_empty(),
         "logon responses must not leak to the delegate listener"
@@ -734,29 +696,36 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
 }
 
 #[tokio::test]
-async fn connect_immediately_syncs_the_server_clock() {
+async fn sync_clock_syncs_the_server_clock() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = Clock::default();
-    // The server clock is 10 s ahead of the local clock: a logon signed
-    // with the raw local clock would be rejected with -1021.
-    let local = Clock::default().now_millis();
-    clock.sync(local + 10_000, Duration::ZERO);
+    let clock = Arc::new(Clock::default());
     let connector = mock_session_connector(
         client_tx,
         None,
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
-        // The server clock is 10 s ahead of the local clock: a logon signed
-        // with the raw local clock would be rejected with -1021.
-        Arc::new(clock),
+        clock.clone(),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
 
+    // Connect establishes the transport only: clock syncing is
+    // user-invoked, so nothing is sent and the clock still needs a sync.
     connector.connect().await.expect("connect should succeed");
+    assert!(client.sent.lock().unwrap().is_empty());
+    assert!(clock.should_sync(), "connect must not sync the clock");
 
-    // The very first message is the unsigned `sync clock`
+    connector
+        .sync_clock()
+        .await
+        .expect("sync_clock should succeed");
+    assert!(
+        !clock.should_sync(),
+        "sync_clock must refresh the clock sync time"
+    );
+
+    // The sync clock message is the unsigned `time` request.
     let sent = client.sent.lock().unwrap();
     assert_eq!(sent.len(), 1, "sync clock");
     assert!(matches!(
@@ -765,7 +734,7 @@ async fn connect_immediately_syncs_the_server_clock() {
     ));
     assert!(
         sent[0].params.signature.is_none(),
-        "the time bootstrap must be unsigned"
+        "the time request must be unsigned"
     );
 }
 
@@ -785,17 +754,22 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
+    // Authentication is user-invoked, not automatic.
+    connector
+        .authenticate()
+        .await
+        .expect("authentication should succeed");
     assert!(connector.is_authenticated().unwrap());
-    assert_eq!(client.sent.lock().unwrap().len(), 1, "sync clock");
+    assert_eq!(client.sent.lock().unwrap().len(), 1, "logon");
 
     connector
         .sync_clock()
         .await
         .expect("sync_clock should succeed");
     let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 2, "sync_clock + fresh sync_clock");
+    assert_eq!(sent.len(), 2, "logon + sync_clock");
     // The sync is a fresh unsigned time request, matched by its own id
-    // rather than the one from connect.
+    // rather than tied to the authentication logon.
     let sync_clock = &sent[1];
     assert!(
         matches!(sync_clock.metadata.method, BinanceWebsocketMethodName::Time),
