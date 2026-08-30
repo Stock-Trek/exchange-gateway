@@ -17,8 +17,7 @@ use crate::{
         message_signer::MessageSigner, signer::Signer,
     },
     specs::binance::common::{
-        data_signer, exchange_urls, id, order_weight, rate_limit_usage, rate_limits,
-        sync_timestamp_fields,
+        data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
     },
     sync_clock::SyncClock,
     transports::{
@@ -399,7 +398,7 @@ fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
         BinanceWebsocketUnsignedParams::CancelOrderRequest(..) => 1,
         BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 20,
         BinanceWebsocketUnsignedParams::Logon(..) => 2,
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(..) => 1,
         BinanceWebsocketUnsignedParams::Time(..) => 1,
     }
 }

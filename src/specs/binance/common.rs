@@ -8,9 +8,8 @@ use crate::{
     sign::encrypt::{data_signer::DataSigner, signing_algorithm::SigningAlgorithm},
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
-use exchange_types::binance::{
-    rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
-    spot::BinanceSpotOrderParams,
+use exchange_types::binance::rate_limits::{
+    BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType,
 };
 use rust_decimal::Decimal;
 use secrecy::SecretString;
@@ -97,18 +96,6 @@ fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128>
         BinanceRateLimitInterval::DAY => 24 * 60 * 60,
     };
     Some(Duration::from_secs(secs).as_nanos())
-}
-
-pub(crate) fn order_weight(params: &BinanceSpotOrderParams) -> u32 {
-    if params.icebergQty.is_some()
-        || params.trailingDelta.is_some()
-        || params.pegPriceType.is_some()
-        || params.pegOffsetValue.is_some()
-    {
-        2
-    } else {
-        1
-    }
 }
 
 pub(crate) fn id() -> String {

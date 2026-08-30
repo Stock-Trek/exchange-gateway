@@ -14,7 +14,7 @@ use crate::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
     },
-    specs::binance::common::{data_signer, order_weight, rate_limit_usage, sync_timestamp_fields},
+    specs::binance::common::{data_signer, rate_limit_usage, sync_timestamp_fields},
     specs::binance::common::{exchange_urls, rate_limits},
     sync_clock::SyncClock,
     transports::http::{HttpClientTrait, HttpEndpoint},
@@ -430,7 +430,7 @@ fn request_weight(request: &BinanceHttpUnsignedRequest) -> u32 {
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => 1,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => 1,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => 20,
-        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => order_weight(params),
+        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => 1,
         BinanceHttpUnsignedRequest::Time(..) => 1,
     }
 }
