@@ -73,8 +73,37 @@ where
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await?;
-        <Self as Connector<ExternalReq, ExternalRes>>::sync_clock(self).await?;
-        self.authenticate().await
+        <Self as Connector<ExternalReq, ExternalRes>>::sync_clock(self).await
+    }
+    async fn authenticate(&self) -> EGResult<()> {
+        let Some(credentials) = &self.credentials else {
+            return Ok(());
+        };
+        loop {
+            if !self.is_authentication_stale()? {
+                return Ok(());
+            }
+            let guard = match self.auth_gate.acquire()? {
+                AuthGateAcquisition::Acquired(guard) => guard,
+                AuthGateAcquisition::Blocked(on_complete) => {
+                    on_complete.wait().await?;
+                    continue;
+                }
+            };
+            let result = self.run_authentication(credentials).await;
+            if result.is_ok() {
+                guard.complete();
+            }
+            match result {
+                Err(error) => return Err(error),
+                Ok(()) => {
+                    if self.is_authentication_stale()? {
+                        continue;
+                    }
+                    return Ok(());
+                }
+            }
+        }
     }
     fn is_connected(&self) -> EGResult<bool> {
         Ok(self.transport.is_connected())
@@ -129,7 +158,7 @@ where
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
         if signed && self.is_authentication_stale()? {
-            self.authenticate().await?;
+            return Err(EGError::NotAuthenticated);
         }
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
@@ -208,36 +237,6 @@ where
             sync_clock,
             signer: Arc::new(Mutex::new(None)),
             auth_gate,
-        }
-    }
-    async fn authenticate(&self) -> EGResult<()> {
-        let Some(credentials) = &self.credentials else {
-            return Ok(());
-        };
-        loop {
-            if !self.is_authentication_stale()? {
-                return Ok(());
-            }
-            let guard = match self.auth_gate.acquire()? {
-                AuthGateAcquisition::Acquired(guard) => guard,
-                AuthGateAcquisition::Blocked(on_complete) => {
-                    on_complete.wait().await?;
-                    continue;
-                }
-            };
-            let result = self.run_authentication(credentials).await;
-            if result.is_ok() {
-                guard.complete();
-            }
-            match result {
-                Err(error) => return Err(error),
-                Ok(()) => {
-                    if self.is_authentication_stale()? {
-                        continue;
-                    }
-                    return Ok(());
-                }
-            }
         }
     }
 
