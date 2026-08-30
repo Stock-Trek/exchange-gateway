@@ -15,8 +15,8 @@ pub mod functions;
 pub mod listeners;
 pub mod rate_limit;
 pub mod sign;
-pub mod sync_clock;
 mod specs;
+pub mod sync_clock;
 mod transports;
 pub mod urls;
 

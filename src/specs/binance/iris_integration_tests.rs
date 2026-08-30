@@ -893,7 +893,10 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
         "time bootstrap + logon"
     );
 
-    connector.sync_clock().await.expect("sync_clock should succeed");
+    connector
+        .sync_clock()
+        .await
+        .expect("sync_clock should succeed");
     let sent = client.sent.lock().unwrap();
     assert_eq!(sent.len(), 3, "time bootstrap + logon + sync_clock");
     // The sync is a fresh unsigned time request, matched by its own id

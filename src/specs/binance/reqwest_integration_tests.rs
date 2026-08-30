@@ -204,7 +204,10 @@ async fn http_connector_sync_clock_syncs_the_server_clock() {
 
     // Sync clock issues a fresh unsigned time request and re-adopts the
     // server clock (the mock reports the clock's view of server time).
-    connector.sync_clock().await.expect("sync_clock should succeed");
+    connector
+        .sync_clock()
+        .await
+        .expect("sync_clock should succeed");
     assert!(
         !clock.should_sync(),
         "sync_clock must refresh the clock sync time"
