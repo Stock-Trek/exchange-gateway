@@ -118,7 +118,7 @@ where
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
             .is_some();
-        Ok(has_signer && !self.session_is_stale()?)
+        Ok(has_signer && !self.is_authentication_stale()?)
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
@@ -128,7 +128,7 @@ where
         self.transport.disconnect().await
     }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
-        if signed && self.session_is_stale()? {
+        if signed && self.is_authentication_stale()? {
             self.authenticate().await?;
         }
         let (signed_request, weight, order_count) = {
@@ -214,7 +214,7 @@ where
             return Ok(());
         };
         loop {
-            if !self.session_is_stale()? {
+            if !self.is_authentication_stale()? {
                 return Ok(());
             }
             let guard = match self.auth_gate.acquire()? {
@@ -231,7 +231,7 @@ where
             match result {
                 Err(error) => return Err(error),
                 Ok(()) => {
-                    if self.session_is_stale()? {
+                    if self.is_authentication_stale()? {
                         continue;
                     }
                     return Ok(());
@@ -279,7 +279,7 @@ where
         }
         Ok(())
     }
-    fn session_is_stale(&self) -> EGResult<bool> {
+    fn is_authentication_stale(&self) -> EGResult<bool> {
         let has_signer = self
             .signer
             .lock()
