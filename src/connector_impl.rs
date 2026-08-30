@@ -32,13 +32,13 @@ pub struct ConnectorImpl<
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-    sync_timestamp: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+    sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-    sync_clock: Option<SyncClock<EGUnsignedReq, EGRes>>,
+    sync_clock: SyncClock<EGUnsignedReq, EGRes>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
 }
@@ -104,7 +104,7 @@ where
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             let unsigned = if signed {
-                (self.sync_timestamp)(unsigned)?
+                (self.sync_timestamp_fields)(unsigned)?
             } else {
                 unsigned
             };
@@ -135,11 +135,8 @@ where
         }
     }
     async fn sync_clock(&self) -> EGResult<()> {
-        let Some(sync_clock) = &self.sync_clock else {
-            return Ok(());
-        };
         let (signed_message, weight, order_count, filter) = {
-            let (message, filter) = (sync_clock.create_request)();
+            let (message, filter) = (self.sync_clock.create_request)();
             let weight = (self.to_weight)(&message);
             let order_count = (self.to_order_count)(&message);
             self.check_rate_limits(&message)?;
@@ -155,7 +152,7 @@ where
         let start = Instant::now();
         let response = match self
             .transport
-            .send_and_wait_for(signed_message, sync_clock.timeout, filter)
+            .send_and_wait_for(signed_message, self.sync_clock.timeout, filter)
             .await
         {
             Ok(response) => response,
@@ -165,7 +162,7 @@ where
             }
         };
         let round_trip_time = start.elapsed();
-        (sync_clock.sync)((response, round_trip_time))
+        (self.sync_clock.sync)((response, round_trip_time))
     }
 }
 impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
@@ -187,13 +184,13 @@ where
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-        sync_timestamp: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+        sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-        sync_clock: Option<SyncClock<EGUnsignedReq, EGRes>>,
+        sync_clock: SyncClock<EGUnsignedReq, EGRes>,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
@@ -201,7 +198,7 @@ where
             to_weight,
             to_order_count,
             to_unsigned_request,
-            sync_timestamp,
+            sync_timestamp_fields,
             transport,
             null_signer,
             credentials,
@@ -260,7 +257,6 @@ where
                 };
                 (signed_auth_message, weight, order_count, filter)
             };
-            let start = Instant::now();
             let authentication_response = match self
                 .transport
                 .send_and_wait_for(signed_auth_message, leg.timeout, filter)
@@ -272,8 +268,7 @@ where
                     return Err(error);
                 }
             };
-            let request_duration = start.elapsed();
-            signer = match (leg.create_signer)((authentication_response, request_duration))? {
+            signer = match (leg.create_signer)(authentication_response)? {
                 Some(next_signer) => next_signer,
                 None => signer,
             };

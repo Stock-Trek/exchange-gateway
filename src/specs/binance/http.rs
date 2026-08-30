@@ -80,9 +80,6 @@ where
 {
     let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
         Arc::new(ConvertListener::new(to_external_response, listener));
-    // AssetLimits (`myFilters`) is a USER_DATA endpoint whose params carry no
-    // `apiKey` field, so its X-MBX-APIKEY header is supplied from the
-    // connector's credentials instead of the request params.
     let api_key = credentials
         .as_ref()
         .map(|credentials| credentials.api_key.clone());
@@ -108,7 +105,7 @@ where
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
-        Some(time_sync(clock, Duration::from_secs(20))),
+        sync_clock(clock, Duration::from_secs(20)),
         Arc::new(AuthGate::default()),
     ))
 }
@@ -371,19 +368,12 @@ impl HasApiKey for BinanceCancelOrderParams {
     }
 }
 
-/// The capability to sync the server clock from the unsigned
-/// `GET /api/v3/time` endpoint: a fresh `time` request whose response re-adopts
-/// the server's offset, so timestamps are stamped with the server clock even
-/// when the local clock is skewed beyond the recvWindow.
-fn time_sync(
+fn sync_clock(
     clock: Arc<Clock>,
     timeout: Duration,
 ) -> SyncClock<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
     let create_request = Arc::new(|| {
         let message = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
-        // HTTP is request/response, so the next response belongs to this
-        // request: accept a Time result (to sync) or an error response (to
-        // surface the exchange's error).
         let filter: ArcPredicate<BinanceHttpResponse> = Arc::new(|response| {
             matches!(
                 response,
@@ -397,13 +387,17 @@ fn time_sync(
         let clock = clock.clone();
         Arc::new(
             move |(message, round_trip_time): (BinanceHttpResponse, Duration)| -> EGResult<()> {
-                http_time_response_error(&message)?;
-                if let BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(result)) =
-                    &message
-                {
-                    clock.sync(result.serverTime, round_trip_time);
+                match message {
+                    BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(result)) => {
+                        clock.sync(result.serverTime, round_trip_time);
+                        Ok(())
+                    }
+                    BinanceHttpResponse::Error(error) => Err(EGError::ApiError {
+                        code: error.code,
+                        message: error.msg.clone(),
+                    }),
+                    _ => Err(EGError::BadResponse),
                 }
-                Ok(())
             },
         )
     };
@@ -412,16 +406,6 @@ fn time_sync(
         timeout,
         sync,
     }
-}
-
-fn http_time_response_error(message: &BinanceHttpResponse) -> EGResult<()> {
-    if let BinanceHttpResponse::Error(error) = message {
-        return Err(EGError::ApiError {
-            code: error.code,
-            message: error.msg.clone(),
-        });
-    }
-    Ok(())
 }
 
 fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
@@ -871,7 +855,7 @@ mod test {
     #[test]
     fn time_sync_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
-        let sync_clock = time_sync(clock.clone(), Duration::from_secs(20));
+        let sync_clock = sync_clock(clock.clone(), Duration::from_secs(20));
         let (message, filter) = (sync_clock.create_request)();
         assert!(matches!(message, BinanceHttpUnsignedRequest::Time(..)));
         let local = clock.now_millis();
@@ -891,7 +875,7 @@ mod test {
     #[test]
     fn time_sync_surfaces_the_time_error() {
         let clock = Arc::new(Clock::default());
-        let sync_clock = time_sync(clock, Duration::from_secs(20));
+        let sync_clock = sync_clock(clock, Duration::from_secs(20));
         let (_, filter) = (sync_clock.create_request)();
         let response = BinanceHttpResponse::Error(BinanceError {
             code: -1021,
