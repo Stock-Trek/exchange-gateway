@@ -72,8 +72,7 @@ where
     EGRes: Send + Sync + 'static,
 {
     async fn connect(&self) -> EGResult<()> {
-        self.transport.connect().await?;
-        <Self as Connector<ExternalReq, ExternalRes>>::sync_clock(self).await
+        self.transport.connect().await
     }
     async fn authenticate(&self) -> EGResult<()> {
         let Some(credentials) = &self.credentials else {
