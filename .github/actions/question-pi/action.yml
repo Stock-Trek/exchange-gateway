@@ -29,7 +29,7 @@ runs:
         JSON_OUTPUT_FILE=$(mktemp)
         PI_RESPONSE=$(pi \
           --provider deepseek \
-          --model deepseek-v4-pro \
+          --model deepseek-v4-flash \
           --tools read,bash,grep,find,ls,json_output \
           --json-schema "${SCHEMA}" \
           --json-fallback force \
