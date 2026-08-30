@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::error::EGError;
 use crate::{
     clock::Clock,
     error::EGResult,
@@ -100,6 +102,27 @@ fn rate_limit_interval_nanos(interval: BinanceRateLimitInterval) -> Option<u128>
 
 pub(crate) fn id() -> String {
     Uuid::new_v4().to_string()
+}
+
+/// Live-test helper: whether `error` means the Binance testnet is not
+/// reachable from the current network, e.g. because Binance geo-blocks the
+/// region (answering 451 with a terms-of-service eligibility message) or the
+/// connection itself failed (DNS, TLS, timeout). Live tests skip rather than
+/// fail on these, so the suite stays green on restricted CI runners while
+/// still genuinely exercising the connectors wherever the testnet is
+/// reachable.
+#[cfg(test)]
+pub(crate) fn testnet_unreachable(error: &EGError) -> bool {
+    match error {
+        // Binance answers 451 to geo-blocked regions.
+        EGError::HttpError { status: 451, .. } => true,
+        // Transport failures (DNS, TLS, connection refused, timeout) mean
+        // the testnet cannot be reached from this network at all.
+        EGError::External(_) | EGError::TimedOut => true,
+        // Business rejections (ApiError etc.) are genuine responses from the
+        // exchange and must fail the test rather than skip it.
+        _ => false,
+    }
 }
 
 #[cfg(test)]

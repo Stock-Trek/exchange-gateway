@@ -9,11 +9,15 @@ use crate::{
         feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
-    specs::binance::{common::rate_limits, http::connector_with_client},
+    specs::binance::{
+        common::{rate_limits, testnet_unreachable},
+        http::{connector, connector_with_client},
+    },
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},
     },
+    urls::TradingMode,
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
@@ -384,4 +388,54 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
         .await;
     assert!(matches!(result, Err(EGError::RateLimited { .. })));
     assert_eq!(client.sent.lock().unwrap().len(), 2);
+}
+
+/// Live test against the Binance spot testnet: builds the HTTP connector in
+/// paper-trading mode and syncs the server clock through the public
+/// `GET /api/v3/time` endpoint, proving the connector works end to end
+/// against a real exchange.
+///
+/// Binance geo-blocks some regions (the testnet answers 451 with a
+/// terms-of-service eligibility message), so when the testnet is unreachable
+/// from the runner the test reports a skip instead of failing: the suite
+/// stays green on restricted networks while still genuinely exercising the
+/// connector wherever the testnet is reachable.
+#[tokio::test]
+async fn live_testnet_http_connector_syncs_the_clock() {
+    let clock = Arc::new(Clock::default());
+    let listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
+        Arc::new(IgnoreHttpListener);
+    let to_unsigned_request: ArcTryConvertValue<
+        BinanceHttpUnsignedRequest,
+        BinanceHttpUnsignedRequest,
+    > = Arc::new(Ok);
+    let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
+        Arc::new(Ok);
+    let connector = connector(
+        TradingMode::Paper,
+        to_unsigned_request,
+        to_external_response,
+        listener,
+        None,
+        clock.clone(),
+    )
+    .expect("the connector should build");
+
+    connector.connect().await.expect("connect should succeed");
+    match connector.sync_clock().await {
+        Ok(()) => {
+            assert!(
+                !clock.should_sync(),
+                "sync_clock must adopt the testnet server clock"
+            );
+        }
+        Err(error) if testnet_unreachable(&error) => {
+            eprintln!("skipping live testnet HTTP test: {error:?}");
+        }
+        Err(error) => panic!("live testnet HTTP sync_clock failed: {error:?}"),
+    }
+    connector
+        .disconnect()
+        .await
+        .expect("disconnect should succeed");
 }

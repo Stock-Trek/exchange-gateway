@@ -5,8 +5,12 @@ use crate::{
     error::{EGError, EGResult},
     functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
-    specs::binance::websocket::connector_with_client_factory,
-    transports::websocket::WebsocketClientTrait,
+    specs::binance::{
+        common::testnet_unreachable,
+        websocket::{connector, connector_with_client_factory},
+    },
+    transports::{iris::default_config, websocket::WebsocketClientTrait},
+    urls::TradingMode,
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
@@ -779,4 +783,59 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
         sync_clock.params.signature.is_none(),
         "the sync_clock request must be unsigned"
     );
+}
+
+/// Live test against the Binance spot testnet: builds the WebSocket
+/// connector in paper-trading mode with the session disabled (only the
+/// public `time` request is used, so no API key is needed) and syncs the
+/// server clock, proving the connector works end to end against a real
+/// exchange.
+///
+/// Binance geo-blocks some regions (the testnet answers 451 with a
+/// terms-of-service eligibility message), so when the testnet is unreachable
+/// from the runner the test reports a skip instead of failing: the suite
+/// stays green on restricted networks while still genuinely exercising the
+/// connector wherever the testnet is reachable.
+#[tokio::test]
+async fn live_testnet_websocket_connector_syncs_the_clock() {
+    let clock = Arc::new(Clock::default());
+    let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
+        Arc::new(IgnoreListener);
+    let to_unsigned_request: ArcTryConvertValue<
+        BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketUnsignedRequest,
+    > = Arc::new(Ok);
+    let to_external_response: ArcTryConvertValue<
+        BinanceWebsocketResponse,
+        BinanceWebsocketResponse,
+    > = Arc::new(Ok);
+    let connector = connector(
+        TradingMode::Paper,
+        to_unsigned_request,
+        to_external_response,
+        listener,
+        None,
+        false,
+        default_config(),
+        clock.clone(),
+    )
+    .expect("the connector should build");
+
+    connector.connect().await.expect("connect should succeed");
+    match connector.sync_clock().await {
+        Ok(()) => {
+            assert!(
+                !clock.should_sync(),
+                "sync_clock must adopt the testnet server clock"
+            );
+        }
+        Err(error) if testnet_unreachable(&error) => {
+            eprintln!("skipping live testnet WebSocket test: {error:?}");
+        }
+        Err(error) => panic!("live testnet WebSocket sync_clock failed: {error:?}"),
+    }
+    connector
+        .disconnect()
+        .await
+        .expect("disconnect should succeed");
 }
