@@ -279,9 +279,6 @@ fn sync_timestamp(
 ) -> ArcTryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketUnsignedRequest> {
     Arc::new(move |mut request| {
         match &mut request.params {
-            BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
-            }
             BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
             }
@@ -293,6 +290,9 @@ fn sync_timestamp(
             }
             BinanceWebsocketUnsignedParams::Logon(params) => {
                 params.timestamp = clock.now_millis();
+            }
+            BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
             }
             BinanceWebsocketUnsignedParams::ExchangeInfo(..)
             | BinanceWebsocketUnsignedParams::Time(..) => {}
@@ -320,13 +320,6 @@ fn unsigned_request_params_to_bytes(
     request: &BinanceWebsocketUnsignedRequest,
 ) -> EGResult<Option<Vec<u8>>> {
     Ok(match &request.params {
-        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => None,
-        BinanceWebsocketUnsignedParams::Logon(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
         BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
             Some(params.query_params(true).into_bytes())
         }
@@ -334,6 +327,13 @@ fn unsigned_request_params_to_bytes(
             Some(params.query_params(true).into_bytes())
         }
         BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => None,
+        BinanceWebsocketUnsignedParams::Logon(params) => {
+            Some(params.query_params(true).into_bytes())
+        }
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
             Some(params.query_params(true).into_bytes())
         }
         BinanceWebsocketUnsignedParams::Time(..) => None,
@@ -370,8 +370,8 @@ fn session_params(params: BinanceWebsocketUnsignedParams) -> BinanceWebsocketUns
         // The `logon` (re-authentication goes through the full HMAC signer,
         // never the session signer) and the unsigned requests carry no
         // apiKey to strip.
-        params @ (BinanceWebsocketUnsignedParams::Logon(..)
-        | BinanceWebsocketUnsignedParams::ExchangeInfo(..)
+        params @ (BinanceWebsocketUnsignedParams::ExchangeInfo(..)
+        | BinanceWebsocketUnsignedParams::Logon(..)
         | BinanceWebsocketUnsignedParams::Time(..)) => params,
     }
 }
@@ -386,12 +386,12 @@ fn response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitF
 
 fn request_weight(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     match &request.params {
-        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 4,
-        BinanceWebsocketUnsignedParams::Logon(..) => 2,
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
         BinanceWebsocketUnsignedParams::AmendOrderRequest(..) => 2,
         BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(..) => 1,
         BinanceWebsocketUnsignedParams::CancelOrderRequest(..) => 1,
+        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 4,
+        BinanceWebsocketUnsignedParams::Logon(..) => 2,
+        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => order_weight(params),
         BinanceWebsocketUnsignedParams::Time(..) => 1,
     }
 }

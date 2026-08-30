@@ -218,24 +218,24 @@ fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
 
 fn request_to_endpoint(request: &BinanceHttpRequest) -> HttpEndpoint {
     match request.params {
+        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => HttpEndpoint::AmendOrder,
         BinanceHttpUnsignedRequest::AssetLimits(..) => HttpEndpoint::AssetLimits,
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => HttpEndpoint::ExchangeInfo,
-        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => HttpEndpoint::PlaceOrder,
-        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => HttpEndpoint::AmendOrder,
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => HttpEndpoint::CancelAllOrders,
         BinanceHttpUnsignedRequest::CancelOrderRequest(..) => HttpEndpoint::CancelOrder,
+        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => HttpEndpoint::PlaceOrder,
         BinanceHttpUnsignedRequest::Time(..) => HttpEndpoint::Time,
     }
 }
 
 fn endpoints() -> HashMap<HttpEndpoint, String> {
     let mut endpoints = HashMap::new();
+    endpoints.insert(HttpEndpoint::AmendOrder, "order/amend/keepPriority".into());
     endpoints.insert(HttpEndpoint::AssetLimits, "myFilters".into());
-    endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
-    endpoints.insert(HttpEndpoint::PlaceOrder, "order".into());
-    endpoints.insert(HttpEndpoint::AmendOrder, "order/cancelReplace".into());
     endpoints.insert(HttpEndpoint::CancelAllOrders, "openOrders".into());
     endpoints.insert(HttpEndpoint::CancelOrder, "order".into());
+    endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
+    endpoints.insert(HttpEndpoint::PlaceOrder, "order".into());
     endpoints.insert(HttpEndpoint::Time, "time".into());
     endpoints
 }
