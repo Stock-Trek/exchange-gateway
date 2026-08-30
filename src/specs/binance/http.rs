@@ -199,13 +199,20 @@ fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
 
 fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     if (200..300).contains(&response.status) {
-        let result = serde_json::from_slice(&response.body)
+        let result: BinanceHttpResponse = serde_json::from_slice(&response.body)
             .map_err(|error| EGError::External(Box::new(error)))?;
-        Ok(BinanceHttpResponse::Result(result))
+        match result {
+            BinanceHttpResponse::Success(response) => Ok(BinanceHttpResponse::Success(response)),
+            BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
+                code: error.code,
+                message: error.msg,
+            }),
+        }
     } else {
-        let error = serde_json::from_slice(&response.body)
-            .map_err(|error| EGError::External(Box::new(error)))?;
-        Ok(BinanceHttpResponse::Error(error))
+        Err(EGError::HttpError {
+            status: response.status,
+            body: response.body,
+        })
     }
 }
 
@@ -377,29 +384,27 @@ fn sync_clock(
         let filter: ArcPredicate<BinanceHttpResponse> = Arc::new(|response| {
             matches!(
                 response,
-                BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(..))
-                    | BinanceHttpResponse::Error(..)
+                BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(..))
+                    | BinanceHttpResponse::Failure(..)
             )
         });
         (message, filter)
     });
     let sync = {
         let clock = clock.clone();
-        Arc::new(
-            move |(message, round_trip_time): (BinanceHttpResponse, Duration)| -> EGResult<()> {
-                match message {
-                    BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(result)) => {
-                        clock.sync(result.serverTime, round_trip_time);
-                        Ok(())
-                    }
-                    BinanceHttpResponse::Error(error) => Err(EGError::ApiError {
-                        code: error.code,
-                        message: error.msg.clone(),
-                    }),
-                    _ => Err(EGError::BadResponse),
+        Arc::new(move |(message, round_trip_time)| -> EGResult<()> {
+            match message {
+                BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) => {
+                    clock.sync(result.serverTime, round_trip_time);
+                    Ok(())
                 }
-            },
-        )
+                BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
+                    code: error.code,
+                    message: error.msg.clone(),
+                }),
+                _ => Err(EGError::BadResponse),
+            }
+        })
     };
     SyncClock {
         create_request,
@@ -410,7 +415,7 @@ fn sync_clock(
 
 fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
     let mut feedback = RateLimitFeedback::default();
-    if let BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
+    if let BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
         feedback
             .usage
             .extend(info.rateLimits.iter().filter_map(rate_limit_usage));
@@ -646,7 +651,7 @@ mod test {
         // definitions but never a usage count (only WebSocket API responses
         // include `count`), so the feedback must adopt the limits without
         // reporting any usage: locally-consumed capacity stays untouched.
-        let response = BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(
+        let response = BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(
             exchange_info_result(vec![
                 rate_limit(
                     BinanceRateLimitType::REQUEST_WEIGHT,
@@ -692,7 +697,7 @@ mod test {
         // Both usages must not be collapsed onto the single weight limiter:
         // the raw-requests limit must not overwrite the weight bucket's.
         let limits = rate_limits();
-        let response = BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(
+        let response = BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(
             exchange_info_result(vec![
                 rate_limit(
                     BinanceRateLimitType::REQUEST_WEIGHT,
@@ -771,11 +776,10 @@ mod test {
             body: br#"{"code":-2014,"msg":"API-key format invalid."}"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(response).expect("400 should parse as an error");
+        let parsed = from_response(response);
         match parsed {
-            BinanceHttpResponse::Error(error) => {
-                assert_eq!(error.code, -2014);
-                assert_eq!(error.msg, "API-key format invalid.");
+            Err(EGError::HttpError { status, body: _ }) => {
+                assert_eq!(status, 400);
             }
             other => panic!("expected Error, got: {other:?}"),
         }
@@ -792,7 +796,7 @@ mod test {
         let parsed = from_response(response).expect("201 should parse as a result");
         assert!(matches!(
             parsed,
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(ref filters))
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::AssetLimits(ref filters))
                 if filters.is_empty()
         ));
     }
@@ -860,7 +864,7 @@ mod test {
         assert!(matches!(message, BinanceHttpUnsignedRequest::Time(..)));
         let local = clock.now_millis();
         let response =
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(BinanceTimeResult {
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(BinanceTimeResult {
                 serverTime: local + 10_000,
             }));
         assert!(filter(&response));
@@ -877,7 +881,7 @@ mod test {
         let clock = Arc::new(Clock::default());
         let sync_clock = sync_clock(clock, Duration::from_secs(20));
         let (_, filter) = (sync_clock.create_request)();
-        let response = BinanceHttpResponse::Error(BinanceError {
+        let response = BinanceHttpResponse::Failure(BinanceError {
             code: -1021,
             msg: "Timestamp for this request is outside of the recvWindow.".into(),
         });

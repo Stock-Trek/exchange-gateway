@@ -75,24 +75,24 @@ mod binance {
 
     fn to_external_response(response: BinanceHttpResponse) -> EGResult<MyResponse> {
         match response {
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::ExchangeInfo(info)) => {
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(info)) => {
                 let raw = serde_json::to_vec(&info)
                     .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?;
                 Ok(MyResponse { raw })
             }
-            BinanceHttpResponse::Error(error) => Err(EGError::External(Box::new(ExampleError(
+            BinanceHttpResponse::Failure(error) => Err(EGError::External(Box::new(ExampleError(
                 format!("{error:?}"),
             )))),
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::SpotOrder(_)) => {
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::SpotOrder(_)) => {
                 Err(EGError::UnknownEndpoint)
             }
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::AssetLimits(_)) => {
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::AssetLimits(_)) => {
                 Err(EGError::UnknownEndpoint)
             }
-            BinanceHttpResponse::Result(BinanceHttpResponseResult::AmendOrder(_))
-            | BinanceHttpResponse::Result(BinanceHttpResponseResult::CancelAllOrders(_))
-            | BinanceHttpResponse::Result(BinanceHttpResponseResult::CancelOrder(_))
-            | BinanceHttpResponse::Result(BinanceHttpResponseResult::Time(_)) => {
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::AmendOrder(_))
+            | BinanceHttpResponse::Success(BinanceHttpResponseResult::CancelAllOrders(_))
+            | BinanceHttpResponse::Success(BinanceHttpResponseResult::CancelOrder(_))
+            | BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(_)) => {
                 Err(EGError::UnknownEndpoint)
             }
         }
