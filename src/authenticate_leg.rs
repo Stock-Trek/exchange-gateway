@@ -1,6 +1,6 @@
 use crate::{
     clock::Clock,
-    functions::{ArcConvertRef, ArcPredicate, ArcTryConvertValue},
+    functions::{ArcConvertRef, ArcPredicate, TryConvertValue},
     sign::signer::Signer,
 };
 use std::time::Duration;
@@ -9,7 +9,7 @@ use std::time::Duration;
 pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
     pub create_auth_attempt: ArcConvertRef<Clock, (EGUnsignedReq, ArcPredicate<EGRes>)>,
     pub timeout: Duration,
-    pub create_signer: ArcTryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
+    pub create_signer: TryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
 }
 
 impl<EGUnsignedReq, EGReq, EGRes> std::fmt::Debug for AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {

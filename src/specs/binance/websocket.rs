@@ -6,7 +6,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, TryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -114,7 +114,7 @@ where
     let client = client_factory(websocket_listener.clone());
     let transport = WebsocketTransport::new(
         client,
-        Arc::new(to_request),
+        to_request,
         Arc::new(from_response),
         websocket_listener,
     );
@@ -135,6 +135,8 @@ where
         request_weight,
         order_count,
         sync_timestamp(),
+        to_filter,
+        send_to_external_response(to_external_response),
         Transport::Websocket(transport),
         null_signer(),
         credentials,
@@ -142,6 +144,31 @@ where
         authenticate_legs,
         auth_gate,
     ))
+}
+
+fn to_filter(
+    mut request: BinanceWebsocketUnsignedRequest,
+) -> (
+    BinanceWebsocketUnsignedRequest,
+    ArcPredicate<BinanceWebsocketResponse>,
+) {
+    let request_id = id();
+    request.metadata.id = request_id.clone();
+    let filter: ArcPredicate<BinanceWebsocketResponse> =
+        Arc::new(move |response: &BinanceWebsocketResponse| response.id == request_id);
+    (request, filter)
+}
+
+fn send_to_external_response<ExternalRes>(
+    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+) -> ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>
+where
+    ExternalRes: Send + Sync + 'static,
+{
+    Arc::new(move |response| {
+        validate_response(&response)?;
+        to_external_response(response)
+    })
 }
 
 fn to_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {
@@ -171,14 +198,12 @@ fn authenticate_leg(
         })
     };
     let create_signer = {
-        Arc::new(
-            move |message| -> EGResult<
-                Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
-            > {
-                validate_response(&message)?;
-                Ok(Some(Box::new(ConvertSigner::new(converter))))
-            },
-        )
+        move |message| -> EGResult<
+            Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
+        > {
+            validate_response(&message)?;
+            Ok(Some(Box::new(ConvertSigner::new(converter))))
+        }
     };
     AuthenticateLeg {
         create_auth_attempt,
@@ -221,7 +246,7 @@ fn validate_response(response: &BinanceWebsocketResponse) -> EGResult<()> {
 fn synchronization(
     timeout: Duration,
 ) -> Synchronization<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse> {
-    let create_time_request = Arc::new(move || {
+    let create_time_request = move || {
         let id = id();
         let message = BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
@@ -233,14 +258,14 @@ fn synchronization(
         let filter: ArcPredicate<BinanceWebsocketResponse> =
             Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
         (message, filter)
-    });
-    let to_server_time = Arc::new(|response: &BinanceWebsocketResponse| -> EGResult<i64> {
+    };
+    let to_server_time = |response: &BinanceWebsocketResponse| -> EGResult<i64> {
         validate_response(response)?;
         match &response.result {
             Some(BinanceWebsocketResponseResult::Time(result)) => Ok(result.serverTime),
             _ => Err(EGError::BadResponse),
         }
-    });
+    };
     Synchronization {
         create_time_request,
         timeout,

@@ -1,7 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, ArcTryConvertRef, ArcTryConvertValue},
-    listeners::listener::ListenerTrait,
+    functions::{ArcPredicate, ArcTryConvertRef, ArcTryConvertValue, TryConvertValue},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     transports::transport::TransportTrait,
 };
@@ -46,8 +45,7 @@ pub(crate) enum HttpEndpoint {
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-    convert_response: ArcTryConvertValue<TransportRes, EGRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+    convert_response: TryConvertValue<TransportRes, EGRes>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
     rate_limits: RateLimits,
@@ -75,11 +73,6 @@ where
     }
     fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::SeqCst)
-    }
-    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
-        let response = self.to_converted_response(request, timeout).await?;
-        self.listener.on_message(response).await?;
-        Ok(())
     }
     async fn send_and_wait_for(
         &self,
@@ -109,8 +102,7 @@ where
     pub fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-        convert_response: ArcTryConvertValue<TransportRes, EGRes>,
-        listener: impl ListenerTrait<TMessage = EGRes> + 'static,
+        convert_response: TryConvertValue<TransportRes, EGRes>,
         to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
         endpoints: HashMap<HttpEndpoint, String>,
         rate_limits: RateLimits,
@@ -120,7 +112,6 @@ where
             client,
             convert_request,
             convert_response,
-            listener: Arc::new(listener),
             to_http_endpoint,
             endpoints,
             rate_limits,
@@ -199,7 +190,6 @@ mod tests {
     use super::*;
     use crate::{
         error::{EGError, EGResult},
-        listeners::listener::ListenerTrait,
         rate_limit::{
             feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
             rate_limit_type::RateLimitType, rate_limiter::RateLimiter,
@@ -309,17 +299,6 @@ mod tests {
         }
     }
 
-    struct NoopListener;
-
-    #[async_trait]
-    impl ListenerTrait for NoopListener {
-        type TMessage = TestRes;
-
-        async fn on_message(&self, _message: TestRes) -> EGResult<()> {
-            Ok(())
-        }
-    }
-
     fn rate_limits() -> RateLimits {
         RateLimits {
             weight: RateLimiter::new(vec![RateLimitConfig {
@@ -341,8 +320,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
             Arc::new(Ok),
-            Arc::new(Ok),
-            NoopListener,
+            Ok,
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),
@@ -361,8 +339,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(ThrottledClient),
             Arc::new(Ok),
-            Arc::new(Ok),
-            NoopListener,
+            Ok,
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),
@@ -426,25 +403,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fire_and_forget_forwards_response_to_listener() {
-        let (transport, _) = transport();
-        transport
-            .fire_and_forget(TestReq { id: 1 }, Duration::from_secs(5))
-            .await
-            .expect("fire and forget should succeed");
-    }
-
-    #[tokio::test]
-    async fn fire_and_forget_interprets_retry_feedback_as_error() {
-        let (transport, _) = throttled_transport();
-        let error = transport
-            .fire_and_forget(TestReq { id: 1 }, Duration::from_secs(5))
-            .await
-            .expect_err("retry feedback should be an error");
-        assert!(matches!(error, EGError::RateLimited(..)));
-    }
-
-    #[tokio::test]
     async fn send_and_wait_applies_header_feedback_when_body_converts_to_error() {
         // Regression test: Binance answers with a 2xx status and an error
         // body (e.g. `{"code":-2015,"msg":"Invalid API-key."}`), which
@@ -456,13 +414,12 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
             Arc::new(Ok),
-            Arc::new(|_: TestRes| -> EGResult<TestRes> {
+            |_: TestRes| -> EGResult<TestRes> {
                 Err(EGError::ApiError {
                     code: -2015,
                     message: "Invalid API-key.".into(),
                 })
-            }),
-            NoopListener,
+            },
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),
@@ -493,8 +450,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(RejectingClient),
             Arc::new(Ok),
-            Arc::new(Ok),
-            NoopListener,
+            Ok,
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),

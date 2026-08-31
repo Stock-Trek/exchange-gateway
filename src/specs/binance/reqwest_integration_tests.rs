@@ -3,7 +3,6 @@ use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    listeners::listener::ListenerTrait,
     rate_limit::{
         feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
@@ -53,17 +52,6 @@ fn spot_order_params() -> BinanceSpotOrderParams {
         timestamp: 1700000000000,
         trailingDelta: None,
         r#type: BinanceOrderType::LIMIT,
-    }
-}
-
-struct IgnoreHttpListener;
-
-#[async_trait]
-impl ListenerTrait for IgnoreHttpListener {
-    type TMessage = BinanceHttpResponse;
-
-    async fn on_message(&self, _message: BinanceHttpResponse) -> EGResult<()> {
-        Ok(())
     }
 }
 
@@ -132,7 +120,6 @@ fn mock_http_connector(
         rate_limits(),
         to_unsigned_request,
         to_external_response,
-        IgnoreHttpListener,
         Some(credentials),
         clock,
     )
@@ -235,7 +222,6 @@ fn scripted_http_connector(
         rate_limits,
         to_unsigned_request,
         to_external_response,
-        IgnoreHttpListener,
         Some(credentials),
         clock,
     )

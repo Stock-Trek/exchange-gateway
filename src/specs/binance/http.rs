@@ -6,7 +6,6 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::{ArcCombineValues, ArcPredicate, TryConvertValue},
-    listeners::{convert_listener::ConvertListener, listener::ListenerTrait},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
@@ -41,7 +40,6 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
@@ -56,7 +54,6 @@ where
         rate_limits(),
         to_unsigned_request,
         to_external_response,
-        listener,
         credentials,
         clock,
     )
@@ -67,7 +64,6 @@ pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     rate_limits: RateLimits,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
@@ -75,15 +71,13 @@ where
     ExternalReq: Send,
     ExternalRes: Clone + Send + Sync + 'static,
 {
-    let response_listener = ConvertListener::new(to_external_response, listener);
     let api_key = credentials
         .as_ref()
         .map(|credentials| credentials.api_key.clone());
     let transport = HttpTransport::new(
         client,
         Arc::new(move |request: BinanceHttpRequest| to_request(request, api_key.as_deref())),
-        Arc::new(from_response),
-        response_listener,
+        from_response,
         request_to_endpoint,
         endpoints(),
         rate_limits.clone(),
@@ -98,6 +92,8 @@ where
         request_weight,
         order_count,
         sync_timestamp(),
+        to_filter,
+        Arc::new(to_external_response),
         Transport::Http(transport),
         null_signer(),
         credentials,
@@ -105,6 +101,15 @@ where
         authenticate_legs,
         Arc::new(AuthGate::default()),
     ))
+}
+
+fn to_filter(
+    request: BinanceHttpUnsignedRequest,
+) -> (
+    BinanceHttpUnsignedRequest,
+    ArcPredicate<BinanceHttpResponse>,
+) {
+    (request, Arc::new(|_: &BinanceHttpResponse| true))
 }
 
 fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<HttpRequest> {
@@ -374,7 +379,7 @@ impl HasApiKey for BinanceCancelOrderParams {
 fn synchronization(
     timeout: Duration,
 ) -> Synchronization<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
-    let create_time_request = Arc::new(|| {
+    let create_time_request = || {
         let message = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         let filter: ArcPredicate<BinanceHttpResponse> = Arc::new(|response| {
             matches!(
@@ -384,8 +389,8 @@ fn synchronization(
             )
         });
         (message, filter)
-    });
-    let to_server_time = Arc::new(|response: &BinanceHttpResponse| -> EGResult<i64> {
+    };
+    let to_server_time = |response: &BinanceHttpResponse| -> EGResult<i64> {
         match response {
             BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) => {
                 Ok(result.serverTime)
@@ -396,7 +401,7 @@ fn synchronization(
             }),
             _ => Err(EGError::BadResponse),
         }
-    });
+    };
     Synchronization {
         create_time_request,
         timeout,

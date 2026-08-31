@@ -142,7 +142,19 @@ impl WebsocketClientTrait for MockWebsocketClient {
                 };
                 self.listener.on_message(response).await?;
             }
-            _ => {}
+            // Every user request (order, exchangeInfo, ...) is answered with
+            // a matching-id success reply, as the real exchange does, so the
+            // send-and-wait call resolves.
+            _ => {
+                let response = BinanceWebsocketResponse {
+                    error: None,
+                    id: message.metadata.id,
+                    rateLimits: vec![],
+                    result: None,
+                    status: 200,
+                };
+                self.listener.on_message(response).await?;
+            }
         }
         Ok(())
     }
