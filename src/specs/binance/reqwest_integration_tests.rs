@@ -3,8 +3,11 @@ use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    rate_limit::feedback::RateLimitFeedback,
-    specs::binance::http::connector,
+    rate_limit::{
+        feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
+        rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
+    },
+    specs::binance::http::{connector, connector_with_client},
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},
@@ -90,12 +93,10 @@ impl HttpClientTrait for MockHttpClient {
     }
 }
 
-/// Builds an HTTP connector backed by the mock client, handing the caller
-/// a handle to the client so sent requests can be inspected. The mock
-/// reports the given clock as the server clock on `time` responses, as the
-/// production exchange does.
+/// Builds an HTTP connector backed by the mock client. The mock reports the
+/// given clock as the server clock on `time` responses, as the production
+/// exchange does.
 fn mock_http_connector(
-    client_handle: std::sync::mpsc::Sender<MockHttpClient>,
     clock: Clock,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
@@ -104,9 +105,9 @@ fn mock_http_connector(
     };
     let to_unsigned_request = Ok;
     let to_external_response = Ok;
-    let mock_clock = clock.clone();
-    let mock_client = MockHttpClient { clock: mock_clock };
-    let _ = client_handle.send(mock_client.clone());
+    let mock_client = MockHttpClient {
+        clock: clock.clone(),
+    };
     connector(
         TradingMode::Paper,
         to_unsigned_request,
@@ -119,9 +120,8 @@ fn mock_http_connector(
 
 #[tokio::test]
 async fn http_connector_sync_clock_syncs_the_server_clock() {
-    let (client_tx, _client_rx) = std::sync::mpsc::channel();
     let clock = Clock::default();
-    let connector = mock_http_connector(client_tx, clock).unwrap();
+    let connector = mock_http_connector(clock).unwrap();
 
     // Connect establishes the transport only: clock syncing is
     // user-invoked, so the clock is untouched until sync_clock is called.
@@ -145,12 +145,10 @@ enum ScriptedOutcome {
     HttpError,
 }
 
-/// A scripted HTTP client: records every outgoing request and answers
-/// with a fixed outcome, so send-failure budget behaviour can be tested
-/// without a network.
+/// A scripted HTTP client: answers every outgoing request with a fixed
+/// outcome, so send-failure budget behaviour can be tested without a network.
 #[derive(Clone)]
 struct ScriptedHttpClient {
-    sent: Arc<Mutex<Vec<HttpRequest>>>,
     outcome: ScriptedOutcome,
 }
 
@@ -162,10 +160,9 @@ impl HttpClientTrait for ScriptedHttpClient {
     async fn send_message(
         &self,
         _endpoint: &str,
-        message: Self::TransportReq,
+        _message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        self.sent.lock().unwrap().push(message);
         match self.outcome {
             ScriptedOutcome::RateLimited => Err(EGError::RateLimited(RateLimitFeedback {
                 is_throttled: true,
@@ -184,8 +181,8 @@ impl HttpClientTrait for ScriptedHttpClient {
 /// `outcome`, using the given rate limits so the budget left after a
 /// failed send can be observed.
 fn scripted_http_connector(
-    client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
     outcome: ScriptedOutcome,
+    rate_limits: RateLimits,
     clock: Clock,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
@@ -194,18 +191,13 @@ fn scripted_http_connector(
     };
     let to_unsigned_request = Ok;
     let to_external_response = Ok;
-    let scripted_client = ScriptedHttpClient {
-        sent: Arc::new(Mutex::new(Vec::new())),
-        outcome,
-    };
-    let _ = client_handle.send(scripted_client.clone());
-    connector(
-        TradingMode::Paper,
+    connector_with_client(
+        Arc::new(ScriptedHttpClient { outcome }),
+        rate_limits,
         to_unsigned_request,
         to_external_response,
         Some(credentials),
         clock,
-        Box::new(move |_url| Ok(scripted_client.clone())),
     )
 }
 
@@ -225,6 +217,50 @@ impl ManualClock {
     fn advance(&self, duration: Duration) {
         *self.now.lock().expect("mutex should not be poisoned") += duration;
     }
+    fn now(&self) -> Instant {
+        *self.now.lock().expect("mutex should not be poisoned")
+    }
+}
+
+/// Rate limits with a single slot per interval, so one send exhausts the
+/// budget and the effect of a refund is immediately observable.
+fn single_slot_rate_limits() -> RateLimits {
+    RateLimits {
+        weight: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 1,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]),
+        orders: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::Orders,
+            capacity_per_interval: 1,
+            interval_nanos: Duration::from_secs(10).as_nanos(),
+        }]),
+    }
+}
+
+/// Single-slot rate limits whose throttle deadline is read from `clock`,
+/// so Retry-After expiry can be driven deterministically.
+fn single_slot_rate_limits_with_clock(clock: ManualClock) -> RateLimits {
+    let now: Arc<dyn Fn() -> Instant + Send + Sync> = Arc::new(move || clock.now());
+    RateLimits {
+        weight: RateLimiter::with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }],
+            now.clone(),
+        ),
+        orders: RateLimiter::with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }],
+            now,
+        ),
+    }
 }
 
 fn spot_order_request() -> BinanceHttpUnsignedRequest {
@@ -233,10 +269,12 @@ fn spot_order_request() -> BinanceHttpUnsignedRequest {
 
 #[tokio::test]
 async fn http_send_keeps_local_reservation_on_business_rejection() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector =
-        scripted_http_connector(client_tx, ScriptedOutcome::HttpError, Clock::default()).unwrap();
-    let client = client_rx.recv().unwrap();
+    let connector = scripted_http_connector(
+        ScriptedOutcome::HttpError,
+        single_slot_rate_limits(),
+        Clock::default(),
+    )
+    .unwrap();
 
     // The order is rejected with a 4xx business error (-2010 etc.), but
     // Binance counts its weight anyway: the locally-reserved capacity
@@ -250,37 +288,50 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
     ));
 
     // The budget stays exhausted, so the next send is rejected locally
-    // and never reaches the transport.
-    // let result = connector
-    //     .send(spot_order_request(), false, Duration::from_secs(5))
-    //     .await;
-    // assert!(matches!(result, Err(EGError::RateLimited { .. })));
-    assert_eq!(client.sent.lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn http_send_refunds_local_reservation_on_rate_limited() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = ManualClock::new();
-    let connector =
-        scripted_http_connector(client_tx, ScriptedOutcome::RateLimited, Clock::default()).unwrap();
-    let client = client_rx.recv().unwrap();
-
-    // A server-side 429 is not counted against the request-weight budget,
-    // so the locally-reserved capacity is refunded.
+    // with RateLimited before it can reach the transport (a transport hit
+    // would be answered with the scripted HttpError, not RateLimited).
     let result = connector
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;
     assert!(matches!(result, Err(EGError::RateLimited { .. })));
-    assert_eq!(client.sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn http_send_refunds_local_reservation_on_rate_limited() {
+    let clock = ManualClock::new();
+    let connector = scripted_http_connector(
+        ScriptedOutcome::RateLimited,
+        single_slot_rate_limits_with_clock(clock.clone()),
+        Clock::default(),
+    )
+    .unwrap();
+
+    // A server-side 429 is not counted against the request-weight budget:
+    // the surfaced error carries the server's retry feedback, and the
+    // locally-reserved capacity is refunded.
+    let result = connector
+        .send(spot_order_request(), false, Duration::from_secs(5))
+        .await;
+    match result {
+        Err(EGError::RateLimited(feedback)) => {
+            assert_eq!(feedback.retry_after, Some(Duration::from_millis(50)));
+        }
+        other => panic!("expected RateLimited, got: {other:?}"),
+    }
 
     // Once the server's Retry-After has elapsed, the refunded budget
-    // admits the next request: it reaches the transport again instead of
-    // being rejected by the local limiter. The limiter's clock is the
+    // admits the next request: it reaches the transport and is answered
+    // with the server's 429 again (a local rejection would surface an
+    // empty feedback with no retry-after). The limiter's clock is the
     // manual clock, so the throttle expires without sleeping.
     clock.advance(Duration::from_millis(100));
     let result = connector
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;
-    assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    match result {
+        Err(EGError::RateLimited(feedback)) => {
+            assert_eq!(feedback.retry_after, Some(Duration::from_millis(50)));
+        }
+        other => panic!("expected RateLimited, got: {other:?}"),
+    }
 }

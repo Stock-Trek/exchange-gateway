@@ -6,7 +6,7 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     functions::{ArcCombineValues, ArcPredicate, BoxTryCreateOnce, TryConvertValue},
-    rate_limit::feedback::RateLimitFeedback,
+    rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
@@ -53,7 +53,28 @@ where
 {
     let url = exchange_urls().url(ExchangeTransportType::Http, trading_mode);
     let client = Arc::new(client_creator(url)?);
-    let rate_limits = rate_limits();
+    connector_with_client(
+        client,
+        rate_limits(),
+        to_unsigned_request,
+        to_external_response,
+        credentials,
+        clock,
+    )
+}
+
+pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
+    client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
+    rate_limits: RateLimits,
+    to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
+    credentials: Option<ApiKeyCredentials>,
+    clock: Clock,
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
+where
+    ExternalReq: Send,
+    ExternalRes: Clone + Send + Sync + 'static,
+{
     let api_key = credentials
         .as_ref()
         .map(|credentials| credentials.api_key.clone());
