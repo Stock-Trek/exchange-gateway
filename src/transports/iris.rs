@@ -112,16 +112,20 @@ impl<TransportRes> IrisListener<TransportRes> for IrisListenerAdapter<TransportR
 where
     TransportRes: DeserializeOwned + Send + 'static,
 {
-    async fn on_message(&self, message: TransportRes) {
-        let _ = self.delegate.on_message(message).await;
-    }
-
     async fn on_connected(&self) {
-        let _ = self.delegate.on_connected().await;
+        if let Err(error) = self.delegate.on_connected().await {
+            let _ = self.delegate.on_error(error).await;
+        }
     }
-
     async fn on_disconnected(&self) {
-        let _ = self.delegate.on_disconnected().await;
+        if let Err(error) = self.delegate.on_disconnected().await {
+            let _ = self.delegate.on_error(error).await;
+        }
+    }
+    async fn on_message(&self, message: TransportRes) {
+        if let Err(error) = self.delegate.on_message(message).await {
+            let _ = self.delegate.on_error(error).await;
+        }
     }
 }
 
@@ -187,6 +191,29 @@ mod tests {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .push(message);
+            Ok(())
+        }
+    }
+
+    /// A listener whose `on_message` fails, recording the errors that are
+    /// reported through `on_error`.
+    struct FailingListener {
+        errors: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ListenerTrait for FailingListener {
+        type TMessage = TestResponse;
+
+        async fn on_message(&self, _message: TestResponse) -> EGResult<()> {
+            Err(EGError::BadResponse)
+        }
+
+        async fn on_error(&self, error: EGError) -> EGResult<()> {
+            self.errors
+                .lock()
+                .expect("mutex should not be poisoned")
+                .push(error.to_string());
             Ok(())
         }
     }
@@ -615,6 +642,53 @@ mod tests {
             .force_disconnect()
             .await
             .expect("force disconnect should succeed");
+    }
+
+    #[tokio::test]
+    async fn on_message_error_is_reported_through_on_error() {
+        let (port, _shutdown) = spawn_responder_server().await;
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> = Arc::new(FailingListener {
+            errors: errors.clone(),
+        });
+        let url = format!("ws://127.0.0.1:{port}/ws");
+        let client = IrisWebsocketClient::<TestRequest, TestResponse>::with_config(
+            &url,
+            test_config(),
+            listener,
+        );
+        client.connect().await.expect("connect should succeed");
+        wait_until_connected(&client).await;
+        let message = TestRequest {
+            id: 1,
+            method: "ping".into(),
+        };
+        client
+            .send_message(message, Duration::from_secs(5))
+            .await
+            .expect("send should succeed");
+        // The server replies and the listener's `on_message` fails: the
+        // error must be sent through `on_error` instead of being silently
+        // dropped by the adapter.
+        let error = with_paused_clock(async {
+            for _ in 0..100 {
+                let error = {
+                    let errors = errors.lock().expect("mutex should not be poisoned");
+                    errors.first().cloned()
+                };
+                if let Some(error) = error {
+                    return error;
+                }
+                tick(Duration::from_millis(50)).await;
+            }
+            panic!("on_error should be called with the message failure");
+        })
+        .await;
+        assert_eq!(error, EGError::BadResponse.to_string());
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
     }
 
     #[tokio::test]

@@ -80,17 +80,6 @@ where
 {
     type TMessage = TransportRes;
 
-    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        let feedback = (self.feedback)(&message)?;
-        self.rate_limits.apply_feedback(&feedback)?;
-        let response = (self.converter)(message)?;
-        if remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone(), &feedback)
-        })? {
-            return Ok(());
-        }
-        self.delegate.on_message(response).await
-    }
     async fn on_connected(&self) -> EGResult<()> {
         self.auth_gate.on_connection_established()?;
         self.delegate.on_connected().await
@@ -99,6 +88,43 @@ where
         self.auth_gate.on_connection_lost()?;
         fail_pending_waiters(&self.handlers)?;
         self.delegate.on_disconnected().await
+    }
+    async fn on_error(&self, error: EGError) -> EGResult<()> {
+        self.delegate.on_error(error).await
+    }
+    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
+        let feedback = match (self.feedback)(&message) {
+            Ok(feedback) => feedback,
+            Err(error) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+        };
+        if let Err(error) = self.rate_limits.apply_feedback(&feedback) {
+            self.delegate.on_error(error).await?;
+            return Ok(());
+        }
+        let response = match (self.converter)(message) {
+            Ok(response) => response,
+            Err(error) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+        };
+        match remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone(), &feedback)
+        }) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+        }
+        if let Err(error) = self.delegate.on_message(response).await {
+            self.delegate.on_error(error).await?;
+        }
+        Ok(())
     }
 }
 
@@ -272,6 +298,33 @@ mod tests {
                 .lock()
                 .map_err(|_| EGError::MutexPoisoned)?
                 .push(message);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct ErrorRecordingListener {
+        received: Arc<Mutex<Vec<TestMessage>>>,
+        errors: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl ListenerTrait for ErrorRecordingListener {
+        type TMessage = TestMessage;
+
+        async fn on_message(&self, message: TestMessage) -> EGResult<()> {
+            self.received
+                .lock()
+                .map_err(|_| EGError::MutexPoisoned)?
+                .push(message);
+            Ok(())
+        }
+
+        async fn on_error(&self, error: EGError) -> EGResult<()> {
+            self.errors
+                .lock()
+                .map_err(|_| EGError::MutexPoisoned)?
+                .push(error.to_string());
             Ok(())
         }
     }
@@ -519,6 +572,88 @@ mod tests {
         assert_eq!(
             *received.lock().unwrap(),
             vec![TestMessage { id: 1, used: 60 }]
+        );
+    }
+
+    #[tokio::test]
+    async fn conversion_failure_is_reported_through_on_error() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let delegate = ErrorRecordingListener {
+            received: received.clone(),
+            errors: errors.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener = WebsocketListener::new(
+            Arc::new(|_message: TestMessage| Err(EGError::BadResponse)),
+            feedback,
+            limits.clone(),
+            delegate,
+            auth_gate,
+        );
+        // The message fails conversion: it is consumed, not forwarded ...
+        listener
+            .on_message(TestMessage { id: 7, used: 60 })
+            .await
+            .unwrap();
+        assert!(received.lock().unwrap().is_empty());
+        // ... and the failure is sent through `on_error` instead of being
+        // silently dropped.
+        assert_eq!(
+            *errors.lock().unwrap(),
+            vec![EGError::BadResponse.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn feedback_failure_is_reported_through_on_error() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let delegate = ErrorRecordingListener {
+            received: received.clone(),
+            errors: errors.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener = WebsocketListener::new(
+            Arc::new(Ok),
+            |_message: &TestMessage| Err(EGError::BadResponse),
+            limits.clone(),
+            delegate,
+            auth_gate,
+        );
+        // Feedback extraction fails: the message is consumed, not forwarded
+        // ...
+        listener
+            .on_message(TestMessage { id: 7, used: 60 })
+            .await
+            .unwrap();
+        assert!(received.lock().unwrap().is_empty());
+        // ... and the failure is sent through `on_error` instead of being
+        // silently dropped.
+        assert_eq!(
+            *errors.lock().unwrap(),
+            vec![EGError::BadResponse.to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn on_error_is_forwarded_to_the_delegate() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let delegate = ErrorRecordingListener {
+            received: received.clone(),
+            errors: errors.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener =
+            WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
+        listener.on_error(EGError::NotConnected).await.unwrap();
+        assert_eq!(
+            *errors.lock().unwrap(),
+            vec![EGError::NotConnected.to_string()]
         );
     }
 }
