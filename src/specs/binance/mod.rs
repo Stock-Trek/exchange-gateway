@@ -1,6 +1,6 @@
-mod common;
+pub mod common;
 #[cfg(feature = "reqwest")]
-pub(crate) mod http;
+pub mod http;
 #[cfg(feature = "iris")]
 #[cfg(test)]
 mod iris_integration_tests;
@@ -8,4 +8,4 @@ mod iris_integration_tests;
 #[cfg(test)]
 mod reqwest_integration_tests;
 #[cfg(feature = "iris")]
-pub(crate) mod websocket;
+pub mod websocket;

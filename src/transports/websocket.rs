@@ -14,7 +14,7 @@ use std::{
 };
 
 #[async_trait]
-pub(crate) trait WebsocketClientTrait: Send + Sync {
+pub trait WebsocketClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
 

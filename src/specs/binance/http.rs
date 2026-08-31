@@ -36,7 +36,7 @@ use exchange_types::binance::{
 use reqwest::Method;
 use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 
-pub(crate) fn connector<ExternalReq, ExternalRes>(
+pub fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
@@ -51,6 +51,32 @@ where
     let client = Arc::new(ReqwestHttpClient::new(&url));
     connector_with_client(
         client,
+        to_unsigned_request,
+        to_external_response,
+        credentials,
+        clock,
+    )
+}
+
+/// Builds a Binance HTTP connector backed by a caller-provided client, so
+/// production users can configure proxies/TLS/timeouts (via
+/// [`ReqwestHttpClient::with_client`]) or inject their own
+/// [`HttpClientTrait`] implementation. The caller is responsible for
+/// resolving the base URL, e.g.
+/// `exchange_urls().url(ExchangeTransportType::Http, trading_mode)`.
+pub fn connector_with_client<ExternalReq, ExternalRes>(
+    client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
+    to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
+    credentials: Option<ApiKeyCredentials>,
+    clock: Clock,
+) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
+where
+    ExternalReq: Send,
+    ExternalRes: Clone + Send + Sync + 'static,
+{
+    connector_with_client_and_rate_limits(
+        client,
         rate_limits(),
         to_unsigned_request,
         to_external_response,
@@ -59,7 +85,7 @@ where
     )
 }
 
-pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
+pub(crate) fn connector_with_client_and_rate_limits<ExternalReq, ExternalRes>(
     client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
     rate_limits: RateLimits,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,

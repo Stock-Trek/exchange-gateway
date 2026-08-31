@@ -39,7 +39,7 @@ use exchange_types::binance::{
 use iris::Config as IrisConfig;
 use std::{sync::Arc, time::Duration};
 
-pub(crate) fn connector<ExternalReq, ExternalRes>(
+pub fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
     to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
@@ -80,7 +80,7 @@ where
     )
 }
 
-pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
+pub fn connector_with_client_factory<ExternalReq, ExternalRes>(
     client_factory: impl FnOnce(
         Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
     ) -> Arc<

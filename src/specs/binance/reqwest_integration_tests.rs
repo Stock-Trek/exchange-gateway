@@ -7,7 +7,9 @@ use crate::{
         feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
-    specs::binance::{common::rate_limits, http::connector_with_client},
+    specs::binance::{
+        common::rate_limits, http::connector_with_client_and_rate_limits as connector_with_client,
+    },
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},

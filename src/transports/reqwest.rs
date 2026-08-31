@@ -10,11 +10,11 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
-pub(crate) struct HttpRequest {
-    pub(crate) method: reqwest::Method,
-    pub(crate) query: Option<String>,
-    pub(crate) headers: Vec<(String, String)>,
-    pub(crate) body: Option<Vec<u8>>,
+pub struct HttpRequest {
+    pub method: reqwest::Method,
+    pub query: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -25,16 +25,16 @@ pub struct HttpResponse {
 }
 
 #[derive(Clone)]
-pub(crate) struct ReqwestHttpClient {
+pub struct ReqwestHttpClient {
     client: reqwest::Client,
     base_url: String,
 }
 
 impl ReqwestHttpClient {
-    pub(crate) fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str) -> Self {
         Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
     }
-    pub(crate) fn with_client(base_url: &str, client: reqwest::Client) -> Self {
+    pub fn with_client(base_url: &str, client: reqwest::Client) -> Self {
         Self {
             client,
             base_url: base_url.into(),

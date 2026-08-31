@@ -4,7 +4,7 @@ use strum::Display;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub(crate) struct ExchangeUrls {
+pub struct ExchangeUrls {
     name: String,
     http: ExchangeTransportUrls,
     websocket: ExchangeTransportUrls,
@@ -12,7 +12,7 @@ pub(crate) struct ExchangeUrls {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub(crate) struct ExchangeTransportUrls {
+pub struct ExchangeTransportUrls {
     real: String,
     paper: String,
 }

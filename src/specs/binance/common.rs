@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
 
-pub(crate) fn exchange_urls() -> ExchangeUrls {
+pub fn exchange_urls() -> ExchangeUrls {
     ExchangeUrls::new(
         "BINANCE",
         ExchangeTransportUrls::new(

@@ -15,11 +15,18 @@ pub mod functions;
 pub mod listeners;
 pub mod rate_limit;
 pub mod sign;
-mod specs;
-mod transports;
+pub mod specs;
+pub mod transports;
 pub mod urls;
 
 pub mod prelude {
+    #[cfg(feature = "reqwest")]
+    pub use crate::transports::{
+        http::HttpClientTrait,
+        reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
+    };
+    #[cfg(feature = "iris")]
+    pub use crate::transports::{iris::IrisWebsocketClient, websocket::WebsocketClientTrait};
     pub use crate::{
         clock::Clock,
         connect::Connect,
@@ -29,6 +36,6 @@ pub mod prelude {
         error::{EGError, EGResult},
         functions::ArcTryConvertValue,
         listeners::listener::ListenerTrait,
-        urls::TradingMode,
+        urls::{ExchangeTransportType, ExchangeTransportUrls, ExchangeUrls, TradingMode},
     };
 }
