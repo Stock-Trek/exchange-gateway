@@ -31,7 +31,10 @@ impl Default for Clock {
 impl Clone for Clock {
     fn clone(&self) -> Self {
         let offset = self.offset_millis();
-        let last_sync = *self.last_sync.lock().expect("Cannot read last_sync");
+        let last_sync = *self
+            .last_sync
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         Self {
             offset_millis: AtomicI64::from(offset),
             last_sync: Mutex::from(last_sync),
@@ -58,13 +61,15 @@ impl Clock {
         Ok(last_sync.map_or(Duration::MAX, |i| i.elapsed()))
     }
 
-    pub fn sync(&self, server_time_millis: i64, round_trip_time: Duration) {
+    pub fn sync(&self, server_time_millis: i64, round_trip_time: Duration) -> EGResult<()> {
         let rtt_ms = round_trip_time.as_millis() as i64;
         let system_millis = Self::system_millis();
         let midpoint_system_millis = system_millis - (rtt_ms / 2);
         let new_offset = midpoint_system_millis - server_time_millis;
+        let mut last_sync = self.last_sync.lock().map_err(|_| EGError::MutexPoisoned)?;
         self.offset_millis.store(new_offset, Ordering::Relaxed);
-        *self.last_sync.lock().unwrap() = Some(Instant::now());
+        *last_sync = Some(Instant::now());
+        Ok(())
     }
 
     pub fn now_millis(&self) -> i64 {
@@ -99,9 +104,35 @@ mod test {
     fn clock_applies_server_offset() {
         let clock = Clock::default();
         let local = clock.now_millis();
-        clock.sync(local + 10_000, Duration::ZERO);
+        clock.sync(local + 10_000, Duration::ZERO).unwrap();
         let synced = clock.now_millis();
         assert!(synced >= local + 10_000, "synced: {synced}");
         assert!(synced < local + 10_000 + 60_000, "synced: {synced}");
+    }
+
+    #[test]
+    fn sync_returns_mutex_poisoned_instead_of_panicking() {
+        let clock = Clock::default();
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = clock.last_sync.lock().unwrap();
+            *guard = Some(Instant::now());
+            panic!("poison the last_sync mutex");
+        });
+        let result = clock.sync(clock.now_millis(), Duration::ZERO);
+        assert!(matches!(result, Err(EGError::MutexPoisoned)));
+    }
+
+    #[test]
+    fn clone_recovers_from_poisoned_last_sync() {
+        let clock = Clock::default();
+        clock.sync(clock.now_millis(), Duration::ZERO).unwrap();
+        let offset = clock.offset_millis();
+        let _ = std::panic::catch_unwind(|| {
+            let mut guard = clock.last_sync.lock().unwrap();
+            *guard = Some(Instant::now());
+            panic!("poison the last_sync mutex");
+        });
+        let cloned = clock.clone();
+        assert_eq!(cloned.offset_millis(), offset);
     }
 }

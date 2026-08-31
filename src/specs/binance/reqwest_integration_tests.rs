@@ -65,13 +65,14 @@ struct MockHttpClient {
 impl HttpClientTrait for MockHttpClient {
     type TransportReq = HttpRequest;
     type TransportRes = HttpResponse;
+    type Error = std::io::Error;
 
     async fn send_message(
         &self,
         endpoint: &str,
         message: Self::TransportReq,
         _timeout: Duration,
-    ) -> EGResult<Self::TransportRes> {
+    ) -> EGResult<Self::TransportRes, Self::Error> {
         self.sent.lock().unwrap().push(message);
         if endpoint == "time" {
             // sync_clock hits the unsigned `time` endpoint: answer it with
@@ -113,8 +114,13 @@ fn mock_http_connector(
         clock: clock.clone(),
     };
     let _ = client_handle.send(mock_client.clone());
-    let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
-        Arc::new(mock_client);
+    let client: Arc<
+        dyn HttpClientTrait<
+                TransportReq = HttpRequest,
+                TransportRes = HttpResponse,
+                Error = std::io::Error,
+            >,
+    > = Arc::new(mock_client);
     connector_with_client(
         client,
         rate_limits(),
@@ -173,13 +179,14 @@ struct ScriptedHttpClient {
 impl HttpClientTrait for ScriptedHttpClient {
     type TransportReq = HttpRequest;
     type TransportRes = HttpResponse;
+    type Error = std::io::Error;
 
     async fn send_message(
         &self,
         _endpoint: &str,
         message: Self::TransportReq,
         _timeout: Duration,
-    ) -> EGResult<Self::TransportRes> {
+    ) -> EGResult<Self::TransportRes, Self::Error> {
         self.sent.lock().unwrap().push(message);
         match self.outcome {
             ScriptedOutcome::RateLimited => Err(EGError::RateLimited(RateLimitFeedback {
@@ -215,8 +222,13 @@ fn scripted_http_connector(
         outcome,
     };
     let _ = client_handle.send(scripted_client.clone());
-    let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
-        Arc::new(scripted_client);
+    let client: Arc<
+        dyn HttpClientTrait<
+                TransportReq = HttpRequest,
+                TransportRes = HttpResponse,
+                Error = std::io::Error,
+            >,
+    > = Arc::new(scripted_client);
     connector_with_client(
         client,
         rate_limits,

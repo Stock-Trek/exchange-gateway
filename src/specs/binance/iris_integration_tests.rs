@@ -96,19 +96,25 @@ struct LogonGate {
 impl WebsocketClientTrait for MockWebsocketClient {
     type TransportReq = BinanceWebsocketRequest;
     type TransportRes = BinanceWebsocketResponse;
+    type Error = iris::ConnectionError;
 
-    async fn connect(&self) -> EGResult<()> {
+    async fn connect(&self) -> EGResult<(), Self::Error> {
         self.connected.store(true, Ordering::SeqCst);
-        self.listener.on_connected().await
+        self.listener
+            .on_connected()
+            .await
+            .map_err(|error| error.map_external(|_| iris::ConnectionError::ConnectionClosed))
     }
     fn is_connected(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
     }
-    async fn send_message(&self, message: Self::TransportReq, _timeout: Duration) -> EGResult<()> {
+    async fn send_message(
+        &self,
+        message: Self::TransportReq,
+        _timeout: Duration,
+    ) -> EGResult<(), Self::Error> {
         if !self.connected.load(Ordering::SeqCst) {
-            return Err(EGError::External(Box::new(
-                iris::ConnectionError::ConnectionClosed,
-            )));
+            return Err(EGError::External(iris::ConnectionError::ConnectionClosed));
         }
         self.sent
             .lock()
@@ -128,7 +134,9 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
                     None => logon_response(message.metadata.id, 200, None),
                 };
-                self.listener.on_message(response).await?;
+                self.listener.on_message(response).await.map_err(|error| {
+                    error.map_external(|_| iris::ConnectionError::ConnectionClosed)
+                })?;
             }
             BinanceWebsocketMethodName::Time => {
                 let response = BinanceWebsocketResponse {
@@ -140,7 +148,9 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     })),
                     status: 200,
                 };
-                self.listener.on_message(response).await?;
+                self.listener.on_message(response).await.map_err(|error| {
+                    error.map_external(|_| iris::ConnectionError::ConnectionClosed)
+                })?;
             }
             // Every user request (order, exchangeInfo, ...) is answered with
             // a matching-id success reply, as the real exchange does, so the
@@ -153,14 +163,19 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     result: None,
                     status: 200,
                 };
-                self.listener.on_message(response).await?;
+                self.listener.on_message(response).await.map_err(|error| {
+                    error.map_external(|_| iris::ConnectionError::ConnectionClosed)
+                })?;
             }
         }
         Ok(())
     }
-    async fn disconnect(&self) -> EGResult<()> {
+    async fn disconnect(&self) -> EGResult<(), Self::Error> {
         self.connected.store(false, Ordering::SeqCst);
-        self.listener.on_disconnected().await
+        self.listener
+            .on_disconnected()
+            .await
+            .map_err(|error| error.map_external(|_| iris::ConnectionError::ConnectionClosed))
     }
 }
 
@@ -223,6 +238,7 @@ fn mock_session_connector(
                 dyn WebsocketClientTrait<
                         TransportReq = BinanceWebsocketRequest,
                         TransportRes = BinanceWebsocketResponse,
+                        Error = iris::ConnectionError,
                     >,
             > = Arc::new(mock_client);
             client

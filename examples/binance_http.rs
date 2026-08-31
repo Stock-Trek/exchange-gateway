@@ -66,13 +66,14 @@ mod binance {
     fn to_external_response(response: BinanceHttpResponse) -> EGResult<MyResponse> {
         match response {
             BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(info)) => {
-                let raw = serde_json::to_vec(&info)
-                    .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?;
+                let raw = serde_json::to_vec(&info).map_err(|e| {
+                    EGError::External(ExternalError::from(ExampleError(e.to_string())))
+                })?;
                 Ok(MyResponse { raw })
             }
-            BinanceHttpResponse::Failure(error) => Err(EGError::External(Box::new(ExampleError(
-                format!("{error:?}"),
-            )))),
+            BinanceHttpResponse::Failure(error) => Err(EGError::External(ExternalError::from(
+                ExampleError(format!("{error:?}")),
+            ))),
             BinanceHttpResponse::Success(BinanceHttpResponseResult::SpotOrder(_)) => {
                 Err(EGError::UnknownEndpoint)
             }

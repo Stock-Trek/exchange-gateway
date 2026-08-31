@@ -17,27 +17,42 @@ use std::{
 pub(crate) trait WebsocketClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
+    /// The concrete error type produced by the transport (e.g.
+    /// `iris::ConnectionError`), carried by [`EGError::External`] instead of
+    /// being boxed into a trait object.
+    type Error: std::error::Error + Send + Sync + 'static;
 
-    async fn connect(&self) -> EGResult<()>;
+    async fn connect(&self) -> EGResult<(), Self::Error>;
     fn is_connected(&self) -> bool;
-    async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()>;
-    async fn disconnect(&self) -> EGResult<()>;
+    async fn send_message(
+        &self,
+        message: Self::TransportReq,
+        timeout: Duration,
+    ) -> EGResult<(), Self::Error>;
+    async fn disconnect(&self) -> EGResult<(), Self::Error>;
 }
 
-pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes> {
-    client: Arc<dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
+pub(crate) struct WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes, E> {
+    client: Arc<
+        dyn WebsocketClientTrait<
+                TransportReq = TransportReq,
+                TransportRes = TransportRes,
+                Error = E,
+            >,
+    >,
     convert_request: TryConvertValue<EGReq, TransportReq>,
     convert_response: ArcTryConvertValue<TransportRes, EGRes>,
     websocket_listener: Arc<WebsocketListener<TransportRes, EGRes>>,
 }
 
 #[async_trait]
-impl<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E>
     TransportTrait<EGReq, TransportReq, TransportRes, EGRes>
-    for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
+    for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes, E>
 where
     EGReq: Send,
     EGRes: Send + Sync + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
         (self.convert_request)(request)
@@ -46,7 +61,10 @@ where
         (self.convert_response)(response)
     }
     async fn connect(&self) -> EGResult<()> {
-        self.client.connect().await
+        self.client
+            .connect()
+            .await
+            .map_err(EGError::into_boxed_external)
     }
     fn is_connected(&self) -> bool {
         self.client.is_connected()
@@ -61,22 +79,33 @@ where
         let waiter = self
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
-        self.client.send_message(transport_req, timeout).await?;
+        self.client
+            .send_message(transport_req, timeout)
+            .await
+            .map_err(EGError::into_boxed_external)?;
         self.wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {
-        self.client.disconnect().await
+        self.client
+            .disconnect()
+            .await
+            .map_err(EGError::into_boxed_external)
     }
 }
 
-impl<EGReq, TransportReq, TransportRes, EGRes>
-    WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E>
+    WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes, E>
 where
     EGRes: Send + Sync + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     pub fn new(
         client: Arc<
-            dyn WebsocketClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>,
+            dyn WebsocketClientTrait<
+                    TransportReq = TransportReq,
+                    TransportRes = TransportRes,
+                    Error = E,
+                >,
         >,
         convert_request: TryConvertValue<EGReq, TransportReq>,
         convert_response: ArcTryConvertValue<TransportRes, EGRes>,
@@ -106,8 +135,8 @@ where
     }
 }
 
-impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
-    for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E> std::fmt::Debug
+    for WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes, E>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebsocketTransport")
@@ -166,10 +195,14 @@ mod tests {
     impl WebsocketClientTrait for TimeoutClient {
         type TransportReq = u64;
         type TransportRes = u64;
+        type Error = std::io::Error;
 
-        async fn connect(&self) -> EGResult<()> {
+        async fn connect(&self) -> EGResult<(), Self::Error> {
             self.connected.store(true, Ordering::SeqCst);
-            self.listener.on_connected().await
+            self.listener
+                .on_connected()
+                .await
+                .map_err(|error| error.map_external(std::io::Error::other))
         }
         fn is_connected(&self) -> bool {
             self.connected.load(Ordering::SeqCst)
@@ -178,7 +211,7 @@ mod tests {
             &self,
             message: Self::TransportReq,
             _timeout: Duration,
-        ) -> EGResult<()> {
+        ) -> EGResult<(), Self::Error> {
             // The request is on the wire, but the send is reported as timed
             // out. The matching response arrives only once released.
             let listener = self.listener.clone();
@@ -189,9 +222,12 @@ mod tests {
             });
             Err(EGError::TimedOut)
         }
-        async fn disconnect(&self) -> EGResult<()> {
+        async fn disconnect(&self) -> EGResult<(), Self::Error> {
             self.connected.store(false, Ordering::SeqCst);
-            self.listener.on_disconnected().await
+            self.listener
+                .on_disconnected()
+                .await
+                .map_err(|error| error.map_external(std::io::Error::other))
         }
     }
 

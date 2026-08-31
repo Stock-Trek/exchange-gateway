@@ -26,7 +26,7 @@ pub mod prelude {
         connector::Connector,
         connector_impl::ConnectorImpl,
         credentials::{api_key_credential::ApiKeyCredentials, jwt_credential::JwtCredentials},
-        error::{EGError, EGResult},
+        error::{EGError, EGResult, ExternalError},
         functions::ArcTryConvertValue,
         listeners::listener::ListenerTrait,
         urls::TradingMode,
