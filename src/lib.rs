@@ -16,7 +16,6 @@ pub mod listeners;
 pub mod rate_limit;
 pub mod sign;
 mod specs;
-pub mod sync_clock;
 mod transports;
 pub mod urls;
 

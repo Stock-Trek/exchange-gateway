@@ -1,7 +1,7 @@
 use crate::{
     auth_gate::AuthGate,
     authenticate_leg::AuthenticateLeg,
-    clock::Clock,
+    clock::{Clock, Synchronization},
     connector::Connector,
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
@@ -19,7 +19,6 @@ use crate::{
     specs::binance::common::{
         data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
     },
-    sync_clock::SyncClock,
     transports::{
         iris::IrisWebsocketClient, transport::Transport, websocket::WebsocketClientTrait,
         websocket::WebsocketTransport,
@@ -127,22 +126,23 @@ where
             Some(credentials) => credentials.api_key.clone(),
             None => return Err(EGError::NotAuthenticated),
         };
-        vec![authenticate_leg(api_key, clock.clone(), logon_timeout)]
+        vec![authenticate_leg(api_key, logon_timeout)]
     } else {
         vec![]
     };
     Ok(ConnectorImpl::new(
         rate_limits,
+        clock,
+        synchronization(Duration::from_secs(20)),
+        to_unsigned_request,
         request_weight,
         order_count,
-        to_unsigned_request,
-        sync_timestamp(clock.clone()),
+        sync_timestamp(),
         Transport::Websocket(transport),
         null_signer(),
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
-        sync_clock(clock, Duration::from_secs(20)),
         auth_gate,
     ))
 }
@@ -157,7 +157,6 @@ fn from_response(response: BinanceWebsocketResponse) -> EGResult<BinanceWebsocke
 
 fn authenticate_leg(
     api_key: String,
-    clock: Arc<Clock>,
     timeout: Duration,
 ) -> AuthenticateLeg<
     BinanceWebsocketUnsignedRequest,
@@ -166,10 +165,9 @@ fn authenticate_leg(
 > {
     let create_auth_attempt = {
         let api_key = api_key.clone();
-        let clock_auth = clock.clone();
-        Arc::new(move || {
+        Arc::new(move |clock: &Clock| {
             let id = id();
-            let message = auth_message(&id, &api_key, &clock_auth);
+            let message = auth_message(&id, &api_key, clock);
             let filter: ArcPredicate<BinanceWebsocketResponse> =
                 Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
             (message, filter)
@@ -223,11 +221,10 @@ fn validate_response(response: &BinanceWebsocketResponse) -> EGResult<()> {
     Ok(())
 }
 
-fn sync_clock(
-    clock: Arc<Clock>,
+fn synchronization(
     timeout: Duration,
-) -> SyncClock<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse> {
-    let create_request = Arc::new(move || {
+) -> Synchronization<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse> {
+    let create_time_request = Arc::new(move || {
         let id = id();
         let message = BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
@@ -240,23 +237,17 @@ fn sync_clock(
             Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
         (message, filter)
     });
-    let sync = {
-        let clock = clock.clone();
-        Arc::new(move |(response, round_trip_time)| -> EGResult<()> {
-            validate_response(&response)?;
-            match response.result {
-                Some(BinanceWebsocketResponseResult::Time(result)) => {
-                    clock.sync(result.serverTime, round_trip_time);
-                    Ok(())
-                }
-                _ => Err(EGError::BadResponse),
-            }
-        })
-    };
-    SyncClock {
-        create_request,
+    let to_server_time = Arc::new(|response: &BinanceWebsocketResponse| -> EGResult<i64> {
+        validate_response(response)?;
+        match &response.result {
+            Some(BinanceWebsocketResponseResult::Time(result)) => Ok(result.serverTime),
+            _ => Err(EGError::BadResponse),
+        }
+    });
+    Synchronization {
+        create_time_request,
         timeout,
-        sync,
+        to_server_time,
     }
 }
 
@@ -273,28 +264,27 @@ fn null_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, BinanceWebsoc
     })
 }
 
-fn sync_timestamp(
-    clock: Arc<Clock>,
-) -> ArcTryConvertValue<BinanceWebsocketUnsignedRequest, BinanceWebsocketUnsignedRequest> {
-    Arc::new(move |mut request| {
+fn sync_timestamp()
+-> ArcTryConvertValue<(BinanceWebsocketUnsignedRequest, i64), BinanceWebsocketUnsignedRequest> {
+    Arc::new(move |(mut request, server_time)| {
         match &mut request.params {
             BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
             }
             BinanceWebsocketUnsignedParams::AssetLimits(params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
             }
             BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
             }
             BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
             }
             BinanceWebsocketUnsignedParams::Logon(params) => {
-                params.timestamp = clock.now_millis();
+                params.timestamp = server_time;
             }
             BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
             }
             BinanceWebsocketUnsignedParams::ExchangeInfo(..)
             | BinanceWebsocketUnsignedParams::Time(..) => {}
@@ -504,12 +494,9 @@ mod test {
     #[test]
     fn logon_filter_matches_any_response_for_the_logon_id() {
         let api_key = "api-key";
-        let leg = authenticate_leg(
-            api_key.into(),
-            Arc::new(Clock::default()),
-            Duration::from_secs(20),
-        );
-        let (message, filter) = (leg.create_auth_attempt)();
+        let leg = authenticate_leg(api_key.into(), Duration::from_secs(20));
+        let clock = Arc::new(Clock::default());
+        let (message, filter) = (leg.create_auth_attempt)(&clock);
         let id = message.metadata.id;
         // Success and rejection are both matched, so a rejected logon is
         // consumed by the authentication waiter instead of leaking to the
@@ -531,18 +518,15 @@ mod test {
     #[test]
     fn each_authentication_attempt_uses_a_fresh_logon_id() {
         let api_key = "api-key";
-        let leg = authenticate_leg(
-            api_key.into(),
-            Arc::new(Clock::default()),
-            Duration::from_secs(20),
-        );
+        let leg = authenticate_leg(api_key.into(), Duration::from_secs(20));
+        let clock = Arc::new(Clock::default());
         // A retried authentication must not reuse the previous attempt's id:
         // a slow response to the earlier attempt (e.g. one arriving after a
         // reconnect) would otherwise resolve the newer attempt's waiter, and
         // the newer attempt's own response would leak to the user's listener
         // with no waiter left.
-        let (first_message, first_filter) = (leg.create_auth_attempt)();
-        let (second_message, second_filter) = (leg.create_auth_attempt)();
+        let (first_message, first_filter) = (leg.create_auth_attempt)(&clock);
+        let (second_message, second_filter) = (leg.create_auth_attempt)(&clock);
         assert_ne!(
             first_message.metadata.id, second_message.metadata.id,
             "each authentication attempt must use a fresh logon id"
@@ -573,12 +557,9 @@ mod test {
     #[test]
     fn logon_signer_surfaces_rejected_logon_error() {
         let api_key = "api-key";
-        let leg = authenticate_leg(
-            api_key.into(),
-            Arc::new(Clock::default()),
-            Duration::from_secs(20),
-        );
-        let id = (leg.create_auth_attempt)().0.metadata.id;
+        let leg = authenticate_leg(api_key.into(), Duration::from_secs(20));
+        let clock = Arc::new(Clock::default());
+        let id = (leg.create_auth_attempt)(&clock).0.metadata.id;
         // A successful logon response yields a signer.
         let successful_response = logon_response(id.clone(), 200, None);
         assert!((leg.create_signer)(successful_response).is_ok());
@@ -752,7 +733,7 @@ mod test {
     fn sync_timestamp_fills_fresh_timestamp_and_default_recv_window() {
         let clock = Arc::new(Clock::default());
         let before = clock.now_millis();
-        let sync = sync_timestamp(clock);
+        let sync = sync_timestamp();
         let request = BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
                 id: "1".into(),
@@ -760,7 +741,7 @@ mod test {
             },
             params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
         };
-        let synced = sync(request).unwrap();
+        let synced = sync((request, clock.now_millis())).unwrap();
         let BinanceWebsocketUnsignedParams::SpotOrderRequest(synced) = synced.params else {
             panic!("expected spot order request");
         };
@@ -809,8 +790,8 @@ mod test {
     #[test]
     fn sync_lock_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
-        let sync_clock = sync_clock(clock.clone(), Duration::from_secs(20));
-        let (message, filter) = (sync_clock.create_request)();
+        let synchronization = synchronization(Duration::from_secs(20));
+        let (message, filter) = (synchronization.create_time_request)();
         assert!(matches!(
             message.params,
             BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {})
@@ -829,7 +810,8 @@ mod test {
             status: 200,
         };
         assert!(filter(&response));
-        (sync_clock.sync)((response, Duration::ZERO)).unwrap();
+        let server_time = (synchronization.to_server_time)(&response).expect("No server time");
+        clock.sync(server_time, Duration::ZERO);
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",
@@ -840,7 +822,7 @@ mod test {
     #[test]
     fn sync_timestamp_leaves_time_unchanged() {
         let clock = Arc::new(Clock::default());
-        let sync = sync_timestamp(clock);
+        let sync = sync_timestamp();
         let request = BinanceWebsocketUnsignedRequest {
             metadata: BinanceWebsocketMetadata {
                 id: "1".into(),
@@ -848,7 +830,7 @@ mod test {
             },
             params: BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {}),
         };
-        let synced = sync(request).unwrap();
+        let synced = sync((request, clock.now_millis())).unwrap();
         assert!(matches!(
             synced.params,
             BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {})

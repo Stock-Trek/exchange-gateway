@@ -1,6 +1,5 @@
-use std::time::SystemTimeError;
-
 use crate::rate_limit::feedback::RateLimitFeedback;
+use std::time::SystemTimeError;
 
 pub type EGResult<T> = Result<T, EGError>;
 

@@ -1,6 +1,7 @@
 use crate::{
     auth_gate::{AuthGate, AuthGateAcquisition},
     authenticate_leg::AuthenticateLeg,
+    clock::{Clock, Synchronization},
     connector::Connector,
     error::{EGError, EGResult},
     functions::{ArcTryConvertValue, TryConvertRef},
@@ -9,7 +10,6 @@ use crate::{
         convert_signer::ConvertSigner,
         signer::{Signer, SignerTrait},
     },
-    sync_clock::SyncClock,
     transports::transport::{Transport, TransportTrait},
 };
 use async_trait::async_trait;
@@ -29,16 +29,17 @@ pub struct ConnectorImpl<
     EGRes,
 > {
     rate_limits: RateLimits,
+    clock: Arc<Clock>,
+    synchronization: Synchronization<EGUnsignedReq, EGRes>,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-    sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+    sync_timestamp_fields: ArcTryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-    sync_clock: SyncClock<EGUnsignedReq, EGRes>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
 }
@@ -76,7 +77,7 @@ where
     }
     async fn sync_clock(&self) -> EGResult<()> {
         let (signed_message, weight, order_count, filter) = {
-            let (message, filter) = (self.sync_clock.create_request)();
+            let (message, filter) = (self.synchronization.create_time_request)();
             let weight = (self.to_weight)(&message);
             let order_count = (self.to_order_count)(&message);
             self.check_rate_limits(&message)?;
@@ -92,7 +93,7 @@ where
         let start = Instant::now();
         let response = match self
             .transport
-            .send_and_wait_for(signed_message, self.sync_clock.timeout, filter)
+            .send_and_wait_for(signed_message, self.synchronization.timeout, filter)
             .await
         {
             Ok(response) => response,
@@ -102,7 +103,9 @@ where
             }
         };
         let round_trip_time = start.elapsed();
-        (self.sync_clock.sync)((response, round_trip_time))
+        let server_time = (self.synchronization.to_server_time)(&response)?;
+        self.clock.sync(server_time, round_trip_time);
+        Ok(())
     }
     async fn authenticate(&self) -> EGResult<()> {
         let Some(credentials) = &self.credentials else {
@@ -162,7 +165,7 @@ where
         let (signed_request, weight, order_count) = {
             let unsigned = (self.to_unsigned_request)(request)?;
             let unsigned = if signed {
-                (self.sync_timestamp_fields)(unsigned)?
+                (self.sync_timestamp_fields)((unsigned, self.clock.now_millis()))?
             } else {
                 unsigned
             };
@@ -210,20 +213,22 @@ where
 {
     pub(crate) fn new(
         rate_limits: RateLimits,
+        clock: Arc<Clock>,
+        synchronization: Synchronization<EGUnsignedReq, EGRes>,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
-        sync_timestamp_fields: ArcTryConvertValue<EGUnsignedReq, EGUnsignedReq>,
+        sync_timestamp_fields: ArcTryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-        sync_clock: SyncClock<EGUnsignedReq, EGRes>,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
             rate_limits,
+            clock,
             to_weight,
             to_order_count,
             to_unsigned_request,
@@ -233,7 +238,7 @@ where
             credentials,
             create_signer,
             authenticate_legs,
-            sync_clock,
+            synchronization,
             signer: Arc::new(Mutex::new(None)),
             auth_gate,
         }
@@ -243,7 +248,7 @@ where
         let mut signer = (self.create_signer)(credentials)?;
         for leg in &self.authenticate_legs {
             let (signed_auth_message, weight, order_count, filter) = {
-                let (auth_message, filter) = (leg.create_auth_attempt)();
+                let (auth_message, filter) = (leg.create_auth_attempt)(&self.clock);
                 self.check_rate_limits(&auth_message)?;
                 let weight = (self.to_weight)(&auth_message);
                 let order_count = (self.to_order_count)(&auth_message);
@@ -328,16 +333,17 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Connector")
             .field("rate_limits", &self.rate_limits)
+            .field("clock", &self.clock)
+            .field("synchronization", &self.synchronization)
+            .field("to_unsigned_request", &"<function>")
             .field("to_weight", &"<function>")
             .field("to_order_count", &"<function>")
-            .field("to_unsigned_request", &"<function>")
             .field("sync_timestamp", &"<function>")
             .field("transport", &self.transport)
             .field("null_signer", &self.null_signer)
             .field("credentials", &"<redacted>")
             .field("create_signer", &self.create_signer)
             .field("authenticate_legs", &self.authenticate_legs)
-            .field("sync_clock", &self.sync_clock)
             .field("signer", &"<redacted>")
             .field("auth_gate", &self.auth_gate)
             .finish()

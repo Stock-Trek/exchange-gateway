@@ -1,5 +1,4 @@
 use crate::{
-    clock::Clock,
     error::EGResult,
     rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
@@ -35,9 +34,9 @@ pub(crate) fn exchange_urls() -> ExchangeUrls {
 pub(crate) fn sync_timestamp_fields(
     timestamp: &mut i64,
     recv_window: &mut Option<Decimal>,
-    clock: &Clock,
+    server_time_millis: i64,
 ) {
-    *timestamp = clock.now_millis();
+    *timestamp = server_time_millis;
     if recv_window.is_none() {
         *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MILLIS));
     }

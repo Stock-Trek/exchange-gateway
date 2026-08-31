@@ -1,6 +1,6 @@
 use crate::{
     auth_gate::AuthGate,
-    clock::Clock,
+    clock::{Clock, Synchronization},
     connector::Connector,
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
@@ -16,7 +16,6 @@ use crate::{
     },
     specs::binance::common::{data_signer, rate_limit_usage, sync_timestamp_fields},
     specs::binance::common::{exchange_urls, rate_limits},
-    sync_clock::SyncClock,
     transports::http::{HttpClientTrait, HttpEndpoint},
     transports::transport::Transport,
     transports::{
@@ -96,16 +95,17 @@ where
     let authenticate_legs = vec![];
     Ok(ConnectorImpl::new(
         rate_limits,
+        clock,
+        synchronization(Duration::from_secs(20)),
+        to_unsigned_request,
         request_weight,
         order_count,
-        to_unsigned_request,
-        sync_timestamp(clock.clone()),
+        sync_timestamp(),
         Transport::Http(transport),
         null_signer(),
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
-        sync_clock(clock, Duration::from_secs(20)),
         Arc::new(AuthGate::default()),
     ))
 }
@@ -249,29 +249,28 @@ fn null_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest
     })
 }
 
-fn sync_timestamp(
-    clock: Arc<Clock>,
-) -> ArcTryConvertValue<BinanceHttpUnsignedRequest, BinanceHttpUnsignedRequest> {
-    Arc::new(move |request| {
+fn sync_timestamp()
+-> ArcTryConvertValue<(BinanceHttpUnsignedRequest, i64), BinanceHttpUnsignedRequest> {
+    Arc::new(move |(request, server_time)| {
         Ok(match request {
             BinanceHttpUnsignedRequest::AssetLimits(mut params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
                 BinanceHttpUnsignedRequest::AssetLimits(params)
             }
             BinanceHttpUnsignedRequest::SpotOrderRequest(mut params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
                 BinanceHttpUnsignedRequest::SpotOrderRequest(params)
             }
             BinanceHttpUnsignedRequest::AmendOrderRequest(mut params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
                 BinanceHttpUnsignedRequest::AmendOrderRequest(params)
             }
             BinanceHttpUnsignedRequest::CancelAllOrdersRequest(mut params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
                 BinanceHttpUnsignedRequest::CancelAllOrdersRequest(params)
             }
             BinanceHttpUnsignedRequest::CancelOrderRequest(mut params) => {
-                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, &clock);
+                sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
                 BinanceHttpUnsignedRequest::CancelOrderRequest(params)
             }
             request @ BinanceHttpUnsignedRequest::ExchangeInfo(..) => request,
@@ -375,11 +374,10 @@ impl HasApiKey for BinanceCancelOrderParams {
     }
 }
 
-fn sync_clock(
-    clock: Arc<Clock>,
+fn synchronization(
     timeout: Duration,
-) -> SyncClock<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
-    let create_request = Arc::new(|| {
+) -> Synchronization<BinanceHttpUnsignedRequest, BinanceHttpResponse> {
+    let create_time_request = Arc::new(|| {
         let message = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         let filter: ArcPredicate<BinanceHttpResponse> = Arc::new(|response| {
             matches!(
@@ -390,26 +388,22 @@ fn sync_clock(
         });
         (message, filter)
     });
-    let sync = {
-        let clock = clock.clone();
-        Arc::new(move |(message, round_trip_time)| -> EGResult<()> {
-            match message {
-                BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) => {
-                    clock.sync(result.serverTime, round_trip_time);
-                    Ok(())
-                }
-                BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
-                    code: error.code,
-                    message: error.msg.clone(),
-                }),
-                _ => Err(EGError::BadResponse),
+    let to_server_time = Arc::new(|response: &BinanceHttpResponse| -> EGResult<i64> {
+        match response {
+            BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) => {
+                Ok(result.serverTime)
             }
-        })
-    };
-    SyncClock {
-        create_request,
+            BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
+                code: error.code,
+                message: error.msg.clone(),
+            }),
+            _ => Err(EGError::BadResponse),
+        }
+    });
+    Synchronization {
+        create_time_request,
         timeout,
-        sync,
+        to_server_time,
     }
 }
 
@@ -726,12 +720,12 @@ mod test {
     #[test]
     fn sync_timestamp_leaves_exchange_info_unchanged() {
         let clock = Arc::new(Clock::default());
-        let sync = sync_timestamp(clock);
+        let sync = sync_timestamp();
         let request = BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
             permissions: vec![BinanceExchangeInfoPermission::SPOT],
             symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
         });
-        let synced = sync(request).unwrap();
+        let synced = sync((request, clock.now_millis())).unwrap();
         assert!(matches!(
             synced,
             BinanceHttpUnsignedRequest::ExchangeInfo(..)
@@ -741,11 +735,13 @@ mod test {
     #[test]
     fn sync_timestamp_preserves_caller_recv_window() {
         let clock = Arc::new(Clock::default());
-        let sync = sync_timestamp(clock);
+        let sync = sync_timestamp();
         let mut params = spot_order_params();
         params.recvWindow = Some(Decimal::from(10_000u64));
         let request = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(params));
-        let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) = sync(request).unwrap() else {
+        let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) =
+            sync((request, clock.now_millis())).unwrap()
+        else {
             panic!("expected spot order request");
         };
         assert_eq!(synced.recvWindow, Some(Decimal::from(10_000u64)));
@@ -755,9 +751,11 @@ mod test {
     fn http_sync_timestamp_fills_fresh_timestamp_and_default_recv_window() {
         let clock = Arc::new(Clock::default());
         let before = clock.now_millis();
-        let sync = sync_timestamp(clock);
+        let sync = sync_timestamp();
         let request = BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()));
-        let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) = sync(request).unwrap() else {
+        let BinanceHttpUnsignedRequest::SpotOrderRequest(synced) =
+            sync((request, clock.now_millis())).unwrap()
+        else {
             panic!("expected spot order request");
         };
         assert!(
@@ -848,10 +846,10 @@ mod test {
     #[test]
     fn sync_timestamp_leaves_time_unchanged() {
         let clock = Arc::new(Clock::default());
-        let sync = sync_timestamp(clock);
+        let sync = sync_timestamp();
         let request = BinanceHttpUnsignedRequest::Time(BinanceTimeParams {});
         assert!(matches!(
-            sync(request).unwrap(),
+            sync((request, clock.now_millis())).unwrap(),
             BinanceHttpUnsignedRequest::Time(..)
         ));
     }
@@ -859,8 +857,8 @@ mod test {
     #[test]
     fn sync_clock_syncs_the_server_clock() {
         let clock = Arc::new(Clock::default());
-        let sync_clock = sync_clock(clock.clone(), Duration::from_secs(20));
-        let (message, filter) = (sync_clock.create_request)();
+        let synchronization = synchronization(Duration::from_secs(20));
+        let (message, filter) = (synchronization.create_time_request)();
         assert!(matches!(message, BinanceHttpUnsignedRequest::Time(..)));
         let local = clock.now_millis();
         let response =
@@ -868,7 +866,9 @@ mod test {
                 serverTime: local + 10_000,
             }));
         assert!(filter(&response));
-        (sync_clock.sync)((response, Duration::ZERO)).unwrap();
+        let server_time =
+            (synchronization.to_server_time)(&response).expect("No server time from response");
+        clock.sync(server_time, Duration::ZERO);
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",
@@ -878,15 +878,14 @@ mod test {
 
     #[test]
     fn sync_clock_surfaces_the_time_error() {
-        let clock = Arc::new(Clock::default());
-        let sync_clock = sync_clock(clock, Duration::from_secs(20));
-        let (_, filter) = (sync_clock.create_request)();
+        let synchronization = synchronization(Duration::from_secs(20));
+        let (_, filter) = (synchronization.create_time_request)();
         let response = BinanceHttpResponse::Failure(BinanceError {
             code: -1021,
             msg: "Timestamp for this request is outside of the recvWindow.".into(),
         });
         assert!(filter(&response));
-        let result = (sync_clock.sync)((response, Duration::ZERO));
+        let result = (synchronization.to_server_time)(&response);
         assert!(result.is_err(), "expected ApiError");
         let Err(EGError::ApiError { code, message }) = result else {
             panic!("expected an ApiError");
