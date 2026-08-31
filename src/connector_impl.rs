@@ -103,7 +103,16 @@ where
         {
             Ok(response) => response,
             Err(error) => {
-                let _ = self.rate_limits.refund(weight, order_count);
+                // Binance counts request weight even for rejected requests
+                // (a 4xx/5xx time error surfaces as HttpError), so a post-send
+                // failure other than a server-side 429/418 consumed
+                // server-side capacity: keep the local reservation so the
+                // budget tracks true server usage. Only the RateLimited
+                // (429/418) path, which the server does not count, refunds
+                // the locally-reserved capacity.
+                if matches!(&error, EGError::RateLimited { .. }) {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                }
                 return Err(error);
             }
         };
