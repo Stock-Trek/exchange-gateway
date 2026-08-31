@@ -1,6 +1,6 @@
 #[cfg(feature = "iris")]
 use {
-    crate::{clock::Clock, specs::binance::websocket::connector as binance_websocket_connector},
+    crate::specs::binance::websocket::connector as binance_websocket_connector,
     exchange_types::binance::websocket::{
         BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
@@ -13,13 +13,14 @@ use {
     exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
 };
 
-#[cfg(feature = "reqwest")]
-use crate::functions::TryConvertValue;
 #[cfg(any(feature = "iris", feature = "reqwest"))]
 use crate::{
-    connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
-    listeners::listener::ListenerTrait, urls::TradingMode,
+    clock::Clock, connector::Connector, credentials::api_key_credential::ApiKeyCredentials,
+    error::EGResult, functions::TryConvertValue, urls::TradingMode,
 };
+
+#[cfg(feature = "iris")]
+use crate::listeners::listener::ListenerTrait;
 
 #[derive(Debug, Clone)]
 pub struct Connect;
