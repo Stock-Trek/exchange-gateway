@@ -151,13 +151,6 @@ where
             .is_some();
         Ok(has_signer && !self.is_authentication_stale()?)
     }
-    async fn disconnect(&self) -> EGResult<()> {
-        {
-            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
-            *guard = None;
-        }
-        self.transport.disconnect().await
-    }
     async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
         if signed && self.is_authentication_stale()? {
             return Err(EGError::NotAuthenticated);
@@ -194,6 +187,13 @@ where
                 Err(error)
             }
         }
+    }
+    async fn disconnect(&self) -> EGResult<()> {
+        {
+            let mut guard = self.signer.lock().map_err(|_| EGError::MutexPoisoned)?;
+            *guard = None;
+        }
+        self.transport.disconnect().await
     }
 }
 
