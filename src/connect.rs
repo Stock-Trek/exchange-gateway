@@ -17,12 +17,9 @@ use {
 };
 
 #[cfg(any(feature = "iris", feature = "reqwest"))]
-use {
-    crate::{
-        connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
-        functions::ArcTryConvertValue, listeners::listener::ListenerTrait, urls::TradingMode,
-    },
-    std::sync::Arc,
+use crate::{
+    connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
+    functions::ArcTryConvertValue, listeners::listener::ListenerTrait, urls::TradingMode,
 };
 
 #[derive(Debug, Clone)]
@@ -35,7 +32,7 @@ impl Connect {
         trading_mode: TradingMode,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
         to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
-        listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
         clock: Clock,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
@@ -59,7 +56,7 @@ impl Connect {
         trading_mode: TradingMode,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
         to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-        listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
         clock: Clock,
@@ -86,7 +83,7 @@ impl Connect {
         trading_mode: TradingMode,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
         to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-        listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
         iris_config: IrisConfig,

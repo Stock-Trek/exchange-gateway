@@ -187,7 +187,7 @@ fn mock_session_connector(
     logon_gate: Option<LogonGate>,
     logon_error: Option<BinanceError>,
     logon_timeout: Duration,
-    listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
+    listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
     clock: Clock,
 ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
     let credentials = ApiKeyCredentials {
@@ -302,7 +302,7 @@ async fn post_logon_requests_omit_api_key_and_signature() {
         None,
         None,
         Duration::from_secs(20),
-        Arc::new(IgnoreListener),
+        IgnoreListener,
         Clock::default(),
     )
     .unwrap();
@@ -348,7 +348,7 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
             None,
             None,
             Duration::from_secs(20),
-            Arc::new(IgnoreListener),
+            IgnoreListener,
             Clock::default(),
         )
         .unwrap(),
@@ -422,7 +422,7 @@ async fn logon_weight_counts_against_weight_rate_limit() {
         None,
         None,
         Duration::from_secs(20),
-        Arc::new(IgnoreListener),
+        IgnoreListener,
         Clock::default(),
     )
     .unwrap();
@@ -454,10 +454,9 @@ async fn logon_weight_counts_against_weight_rate_limit() {
 async fn rejected_logon_fails_authentication_and_does_not_leak_to_listener() {
     let (client_tx, _client_rx) = std::sync::mpsc::channel();
     let received = Arc::new(Mutex::new(Vec::new()));
-    let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-        Arc::new(RecordingListener {
-            received: received.clone(),
-        });
+    let listener = RecordingListener {
+        received: received.clone(),
+    };
     let connector = mock_session_connector(
         client_tx,
         None,
@@ -509,7 +508,7 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
             Some(logon_gate.clone()),
             None,
             Duration::from_secs(20),
-            Arc::new(IgnoreListener),
+            IgnoreListener,
             Clock::default(),
         )
         .unwrap(),
@@ -601,10 +600,9 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
 async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let received = Arc::new(Mutex::new(Vec::new()));
-    let listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-        Arc::new(RecordingListener {
-            received: received.clone(),
-        });
+    let listener = RecordingListener {
+        received: received.clone(),
+    };
     let connector = Arc::new(
         mock_session_connector(
             client_tx,
@@ -704,7 +702,7 @@ async fn sync_clock_syncs_the_server_clock() {
         None,
         None,
         Duration::from_secs(20),
-        Arc::new(IgnoreListener),
+        IgnoreListener,
         clock,
     )
     .unwrap();
@@ -742,7 +740,7 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
         None,
         None,
         Duration::from_secs(20),
-        Arc::new(IgnoreListener),
+        IgnoreListener,
         clock,
     )
     .unwrap();

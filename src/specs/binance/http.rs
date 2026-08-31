@@ -43,7 +43,7 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
@@ -69,7 +69,7 @@ pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     rate_limits: RateLimits,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
@@ -77,8 +77,7 @@ where
     ExternalReq: Send,
     ExternalRes: Clone + Send + Sync + 'static,
 {
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
+    let response_listener = ConvertListener::new(to_external_response, listener);
     let api_key = credentials
         .as_ref()
         .map(|credentials| credentials.api_key.clone());

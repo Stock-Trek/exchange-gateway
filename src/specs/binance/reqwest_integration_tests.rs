@@ -119,8 +119,6 @@ fn mock_http_connector(
         api_key: "api-key".into(),
         secret: SecretString::from("secret"),
     };
-    let listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(IgnoreHttpListener);
     let to_unsigned_request: ArcTryConvertValue<
         BinanceHttpUnsignedRequest,
         BinanceHttpUnsignedRequest,
@@ -139,7 +137,7 @@ fn mock_http_connector(
         rate_limits(),
         to_unsigned_request,
         to_external_response,
-        listener,
+        IgnoreHttpListener,
         Some(credentials),
         clock,
     )
@@ -228,8 +226,6 @@ fn scripted_http_connector(
         api_key: "api-key".into(),
         secret: SecretString::from("secret"),
     };
-    let listener: Arc<dyn ListenerTrait<TMessage = BinanceHttpResponse>> =
-        Arc::new(IgnoreHttpListener);
     let to_unsigned_request: ArcTryConvertValue<
         BinanceHttpUnsignedRequest,
         BinanceHttpUnsignedRequest,
@@ -248,7 +244,7 @@ fn scripted_http_connector(
         rate_limits,
         to_unsigned_request,
         to_external_response,
-        listener,
+        IgnoreHttpListener,
         Some(credentials),
         clock,
     )

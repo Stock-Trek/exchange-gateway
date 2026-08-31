@@ -485,11 +485,10 @@ mod tests {
         let (port, _shutdown) = spawn_server_that_closes_first_connection().await;
         let connections = Arc::new(AtomicUsize::new(0));
         let received = Arc::new(Mutex::new(Vec::new()));
-        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> =
-            Arc::new(ConnectionCountingListener {
-                connections: connections.clone(),
-                received: received.clone(),
-            });
+        let listener = Arc::new(ConnectionCountingListener {
+            connections: connections.clone(),
+            received: received.clone(),
+        });
         let url = format!("ws://127.0.0.1:{port}/ws");
         let config = test_config().with_circuit_breaker_config(
             CircuitBreakerConfig::new()
@@ -545,7 +544,7 @@ mod tests {
     async fn send_message_fails_fast_while_reconnecting() {
         let (port, _shutdown) = spawn_server_that_closes_first_connection_then_stalls().await;
         let received = Arc::new(Mutex::new(Vec::new()));
-        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> = Arc::new(TestListener {
+        let listener = Arc::new(TestListener {
             received: received.clone(),
         });
         let url = format!("ws://127.0.0.1:{port}/ws");
@@ -696,10 +695,9 @@ mod tests {
     async fn send_message_respects_timeout_when_handler_is_wedged() {
         let (port, _shutdown) = spawn_responder_server().await;
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
-        let listener: Arc<dyn ListenerTrait<TMessage = TestResponse>> =
-            Arc::new(BlockingListener {
-                entered: Arc::new(Mutex::new(Some(entered_tx))),
-            });
+        let listener = Arc::new(BlockingListener {
+            entered: Arc::new(Mutex::new(Some(entered_tx))),
+        });
         let url = format!("ws://127.0.0.1:{port}/ws");
         let config = test_config().with_channel_buffer_size(1);
         let client =

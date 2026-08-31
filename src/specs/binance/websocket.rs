@@ -42,7 +42,7 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
     to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
     iris_config: IrisConfig,
@@ -53,10 +53,7 @@ where
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
-    let client_factory = move |websocket_listener: Arc<
-        dyn ListenerTrait<TMessage = BinanceWebsocketResponse>,
-    >|
-          -> Arc<
+    let client_factory = move |websocket_listener| -> Arc<
         dyn WebsocketClientTrait<
                 TransportReq = BinanceWebsocketRequest,
                 TransportRes = BinanceWebsocketResponse,
@@ -94,7 +91,7 @@ pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
     logon_timeout: Duration,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
     to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
+    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
     clock: Clock,
@@ -104,8 +101,7 @@ where
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let rate_limits = rate_limits();
-    let response_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>> =
-        Arc::new(ConvertListener::new(to_external_response, listener));
+    let response_listener = ConvertListener::new(to_external_response, listener);
     let auth_gate = Arc::new(AuthGate::default());
     let websocket_listener = Arc::new(WebsocketListener::new(
         Arc::new(from_response),

@@ -11,11 +11,11 @@ pub(crate) struct ConvertListener<TFrom, TTo> {
 impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
     pub fn new(
         converter: ArcTryConvertValue<TFrom, TTo>,
-        delegate: Arc<dyn ListenerTrait<TMessage = TTo>>,
+        delegate: impl ListenerTrait<TMessage = TTo> + 'static,
     ) -> Self {
         Self {
             converter,
-            delegate,
+            delegate: Arc::new(delegate),
         }
     }
 }

@@ -48,14 +48,14 @@ where
         converter: ArcTryConvertValue<TransportRes, EGRes>,
         feedback: impl Fn(&TransportRes) -> EGResult<RateLimitFeedback> + Send + Sync + 'static,
         rate_limits: RateLimits,
-        delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+        delegate: impl ListenerTrait<TMessage = EGRes> + 'static,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {
             converter,
             feedback: Arc::new(feedback),
             rate_limits,
-            delegate,
+            delegate: Arc::new(delegate),
             handlers: Arc::new(Mutex::new(Vec::new())),
             next_handler_id: Arc::new(AtomicU64::new(0)),
             auth_gate,
@@ -288,10 +288,9 @@ mod tests {
     async fn send_and_wait_matching_message_applies_feedback() {
         let limits = rate_limits();
         let received = Arc::new(Mutex::new(Vec::new()));
-        let delegate: Arc<dyn ListenerTrait<TMessage = TestMessage>> =
-            Arc::new(RecordingListener {
-                received: received.clone(),
-            });
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
         let auth_gate = Arc::new(AuthGate::default());
         let listener =
             WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
@@ -324,10 +323,9 @@ mod tests {
     async fn send_and_wait_matching_message_with_retry_feedback_is_error() {
         let limits = rate_limits();
         let received = Arc::new(Mutex::new(Vec::new()));
-        let delegate: Arc<dyn ListenerTrait<TMessage = TestMessage>> =
-            Arc::new(RecordingListener {
-                received: received.clone(),
-            });
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
         let auth_gate = Arc::new(AuthGate::default());
         let listener = WebsocketListener::new(
             Arc::new(Ok),
@@ -374,10 +372,9 @@ mod tests {
     async fn fire_and_forget_message_applies_feedback_and_forwards() {
         let limits = rate_limits();
         let received = Arc::new(Mutex::new(Vec::new()));
-        let delegate: Arc<dyn ListenerTrait<TMessage = TestMessage>> =
-            Arc::new(RecordingListener {
-                received: received.clone(),
-            });
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
         let auth_gate = Arc::new(AuthGate::default());
         let listener =
             WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);

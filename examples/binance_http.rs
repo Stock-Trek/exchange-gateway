@@ -99,12 +99,11 @@ mod binance {
     }
 
     pub(crate) async fn main() -> EGResult<()> {
-        let listener: Arc<dyn ListenerTrait<TMessage = MyResponse>> = Arc::new(MyListener);
         let connector = Connect.binance_http(
             TradingMode::Paper,
             Arc::new(to_unsigned_request),
             Arc::new(to_external_response),
-            listener,
+            MyListener,
             None,
             Clock::default(),
         )?;
