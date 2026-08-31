@@ -103,7 +103,13 @@ where
         {
             Ok(response) => response,
             Err(error) => {
-                let _ = self.rate_limits.refund(weight, order_count);
+                // Only a server-side 429/418 rejection is not counted
+                // against the budget; business rejections and other
+                // post-send failures are charged by the server, so the
+                // locally-reserved capacity must not be refunded.
+                if matches!(&error, EGError::RateLimited { .. }) {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                }
                 return Err(error);
             }
         };

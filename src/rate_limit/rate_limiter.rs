@@ -5,6 +5,8 @@ use crate::{
         rate_limiter_state::RateLimiterState,
     },
 };
+#[cfg(test)]
+use std::time::Instant;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -20,6 +22,29 @@ impl RateLimiter {
         Self {
             rate_limiters: Arc::new(Mutex::new(
                 rate_limits.iter().map(|rl| rl.to_state()).collect(),
+            )),
+        }
+    }
+    /// Builds limiters that read time from `now` instead of the wall clock,
+    /// so throttle expiry can be exercised deterministically in tests.
+    #[cfg(test)]
+    pub(crate) fn with_clock(
+        rate_limits: Vec<RateLimitConfig>,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        Self {
+            rate_limiters: Arc::new(Mutex::new(
+                rate_limits
+                    .iter()
+                    .map(|rl| {
+                        RateLimiterState::with_clock(
+                            rl.rate_limit_type,
+                            rl.interval_nanos,
+                            rl.capacity_per_interval,
+                            now.clone(),
+                        )
+                    })
+                    .collect(),
             )),
         }
     }

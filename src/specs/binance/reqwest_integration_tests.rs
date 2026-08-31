@@ -3,8 +3,11 @@ use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    rate_limit::feedback::RateLimitFeedback,
-    specs::binance::http::connector,
+    rate_limit::{
+        feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
+        rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
+    },
+    specs::binance::http::{connector, connector_with_client},
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},
@@ -186,6 +189,7 @@ impl HttpClientTrait for ScriptedHttpClient {
 fn scripted_http_connector(
     client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
     outcome: ScriptedOutcome,
+    rate_limits: RateLimits,
     clock: Clock,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
@@ -199,13 +203,15 @@ fn scripted_http_connector(
         outcome,
     };
     let _ = client_handle.send(scripted_client.clone());
-    connector(
-        TradingMode::Paper,
+    let client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>> =
+        Arc::new(scripted_client);
+    connector_with_client(
+        client,
+        rate_limits,
         to_unsigned_request,
         to_external_response,
         Some(credentials),
         clock,
-        Box::new(move |_url| Ok(scripted_client.clone())),
     )
 }
 
@@ -225,6 +231,46 @@ impl ManualClock {
     fn advance(&self, duration: Duration) {
         *self.now.lock().expect("mutex should not be poisoned") += duration;
     }
+    fn now(&self) -> Instant {
+        *self.now.lock().expect("mutex should not be poisoned")
+    }
+}
+
+fn single_slot_rate_limits() -> RateLimits {
+    RateLimits {
+        weight: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::RequestWeight,
+            capacity_per_interval: 1,
+            interval_nanos: Duration::from_secs(60).as_nanos(),
+        }]),
+        orders: RateLimiter::new(vec![RateLimitConfig {
+            rate_limit_type: RateLimitType::Orders,
+            capacity_per_interval: 1,
+            interval_nanos: Duration::from_secs(10).as_nanos(),
+        }]),
+    }
+}
+
+fn single_slot_rate_limits_with_clock(clock: ManualClock) -> RateLimits {
+    let now: Arc<dyn Fn() -> Instant + Send + Sync> = Arc::new(move || clock.now());
+    RateLimits {
+        weight: RateLimiter::with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }],
+            now.clone(),
+        ),
+        orders: RateLimiter::with_clock(
+            vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }],
+            now,
+        ),
+    }
 }
 
 fn spot_order_request() -> BinanceHttpUnsignedRequest {
@@ -234,8 +280,13 @@ fn spot_order_request() -> BinanceHttpUnsignedRequest {
 #[tokio::test]
 async fn http_send_keeps_local_reservation_on_business_rejection() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector =
-        scripted_http_connector(client_tx, ScriptedOutcome::HttpError, Clock::default()).unwrap();
+    let connector = scripted_http_connector(
+        client_tx,
+        ScriptedOutcome::HttpError,
+        single_slot_rate_limits(),
+        Clock::default(),
+    )
+    .unwrap();
     let client = client_rx.recv().unwrap();
 
     // The order is rejected with a 4xx business error (-2010 etc.), but
@@ -251,10 +302,10 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
 
     // The budget stays exhausted, so the next send is rejected locally
     // and never reaches the transport.
-    // let result = connector
-    //     .send(spot_order_request(), false, Duration::from_secs(5))
-    //     .await;
-    // assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    let result = connector
+        .send(spot_order_request(), false, Duration::from_secs(5))
+        .await;
+    assert!(matches!(result, Err(EGError::RateLimited { .. })));
     assert_eq!(client.sent.lock().unwrap().len(), 1);
 }
 
@@ -262,8 +313,13 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
 async fn http_send_refunds_local_reservation_on_rate_limited() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let clock = ManualClock::new();
-    let connector =
-        scripted_http_connector(client_tx, ScriptedOutcome::RateLimited, Clock::default()).unwrap();
+    let connector = scripted_http_connector(
+        client_tx,
+        ScriptedOutcome::RateLimited,
+        single_slot_rate_limits_with_clock(clock.clone()),
+        Clock::default(),
+    )
+    .unwrap();
     let client = client_rx.recv().unwrap();
 
     // A server-side 429 is not counted against the request-weight budget,
@@ -283,4 +339,63 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
         .send(spot_order_request(), false, Duration::from_secs(5))
         .await;
     assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    assert_eq!(client.sent.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn http_sync_clock_keeps_local_reservation_on_business_rejection() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let connector = scripted_http_connector(
+        client_tx,
+        ScriptedOutcome::HttpError,
+        single_slot_rate_limits(),
+        Clock::default(),
+    )
+    .unwrap();
+    let client = client_rx.recv().unwrap();
+
+    // The time request is rejected with a 4xx business error, but the
+    // exchange counts its weight anyway: the locally-reserved capacity
+    // must not be refunded.
+    let result = connector.sync_clock().await;
+    assert!(matches!(
+        result,
+        Err(EGError::HttpError { status: 400, .. })
+    ));
+    assert_eq!(client.sent.lock().unwrap().len(), 1);
+
+    // The budget stays exhausted, so the next sync_clock is rejected
+    // locally and never reaches the transport.
+    let result = connector.sync_clock().await;
+    assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    assert_eq!(client.sent.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn http_sync_clock_refunds_local_reservation_on_rate_limited() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let clock = ManualClock::new();
+    let connector = scripted_http_connector(
+        client_tx,
+        ScriptedOutcome::RateLimited,
+        single_slot_rate_limits_with_clock(clock.clone()),
+        Clock::default(),
+    )
+    .unwrap();
+    let client = client_rx.recv().unwrap();
+
+    // A server-side 429 is not counted against the request-weight budget,
+    // so the locally-reserved capacity is refunded.
+    let result = connector.sync_clock().await;
+    assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    assert_eq!(client.sent.lock().unwrap().len(), 1);
+
+    // Once the server's Retry-After has elapsed, the refunded budget
+    // admits the next request: it reaches the transport again instead of
+    // being rejected by the local limiter. The limiter's clock is the
+    // manual clock, so the throttle expires without sleeping.
+    clock.advance(Duration::from_millis(100));
+    let result = connector.sync_clock().await;
+    assert!(matches!(result, Err(EGError::RateLimited { .. })));
+    assert_eq!(client.sent.lock().unwrap().len(), 2);
 }
