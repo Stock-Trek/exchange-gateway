@@ -72,14 +72,6 @@ where
     }
 }
 
-/// Sends `error` through to the delegate's `on_error`.
-async fn forward_error<EGRes>(
-    delegate: &Arc<dyn ListenerTrait<TMessage = EGRes>>,
-    error: &EGError,
-) {
-    let _ = delegate.on_error(error).await;
-}
-
 #[async_trait]
 impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
 where
@@ -88,45 +80,6 @@ where
 {
     type TMessage = TransportRes;
 
-    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        let feedback = match (self.feedback)(&message) {
-            Ok(feedback) => feedback,
-            Err(error) => {
-                // A message that fails feedback extraction must not be
-                // dropped silently: report it and treat the message as
-                // consumed.
-                forward_error(&self.delegate, &error).await;
-                return Ok(());
-            }
-        };
-        if let Err(error) = self.rate_limits.apply_feedback(&feedback) {
-            forward_error(&self.delegate, &error).await;
-            return Ok(());
-        }
-        let response = match (self.converter)(message) {
-            Ok(response) => response,
-            Err(error) => {
-                // A message that fails conversion must not be dropped
-                // silently: report it and treat the message as consumed.
-                forward_error(&self.delegate, &error).await;
-                return Ok(());
-            }
-        };
-        match remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone(), &feedback)
-        }) {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
-            Err(error) => {
-                forward_error(&self.delegate, &error).await;
-                return Ok(());
-            }
-        }
-        if let Err(error) = self.delegate.on_message(response).await {
-            forward_error(&self.delegate, &error).await;
-        }
-        Ok(())
-    }
     async fn on_connected(&self) -> EGResult<()> {
         self.auth_gate.on_connection_established()?;
         self.delegate.on_connected().await
@@ -136,8 +89,42 @@ where
         fail_pending_waiters(&self.handlers)?;
         self.delegate.on_disconnected().await
     }
-    async fn on_error(&self, error: &EGError) -> EGResult<()> {
+    async fn on_error(&self, error: EGError) -> EGResult<()> {
         self.delegate.on_error(error).await
+    }
+    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
+        let feedback = match (self.feedback)(&message) {
+            Ok(feedback) => feedback,
+            Err(error) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+        };
+        if let Err(error) = self.rate_limits.apply_feedback(&feedback) {
+            self.delegate.on_error(error).await?;
+            return Ok(());
+        }
+        let response = match (self.converter)(message) {
+            Ok(response) => response,
+            Err(error) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+        };
+        match remove_handler(&self.handlers, |handler| {
+            handler.clone().handle(response.clone(), &feedback)
+        }) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+        }
+        if let Err(error) = self.delegate.on_message(response).await {
+            self.delegate.on_error(error).await?;
+        }
+        Ok(())
     }
 }
 
@@ -333,7 +320,7 @@ mod tests {
             Ok(())
         }
 
-        async fn on_error(&self, error: &EGError) -> EGResult<()> {
+        async fn on_error(&self, error: EGError) -> EGResult<()> {
             self.errors
                 .lock()
                 .map_err(|_| EGError::MutexPoisoned)?
@@ -663,7 +650,7 @@ mod tests {
         let auth_gate = Arc::new(AuthGate::default());
         let listener =
             WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
-        listener.on_error(&EGError::NotConnected).await.unwrap();
+        listener.on_error(EGError::NotConnected).await.unwrap();
         assert_eq!(
             *errors.lock().unwrap(),
             vec![EGError::NotConnected.to_string()]

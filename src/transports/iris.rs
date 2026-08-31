@@ -112,23 +112,19 @@ impl<TransportRes> IrisListener<TransportRes> for IrisListenerAdapter<TransportR
 where
     TransportRes: DeserializeOwned + Send + 'static,
 {
-    async fn on_message(&self, message: TransportRes) {
-        // Errors raised while handling a message (e.g. a conversion
-        // failure) must not be dropped: send them through `on_error`.
-        if let Err(error) = self.delegate.on_message(message).await {
-            let _ = self.delegate.on_error(&error).await;
-        }
-    }
-
     async fn on_connected(&self) {
         if let Err(error) = self.delegate.on_connected().await {
-            let _ = self.delegate.on_error(&error).await;
+            let _ = self.delegate.on_error(error).await;
         }
     }
-
     async fn on_disconnected(&self) {
         if let Err(error) = self.delegate.on_disconnected().await {
-            let _ = self.delegate.on_error(&error).await;
+            let _ = self.delegate.on_error(error).await;
+        }
+    }
+    async fn on_message(&self, message: TransportRes) {
+        if let Err(error) = self.delegate.on_message(message).await {
+            let _ = self.delegate.on_error(error).await;
         }
     }
 }
@@ -213,7 +209,7 @@ mod tests {
             Err(EGError::BadResponse)
         }
 
-        async fn on_error(&self, error: &EGError) -> EGResult<()> {
+        async fn on_error(&self, error: EGError) -> EGResult<()> {
             self.errors
                 .lock()
                 .expect("mutex should not be poisoned")

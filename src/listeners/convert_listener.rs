@@ -22,10 +22,6 @@ impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
             delegate: Arc::new(delegate),
         }
     }
-    /// Sends `error` through to the delegate's `on_error`.
-    async fn forward_error(&self, error: &EGError) {
-        let _ = self.delegate.on_error(error).await;
-    }
 }
 
 #[async_trait]
@@ -36,32 +32,20 @@ where
 {
     type TMessage = TFrom;
 
-    async fn on_message(&self, message: TFrom) -> EGResult<()> {
-        let converted = match (self.converter)(message) {
-            Ok(converted) => converted,
-            Err(error) => {
-                // A message that fails conversion must not be dropped
-                // silently: report it and treat the message as consumed.
-                self.forward_error(&error).await;
-                return Ok(());
-            }
-        };
-        if let Err(error) = self.delegate.on_message(converted).await {
-            self.forward_error(&error).await;
-        }
-        Ok(())
-    }
-
     async fn on_connected(&self) -> EGResult<()> {
         self.delegate.on_connected().await
     }
-
     async fn on_disconnected(&self) -> EGResult<()> {
         self.delegate.on_disconnected().await
     }
-
-    async fn on_error(&self, error: &EGError) -> EGResult<()> {
+    async fn on_error(&self, error: EGError) -> EGResult<()> {
         self.delegate.on_error(error).await
+    }
+    async fn on_message(&self, message: TFrom) -> EGResult<()> {
+        match (self.converter)(message) {
+            Ok(converted) => self.delegate.on_message(converted).await,
+            Err(error) => self.delegate.on_error(error).await,
+        }
     }
 }
 
@@ -97,7 +81,7 @@ mod tests {
             Ok(())
         }
 
-        async fn on_error(&self, error: &EGError) -> EGResult<()> {
+        async fn on_error(&self, error: EGError) -> EGResult<()> {
             self.errors
                 .lock()
                 .map_err(|_| EGError::MutexPoisoned)?
@@ -171,7 +155,7 @@ mod tests {
                 Err(EGError::BadResponse)
             }
 
-            async fn on_error(&self, error: &EGError) -> EGResult<()> {
+            async fn on_error(&self, error: EGError) -> EGResult<()> {
                 self.errors
                     .lock()
                     .map_err(|_| EGError::MutexPoisoned)?
@@ -198,7 +182,7 @@ mod tests {
     async fn on_error_is_forwarded_to_the_delegate() {
         let (delegate, _received, errors) = recording();
         let listener = ConvertListener::new(Ok, delegate);
-        listener.on_error(&EGError::NotConnected).await.unwrap();
+        listener.on_error(EGError::NotConnected).await.unwrap();
         assert_eq!(
             *errors.lock().unwrap(),
             vec![EGError::NotConnected.to_string()]
