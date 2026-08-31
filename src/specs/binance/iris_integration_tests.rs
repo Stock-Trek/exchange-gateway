@@ -4,7 +4,7 @@ use crate::{
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     listeners::listener::ListenerTrait,
-    specs::binance::websocket::connector_with_client_factory,
+    specs::binance::websocket::connector,
     transports::websocket::WebsocketClientTrait,
 };
 use async_trait::async_trait;
@@ -227,7 +227,7 @@ fn mock_session_connector(
             > = Arc::new(mock_client);
             client
         };
-    connector_with_client_factory(
+    connector(
         client_factory,
         logon_timeout,
         to_unsigned_request,

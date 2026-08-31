@@ -1,4 +1,4 @@
-mod common;
+pub(crate) mod common;
 #[cfg(feature = "reqwest")]
 pub(crate) mod http;
 #[cfg(feature = "iris")]

@@ -13,12 +13,17 @@ use crate::{
 use {
     crate::{
         listeners::listener::ListenerTrait,
-        specs::binance::websocket::connector as binance_websocket_connector,
+        specs::binance::{
+            common::exchange_urls, websocket::connector as binance_websocket_connector,
+        },
+        transports::{iris::IrisWebsocketClient, websocket::WebsocketClientTrait},
+        urls::ExchangeTransportType,
     },
     exchange_types::binance::websocket::{
-        BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
     iris::Config as IrisConfig,
+    std::time::Duration,
 };
 
 #[cfg(feature = "reqwest")]
@@ -84,6 +89,33 @@ impl Connect {
     }
 
     #[cfg(feature = "iris")]
+    pub fn binance_websocket_iris<ExternalReq, ExternalRes>(
+        &self,
+        trading_mode: TradingMode,
+        to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+        to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
+        credentials: Option<ApiKeyCredentials>,
+        clock: Clock,
+        use_session: bool,
+    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
+    where
+        ExternalReq: Send + Sync,
+        ExternalRes: Clone + Send + Sync + 'static,
+    {
+        self.binance_websocket(
+            trading_mode,
+            to_unsigned_request,
+            to_external_response,
+            listener,
+            credentials,
+            clock,
+            use_session,
+            IrisConfig::default(),
+        )
+    }
+
+    #[cfg(feature = "iris")]
     pub fn binance_websocket<ExternalReq, ExternalRes>(
         &self,
         trading_mode: TradingMode,
@@ -99,15 +131,30 @@ impl Connect {
         ExternalReq: Send + Sync,
         ExternalRes: Clone + Send + Sync + 'static,
     {
+        let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
+        let client_factory = move |websocket_listener| -> Arc<
+            dyn WebsocketClientTrait<
+                    TransportReq = BinanceWebsocketRequest,
+                    TransportRes = BinanceWebsocketResponse,
+                >,
+        > {
+            let client =
+                IrisWebsocketClient::<BinanceWebsocketRequest, BinanceWebsocketResponse>::with_config(
+                    &url,
+                    iris_config,
+                    websocket_listener,
+                );
+            Arc::new(client)
+        };
         binance_websocket_connector(
-            trading_mode,
+            client_factory,
+            Duration::from_secs(20),
             to_unsigned_request,
             to_external_response,
             listener,
             credentials,
             clock,
             use_session,
-            iris_config,
         )
     }
 }

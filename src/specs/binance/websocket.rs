@@ -17,14 +17,12 @@ use crate::{
         message_signer::MessageSigner, signer::Signer,
     },
     specs::binance::common::{
-        data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
+        data_signer, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
     },
     transports::{
-        iris::IrisWebsocketClient,
         transport::Transport,
         websocket::{WebsocketClientTrait, WebsocketTransport},
     },
-    urls::{ExchangeTransportType, TradingMode},
 };
 use exchange_types::binance::{
     logon::BinanceLogonParams,
@@ -36,51 +34,9 @@ use exchange_types::binance::{
         BinanceWebsocketUnsignedRequest,
     },
 };
-use iris::Config as IrisConfig;
 use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector<ExternalReq, ExternalRes>(
-    trading_mode: TradingMode,
-    to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
-    credentials: Option<ApiKeyCredentials>,
-    clock: Clock,
-    use_session: bool,
-    iris_config: IrisConfig,
-) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-where
-    ExternalReq: Send + Sync,
-    ExternalRes: Clone + Send + Sync + 'static,
-{
-    let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
-    let client_factory = move |websocket_listener| -> Arc<
-        dyn WebsocketClientTrait<
-                TransportReq = BinanceWebsocketRequest,
-                TransportRes = BinanceWebsocketResponse,
-            >,
-    > {
-        let client =
-            IrisWebsocketClient::<BinanceWebsocketRequest, BinanceWebsocketResponse>::with_config(
-                &url,
-                iris_config,
-                websocket_listener,
-            );
-        Arc::new(client)
-    };
-    connector_with_client_factory(
-        client_factory,
-        Duration::from_secs(20),
-        to_unsigned_request,
-        to_external_response,
-        listener,
-        credentials,
-        clock,
-        use_session,
-    )
-}
-
-pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
     client_factory: impl FnOnce(
         Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
     ) -> Arc<
