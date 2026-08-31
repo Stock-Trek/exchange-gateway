@@ -6,7 +6,9 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    functions::{
+        ArcCombineValues, ArcPredicate, ArcTryConvertValue, BoxTryCreateOnce, TryConvertValue,
+    },
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -17,12 +19,13 @@ use crate::{
         message_signer::MessageSigner, signer::Signer,
     },
     specs::binance::common::{
-        data_signer, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
+        data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
     },
     transports::{
         transport::Transport,
         websocket::{WebsocketClientTrait, WebsocketTransport},
     },
+    urls::{ExchangeTransportType, TradingMode},
 };
 use exchange_types::binance::{
     logon::BinanceLogonParams,
@@ -37,26 +40,30 @@ use exchange_types::binance::{
 use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector<ExternalReq, ExternalRes>(
-    client_factory: impl FnOnce(
-        Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
-    ) -> Arc<
-        dyn WebsocketClientTrait<
-                TransportReq = BinanceWebsocketRequest,
-                TransportRes = BinanceWebsocketResponse,
-            >,
-    >,
-    logon_timeout: Duration,
+    trading_mode: TradingMode,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
     to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
+    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     use_session: bool,
+    logon_timeout: Duration,
+    client_creator: BoxTryCreateOnce<
+        (
+            String,
+            Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+        ),
+        impl WebsocketClientTrait<
+            TransportReq = BinanceWebsocketRequest,
+            TransportRes = BinanceWebsocketResponse,
+        > + 'static,
+    >,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,
     ExternalRes: Clone + Send + Sync + 'static,
 {
+    let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
     let rate_limits = rate_limits();
     let response_listener = ConvertListener::new(to_external_response, listener);
     let auth_gate = Arc::new(AuthGate::default());
@@ -67,7 +74,7 @@ where
         response_listener,
         auth_gate.clone(),
     ));
-    let client = client_factory(websocket_listener.clone());
+    let client = Arc::new(client_creator((url, websocket_listener.clone()))?);
     let transport = WebsocketTransport::new(
         client,
         to_request,

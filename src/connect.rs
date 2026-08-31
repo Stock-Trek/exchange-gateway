@@ -1,23 +1,20 @@
-use std::sync::Arc;
-
 use crate::{
     clock::Clock,
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::EGResult,
-    functions::{ArcTryConvertValue, TryConvertValue},
+    functions::{BoxTryCreateOnce, TryConvertValue},
+    transports::websocket::WebsocketClientTrait,
     urls::TradingMode,
 };
+use std::sync::Arc;
 
 #[cfg(feature = "iris")]
 use {
     crate::{
-        listeners::listener::ListenerTrait,
-        specs::binance::{
-            common::exchange_urls, websocket::connector as binance_websocket_connector,
-        },
-        transports::{iris::IrisWebsocketClient, websocket::WebsocketClientTrait},
-        urls::ExchangeTransportType,
+        listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
+        specs::binance::websocket::connector as binance_websocket_connector,
+        transports::iris::IrisWebsocketClient,
     },
     exchange_types::binance::websocket::{
         BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
@@ -60,7 +57,7 @@ impl Connect {
             to_external_response,
             credentials,
             clock,
-            Arc::new(|url| Ok(ReqwestHttpClient::new(&url))),
+            Box::new(|url| Ok(ReqwestHttpClient::new(&url))),
         )
     }
     pub fn binance_http<ExternalReq, ExternalRes>(
@@ -69,7 +66,7 @@ impl Connect {
         to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
         credentials: Option<ApiKeyCredentials>,
         clock: Clock,
-        client_creator: ArcTryConvertValue<
+        client_creator: BoxTryCreateOnce<
             String,
             impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
         >,
@@ -90,7 +87,6 @@ impl Connect {
 
     #[cfg(feature = "iris")]
     pub fn binance_websocket_iris<ExternalReq, ExternalRes>(
-        &self,
         trading_mode: TradingMode,
         to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
         to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
@@ -98,63 +94,73 @@ impl Connect {
         credentials: Option<ApiKeyCredentials>,
         clock: Clock,
         use_session: bool,
-    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-    where
-        ExternalReq: Send + Sync,
-        ExternalRes: Clone + Send + Sync + 'static,
-    {
-        self.binance_websocket(
-            trading_mode,
-            to_unsigned_request,
-            to_external_response,
-            listener,
-            credentials,
-            clock,
-            use_session,
-            IrisConfig::default(),
-        )
-    }
-
-    #[cfg(feature = "iris")]
-    pub fn binance_websocket<ExternalReq, ExternalRes>(
-        &self,
-        trading_mode: TradingMode,
-        to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-        to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
-        credentials: Option<ApiKeyCredentials>,
-        clock: Clock,
-        use_session: bool,
+        logon_timeout: Duration,
         iris_config: IrisConfig,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + Sync,
         ExternalRes: Clone + Send + Sync + 'static,
     {
-        let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
-        let client_factory = move |websocket_listener| -> Arc<
-            dyn WebsocketClientTrait<
-                    TransportReq = BinanceWebsocketRequest,
-                    TransportRes = BinanceWebsocketResponse,
-                >,
-        > {
-            let client =
+        let client_creator = Box::new(
+            move |(url, websocket_listener): (
+                String,
+                Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+            )| {
+                let client =
                 IrisWebsocketClient::<BinanceWebsocketRequest, BinanceWebsocketResponse>::with_config(
                     &url,
                     iris_config,
                     websocket_listener,
                 );
-            Arc::new(client)
-        };
+                Ok(client)
+            },
+        );
         binance_websocket_connector(
-            client_factory,
-            Duration::from_secs(20),
+            trading_mode,
             to_unsigned_request,
             to_external_response,
-            listener,
             credentials,
             clock,
+            listener,
             use_session,
+            logon_timeout,
+            client_creator,
+        )
+    }
+    pub fn binance_websocket<ExternalReq, ExternalRes>(
+        trading_mode: TradingMode,
+        to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+        to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
+        credentials: Option<ApiKeyCredentials>,
+        clock: Clock,
+        use_session: bool,
+        logon_timeout: Duration,
+        client_creator: BoxTryCreateOnce<
+            (
+                String,
+                Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+            ),
+            impl WebsocketClientTrait<
+                TransportReq = BinanceWebsocketRequest,
+                TransportRes = BinanceWebsocketResponse,
+            > + 'static,
+        >,
+    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
+    where
+        ExternalReq: Send + Sync,
+        ExternalRes: Clone + Send + Sync + 'static,
+    {
+        binance_websocket_connector(
+            trading_mode,
+            to_unsigned_request,
+            to_external_response,
+            credentials,
+            clock,
+            listener,
+            use_session,
+            logon_timeout,
+            client_creator,
         )
     }
 }

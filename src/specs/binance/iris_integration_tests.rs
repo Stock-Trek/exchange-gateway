@@ -3,9 +3,10 @@ use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    listeners::listener::ListenerTrait,
+    listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
     specs::binance::websocket::connector,
     transports::websocket::WebsocketClientTrait,
+    urls::TradingMode,
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
@@ -207,35 +208,36 @@ fn mock_session_connector(
     };
     let to_unsigned_request = Ok;
     let to_external_response = Ok;
-    let clock_for_factory = clock.clone();
-    let client_factory =
-        move |websocket_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>| {
+    let clock_clone = clock.clone();
+    let logon_gate_clone = logon_gate.clone();
+    let logon_error_clone = logon_error.clone();
+    let client_creator = Box::new(
+        move |(_url, websocket_listener): (
+            String,
+            Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+        )| {
             let mock_client = MockWebsocketClient {
                 listener: websocket_listener,
                 connected: Arc::new(AtomicBool::new(false)),
                 sent: Arc::new(Mutex::new(Vec::new())),
-                logon_gate,
-                logon_error,
-                clock: clock_for_factory,
+                logon_gate: logon_gate_clone,
+                logon_error: logon_error_clone,
+                clock: clock_clone,
             };
             let _ = client_handle.send(mock_client.clone());
-            let client: Arc<
-                dyn WebsocketClientTrait<
-                        TransportReq = BinanceWebsocketRequest,
-                        TransportRes = BinanceWebsocketResponse,
-                    >,
-            > = Arc::new(mock_client);
-            client
-        };
+            Ok(mock_client)
+        },
+    );
     connector(
-        client_factory,
-        logon_timeout,
+        TradingMode::Paper,
         to_unsigned_request,
         to_external_response,
-        listener,
         Some(credentials),
         clock,
+        listener,
         true,
+        logon_timeout,
+        client_creator,
     )
 }
 

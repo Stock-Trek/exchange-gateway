@@ -115,7 +115,7 @@ mod binance {
     }
 
     pub(crate) async fn main() -> EGResult<()> {
-        let connector = Connect.binance_websocket(
+        let connector = Connect::binance_websocket_iris(
             TradingMode::Paper,
             to_unsigned_request,
             to_external_response,
@@ -123,6 +123,7 @@ mod binance {
             None,
             Clock::default(),
             false,
+            Duration::from_secs(20),
             iris::Config::default(),
         )?;
         connector.connect().await?;
