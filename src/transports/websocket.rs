@@ -118,3 +118,126 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        auth_gate::AuthGate,
+        error::EGResult,
+        listeners::listener::ListenerTrait,
+        rate_limit::{
+            feedback::RateLimitFeedback, rate_limiter::RateLimiter, rate_limits::RateLimits,
+        },
+    };
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[derive(Default)]
+    struct RecordingDelegate {
+        received: Arc<Mutex<Vec<u64>>>,
+    }
+
+    #[async_trait]
+    impl ListenerTrait for RecordingDelegate {
+        type TMessage = u64;
+
+        async fn on_message(&self, message: u64) -> EGResult<()> {
+            self.received
+                .lock()
+                .map_err(|_| EGError::MutexPoisoned)?
+                .push(message);
+            Ok(())
+        }
+    }
+
+    /// A client whose send times out while the request is already on the
+    /// wire: `send_message` returns `TimedOut` immediately, and the matching
+    /// response is delivered to the listener only once the test releases it.
+    struct TimeoutClient {
+        listener: Arc<dyn ListenerTrait<TMessage = u64>>,
+        connected: Arc<AtomicBool>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl WebsocketClientTrait for TimeoutClient {
+        type TransportReq = u64;
+        type TransportRes = u64;
+
+        async fn connect(&self) -> EGResult<()> {
+            self.connected.store(true, Ordering::SeqCst);
+            self.listener.on_connected().await
+        }
+        fn is_connected(&self) -> bool {
+            self.connected.load(Ordering::SeqCst)
+        }
+        async fn send_message(
+            &self,
+            message: Self::TransportReq,
+            _timeout: Duration,
+        ) -> EGResult<()> {
+            // The request is on the wire, but the send is reported as timed
+            // out. The matching response arrives only once released.
+            let listener = self.listener.clone();
+            let release = self.release.clone();
+            tokio::spawn(async move {
+                release.notified().await;
+                let _ = listener.on_message(message).await;
+            });
+            Err(EGError::TimedOut)
+        }
+        async fn disconnect(&self) -> EGResult<()> {
+            self.connected.store(false, Ordering::SeqCst);
+            self.listener.on_disconnected().await
+        }
+    }
+
+    #[tokio::test]
+    async fn send_timeout_swallows_the_late_response() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let listener = Arc::new(WebsocketListener::new(
+            Arc::new(Ok),
+            |_: &u64| Ok(RateLimitFeedback::default()),
+            RateLimits {
+                weight: RateLimiter::new(vec![]),
+                orders: RateLimiter::new(vec![]),
+            },
+            RecordingDelegate {
+                received: received.clone(),
+            },
+            Arc::new(AuthGate::default()),
+        ));
+        let client = Arc::new(TimeoutClient {
+            listener: listener.clone(),
+            connected: Arc::new(AtomicBool::new(false)),
+            release: release.clone(),
+        });
+        let transport = WebsocketTransport::new(client, Ok, Arc::new(Ok), listener);
+        transport.connect().await.expect("connect should succeed");
+
+        // The send times out, so the caller sees `TimedOut` and its waiter is
+        // dropped ...
+        let result = transport
+            .send_and_wait_for(
+                7,
+                Duration::from_secs(1),
+                Arc::new(|response: &u64| *response == 7),
+            )
+            .await;
+        assert!(matches!(result, Err(EGError::TimedOut)));
+
+        // ... but the request was already on the wire: the matching response
+        // that arrives afterwards must be swallowed, not forwarded to the
+        // delegate as if it were a push.
+        release.notify_one();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            received.lock().unwrap().is_empty(),
+            "the late response to a timed-out send must not leak to the delegate"
+        );
+    }
+}
