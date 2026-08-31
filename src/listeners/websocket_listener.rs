@@ -150,15 +150,6 @@ where
     EGRes: Send,
 {
     fn drop(&mut self) {
-        // The waiter is dropped without a response when a send-and-wait
-        // times out (or is cancelled). The request may already be on the
-        // wire, and a strictly request/response API answers every request,
-        // so the matching response will still arrive. Keep the handler
-        // registered and mark the state abandoned: a late response is then
-        // consumed and discarded instead of being forwarded to the delegate
-        // as if it were a push (which would otherwise double-count retried
-        // orders). The handler is removed when its response arrives or the
-        // connection drops.
         let _ = self.state.lock().map(|mut state| {
             state.abandoned = true;
             state.waker = None;
@@ -206,10 +197,6 @@ impl<EGRes> ResponseHandler<EGRes> {
                     waker.wake();
                 }
             }
-            // An abandoned handler only exists to swallow the late response
-            // to a timed-out (or cancelled) request: the response is simply
-            // dropped, and `is_handled` removes the handler so the response
-            // is never forwarded to the delegate.
         }
         Ok(is_handled)
     }
