@@ -428,9 +428,16 @@ fn signature_appender()
 
 #[cfg(test)]
 mod test {
+    use std::sync::Mutex;
     use std::time::Duration;
 
-    use crate::rate_limit::rate_limit_type::RateLimitType;
+    use async_trait::async_trait;
+
+    use crate::rate_limit::{
+        rate_limit_config::RateLimitConfig, rate_limit_type::RateLimitType,
+        rate_limiter::RateLimiter, rate_limits::RateLimits,
+    };
+    use secrecy::SecretString;
 
     use super::*;
     use exchange_types::binance::{
@@ -999,5 +1006,178 @@ mod test {
         };
         assert_eq!(code, -1021);
         assert!(message.contains("recvWindow"));
+    }
+
+    /// The outcome every request answered by a [`ScriptedHttpClient`] takes.
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone)]
+    enum ScriptedOutcome {
+        /// A server-side 429/418 rejection (not counted against the budget).
+        RateLimited,
+        /// A 4xx/5xx business rejection, e.g. -2010 insufficient balance
+        /// (counted against the budget).
+        HttpError,
+    }
+
+    /// A scripted HTTP client: records every outgoing request and answers
+    /// with a fixed outcome, so post-send failure budget behaviour can be
+    /// tested without a network.
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone)]
+    struct ScriptedHttpClient {
+        sent: Arc<Mutex<Vec<HttpRequest>>>,
+        outcome: ScriptedOutcome,
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[async_trait]
+    impl HttpClientTrait for ScriptedHttpClient {
+        type TransportReq = HttpRequest;
+        type TransportRes = HttpResponse;
+
+        async fn send_message(
+            &self,
+            _endpoint: &str,
+            message: Self::TransportReq,
+            _timeout: Duration,
+        ) -> EGResult<Self::TransportRes> {
+            self.sent.lock().unwrap().push(message);
+            match self.outcome {
+                ScriptedOutcome::RateLimited => Err(EGError::RateLimited(RateLimitFeedback {
+                    is_throttled: false,
+                    retry_after: None,
+                    usage: vec![],
+                })),
+                ScriptedOutcome::HttpError => Err(EGError::HttpError {
+                    status: 400,
+                    body: br#"{"code":-2010,"msg":"insufficient balance"}"#.to_vec(),
+                }),
+            }
+        }
+    }
+
+    /// Builds an HTTP connector backed by a scripted client answering with
+    /// `outcome`, using the given rate limits so the budget left after a
+    /// failed sync_clock can be observed.
+    #[cfg(feature = "reqwest")]
+    fn scripted_http_connector(
+        client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
+        outcome: ScriptedOutcome,
+        rate_limits: RateLimits,
+    ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
+        let credentials = ApiKeyCredentials {
+            api_key: "api-key".into(),
+            secret: SecretString::from("secret"),
+        };
+        let api_key: Option<String> = Some("api-key".to_string());
+        let to_unsigned_request = Ok;
+        let to_external_response = Ok;
+        let scripted_client = ScriptedHttpClient {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            outcome,
+        };
+        let _ = client_handle.send(scripted_client.clone());
+        let client: Arc<
+            dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>,
+        > = Arc::new(scripted_client);
+        let convert_request =
+            Arc::new(move |request: BinanceHttpRequest| to_request(request, api_key.as_deref()));
+        let transport = HttpTransport::new(
+            client,
+            convert_request,
+            from_response,
+            request_to_endpoint,
+            endpoints(),
+            rate_limits.clone(),
+            response_feedback,
+        );
+        Ok(ConnectorImpl::new(
+            rate_limits,
+            Clock::default(),
+            synchronization(Duration::from_secs(20)),
+            to_unsigned_request,
+            request_weight,
+            order_count,
+            sync_timestamp(),
+            to_filter,
+            Arc::new(to_external_response),
+            Transport::Http(transport),
+            null_signer(),
+            Some(credentials),
+            create_signer_from_credentials,
+            vec![],
+            Arc::new(AuthGate::default()),
+        ))
+    }
+
+    /// A one-slot budget for both weight and orders: a single consumed
+    /// request exhausts the budget until it is refunded.
+    #[cfg(feature = "reqwest")]
+    fn single_slot_rate_limits() -> RateLimits {
+        RateLimits {
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::Orders,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(10).as_nanos(),
+            }]),
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn sync_clock_keeps_local_reservation_on_business_rejection() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = scripted_http_connector(
+            client_tx,
+            ScriptedOutcome::HttpError,
+            single_slot_rate_limits(),
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+
+        // The time request is rejected with a 4xx business error, but
+        // Binance counts its weight anyway: the locally-reserved capacity
+        // must not be refunded.
+        let result = connector.sync_clock().await;
+        assert!(matches!(
+            result,
+            Err(EGError::HttpError { status: 400, .. })
+        ));
+
+        // The budget stays exhausted, so a second sync_clock is rejected by
+        // the local limiter and never reaches the transport.
+        let result = connector.sync_clock().await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "reqwest")]
+    async fn sync_clock_refunds_local_reservation_on_rate_limited() {
+        let (client_tx, client_rx) = std::sync::mpsc::channel();
+        let connector = scripted_http_connector(
+            client_tx,
+            ScriptedOutcome::RateLimited,
+            single_slot_rate_limits(),
+        )
+        .unwrap();
+        let client = client_rx.recv().unwrap();
+
+        // A server-side 429 is not counted against the request-weight
+        // budget, so the locally-reserved capacity is refunded.
+        let result = connector.sync_clock().await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 1);
+
+        // The refunded budget admits the next sync_clock: it reaches the
+        // transport again instead of being rejected by the local limiter.
+        let result = connector.sync_clock().await;
+        assert!(matches!(result, Err(EGError::RateLimited { .. })));
+        assert_eq!(client.sent.lock().unwrap().len(), 2);
     }
 }
