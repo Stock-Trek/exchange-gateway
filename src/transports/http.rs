@@ -47,7 +47,9 @@ pub(crate) enum HttpEndpoint {
 }
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes, E> {
-    client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes, Error = E>>,
+    client: Arc<
+        dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes, Error = E>,
+    >,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,

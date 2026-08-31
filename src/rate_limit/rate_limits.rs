@@ -227,7 +227,9 @@ mod tests {
             orders: RateLimiter::new(vec![]),
         };
         limits
-            .apply_feedback_from_error(&crate::error::EGError::<crate::error::ExternalError>::BadResponse)
+            .apply_feedback_from_error(
+                &crate::error::EGError::<crate::error::ExternalError>::BadResponse,
+            )
             .unwrap();
         assert!(limits.weight.did_acquire(1).unwrap());
     }
