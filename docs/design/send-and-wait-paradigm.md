@@ -185,7 +185,11 @@ the listener's dispatch logic.
   resubscribe-on-reconnect, idempotency); beyond the scope of the immediate
   ask. Worth revisiting later; Options A–C are compatible stepping stones.
 
-### 5.3 Response correlation / filter strategy (needed for A/B/C)
+### 5.1 Implementation decision made
+
+Implementation decision made: Option A. Minimal change: swap `send` to send-and-wait, keep everything else.
+
+### 5.2 Response correlation / filter strategy (needed for A/B/C)
 
 For Binance's WebSocket API every request carries a `metadata.id` that the
 server echoes in the reply; partial responses carry ids that never match an
@@ -205,63 +209,73 @@ in-flight request (or none at all). Sub-options:
 - **(iii) Hybrid**: keep caller ids for requests that already carry them, but
   generate internally when absent. Most flexible; more surface area.
 
-Recommendation: **(i)** for Binance (internally-generated ids, filter supplied
+Implementation decision made: **(i)** for Binance (internally-generated ids, filter supplied
 by the spec), expressed generically as an injected `to_filter` so other
 exchanges can plug in their own correlation rules.
 
 ## 6. Key decisions / open questions
 
 1. **Breaking change**: change `send()`'s return type (A/C) vs add a method (B).
-   The issue frames this as a paradigm move, which argues for changing `send()`
-   and dropping/keeping fire-and-forget only if a real use case remains.
+   Decision made: Go with option A and change the return type.
 2. **Listener ownership of ids**: does the caller keep supplying
    `metadata.id`, or does the connector own id generation (5.3)?
+   Decision made: The connector shall own id generation, overwrite the user's id.
 3. **HTTP listener**: remove it (C), keep it as an unused hook (A), or keep a
    fire-and-forget path for it (B)?
+   Decision made: Keep it as an unused hook.
 4. **Who converts the response**: `ConnectorImpl::send` must apply
    `to_external_response` on the return path; decide whether the transport
    should convert to `ExternalRes` directly or the connector does it after
    `send_and_wait_for` (the latter keeps transports exchange-agnostic).
+   Decision made: Keep transports exchange-agnostic, the connector should convert the response.
 5. **Fire-and-forget retention**: keep `TransportTrait::fire_and_forget` for
    internal/legacy use, or remove once unused.
+   Decision made: Remove fire_and_forget if it becomes unused.
 6. **Versioning**: the change is a semver-major API break for the library
    (`send` return type, constructor signatures); plan a release accordingly.
+   Decision made: This is an internal tool which isn't yet in use, do not worry about this.
 
 ## 7. Risks and edge cases
 
 - **Concurrent sends**: each send registers its own waiter; id uniqueness (5.3i)
   is required so waiters never match each other's responses. HTTP is
   unaffected (request/response is inherently correlated).
+  Decision made: Id generation will be handled by the connector so uniqueness is almost mathematically guaranteed.
 - **Connection loss with pending waiters**: today a waiter whose request was
   sent just before a disconnect waits out the full timeout. Consider failing
   pending waiters promptly on `WebsocketListener::on_disconnected` (e.g. a
   `NotConnected`/connection-lost variant in `WaiterState`, which currently only
   carries `filtered_response` and `rate_limited`).
+  Decision made: Fail pending waiters promptly on `WebsocketListener::on_disconnected`.
 - **Reconnect / re-auth**: a response to a pre-reconnect request cannot arrive
   on the fresh connection (the server answers in order per connection), so the
   waiter times out and `TimedOut` is surfaced; the existing `AuthGate` epoch
   logic already forces re-authentication on reconnect. No change expected, but
   the interplay should be tested.
+  Decision made: Add tests to ensure correct expected behaviour.
 - **Error replies on WebSocket**: Binance replies to bad requests with a
   matching-id response carrying `error`; under send-and-wait this reaches the
   caller via the normal return path (the spec's `validate_response`-style
   mapping must be applied to user sends, not just logon/time).
+  Decision made: Apply the `validate_response` style mapping to user sends.
 - **Rate-limit accounting**: requests that time out still consumed weight on the
   exchange; do not refund on `TimedOut` (current refund logic only fires on
   `RateLimited`, which is correct).
+  Decision made: Keep the correct logic.
 - **Response conversion errors**: `to_external_response` failing on the return
   path must map to a `send()` error, not a listener crash.
+  Decision made: Yes, map a conversion error to a `send()` error.
 - **Waiter leak on send failure**: if `send_message` fails (e.g.
   `ConnectionClosed` while reconnecting), the registered waiter must be dropped
   before returning the error — `WaiterForResponse::drop` already removes the
   handler, so the design must ensure the waiter is constructed only after a
   successful send (or dropped on the error path).
+  Decision made: Yes, construct the waiter only after a successful send (or dropped on the error path).
 
-## 8. Recommended approach
+## 8. Implementation approach
 
-1. Adopt **Option A** as the core change (with the Option C cleanup of the HTTP
-   listener as a follow-up), because the transport and listener machinery
-   already support send-and-wait end-to-end:
+1. Adopt **Option A** as the core change because the transport and listener
+   machinery already support send-and-wait end-to-end:
    - `Connector::send` returns `EGResult<ExternalRes>`.
    - `ConnectorImpl` gains a `to_filter` (correlation) function and applies
      `to_external_response` on the return path.
@@ -272,5 +286,4 @@ exchanges can plug in their own correlation rules.
    messages still do.
 3. Add prompt failure of pending waiters on disconnect (edge case above) in the
    same change.
-4. Update `Connect`, `examples/binance_http.rs`, docs, and bump the major
-   version. Revisit Option D (subscriptions) separately.
+4. Update `Connect` and `examples/binance_http.rs`.
