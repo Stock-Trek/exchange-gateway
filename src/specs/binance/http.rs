@@ -45,7 +45,7 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send,
@@ -71,7 +71,7 @@ pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send,

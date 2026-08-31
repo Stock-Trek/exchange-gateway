@@ -83,7 +83,7 @@ struct MockWebsocketClient {
     sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
     logon_gate: Option<LogonGate>,
     logon_error: Option<BinanceError>,
-    clock: Arc<Clock>,
+    clock: Clock,
 }
 
 #[derive(Clone)]
@@ -188,7 +188,7 @@ fn mock_session_connector(
     logon_error: Option<BinanceError>,
     logon_timeout: Duration,
     listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -303,7 +303,7 @@ async fn post_logon_requests_omit_api_key_and_signature() {
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
-        Arc::new(Clock::default()),
+        Clock::default(),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
@@ -349,7 +349,7 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
-            Arc::new(Clock::default()),
+            Clock::default(),
         )
         .unwrap(),
     );
@@ -423,7 +423,7 @@ async fn logon_weight_counts_against_weight_rate_limit() {
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
-        Arc::new(Clock::default()),
+        Clock::default(),
     )
     .unwrap();
 
@@ -467,7 +467,7 @@ async fn rejected_logon_fails_authentication_and_does_not_leak_to_listener() {
         }),
         Duration::from_secs(20),
         listener,
-        Arc::new(Clock::default()),
+        Clock::default(),
     )
     .unwrap();
 
@@ -510,7 +510,7 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
             None,
             Duration::from_secs(20),
             Arc::new(IgnoreListener),
-            Arc::new(Clock::default()),
+            Clock::default(),
         )
         .unwrap(),
     );
@@ -612,7 +612,7 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
             None,
             Duration::from_secs(20),
             listener,
-            Arc::new(Clock::default()),
+            Clock::default(),
         )
         .unwrap(),
     );
@@ -698,14 +698,14 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
 #[tokio::test]
 async fn sync_clock_syncs_the_server_clock() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = Arc::new(Clock::default());
+    let clock = Clock::default();
     let connector = mock_session_connector(
         client_tx,
         None,
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
-        clock.clone(),
+        clock,
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
@@ -736,14 +736,14 @@ async fn sync_clock_syncs_the_server_clock() {
 #[tokio::test]
 async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = Arc::new(Clock::default());
+    let clock = Clock::default();
     let connector = mock_session_connector(
         client_tx,
         None,
         None,
         Duration::from_secs(20),
         Arc::new(IgnoreListener),
-        clock.clone(),
+        clock,
     )
     .unwrap();
     let client = client_rx.recv().unwrap();

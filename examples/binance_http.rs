@@ -106,7 +106,7 @@ mod binance {
             Arc::new(to_external_response),
             listener,
             None,
-            Arc::new(Clock::default()),
+            Clock::default(),
         )?;
         connector.connect().await?;
         connector

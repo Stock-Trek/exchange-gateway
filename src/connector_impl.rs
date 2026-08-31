@@ -29,7 +29,7 @@ pub struct ConnectorImpl<
     EGRes,
 > {
     rate_limits: RateLimits,
-    clock: Arc<Clock>,
+    clock: Clock,
     synchronization: Synchronization<EGUnsignedReq, EGRes>,
     to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
     to_weight: fn(&EGUnsignedReq) -> u32,
@@ -213,7 +213,7 @@ where
 {
     pub(crate) fn new(
         rate_limits: RateLimits,
-        clock: Arc<Clock>,
+        clock: Clock,
         synchronization: Synchronization<EGUnsignedReq, EGRes>,
         to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
         to_weight: fn(&EGUnsignedReq) -> u32,

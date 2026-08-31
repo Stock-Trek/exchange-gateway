@@ -71,7 +71,7 @@ impl ListenerTrait for IgnoreHttpListener {
 #[derive(Clone)]
 struct MockHttpClient {
     sent: Arc<Mutex<Vec<HttpRequest>>>,
-    clock: Arc<Clock>,
+    clock: Clock,
 }
 
 #[async_trait]
@@ -113,7 +113,7 @@ impl HttpClientTrait for MockHttpClient {
 /// production exchange does.
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -148,8 +148,8 @@ fn mock_http_connector(
 #[tokio::test]
 async fn http_connector_sync_clock_syncs_the_server_clock() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = Arc::new(Clock::default());
-    let connector = mock_http_connector(client_tx, clock.clone()).unwrap();
+    let clock = Clock::default();
+    let connector = mock_http_connector(client_tx, clock).unwrap();
     let client = client_rx.recv().unwrap();
 
     // Connect establishes the transport only: clock syncing is
@@ -222,7 +222,7 @@ fn scripted_http_connector(
     client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
     outcome: ScriptedOutcome,
     rate_limits: RateLimits,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
     let credentials = ApiKeyCredentials {
         api_key: "api-key".into(),
@@ -323,7 +323,7 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
         client_tx,
         ScriptedOutcome::HttpError,
         single_slot_rate_limits(),
-        Arc::new(Clock::default()),
+        Clock::default(),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();
@@ -356,7 +356,7 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
         client_tx,
         ScriptedOutcome::RateLimited,
         single_slot_rate_limits_with_clock(clock.clone()),
-        Arc::new(Clock::default()),
+        Clock::default(),
     )
     .unwrap();
     let client = client_rx.recv().unwrap();

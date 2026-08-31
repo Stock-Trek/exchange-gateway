@@ -46,7 +46,7 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
     iris_config: IrisConfig,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,
@@ -97,7 +97,7 @@ pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
     listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
     credentials: Option<ApiKeyCredentials>,
     use_session: bool,
-    clock: Arc<Clock>,
+    clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,

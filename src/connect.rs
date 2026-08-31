@@ -37,7 +37,7 @@ impl Connect {
         to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
-        clock: Arc<Clock>,
+        clock: Clock,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + 'static,
@@ -62,7 +62,7 @@ impl Connect {
         listener: Arc<dyn ListenerTrait<TMessage = ExternalRes>>,
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
-        clock: Arc<Clock>,
+        clock: Clock,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + Sync,
@@ -90,7 +90,7 @@ impl Connect {
         credentials: Option<ApiKeyCredentials>,
         use_session: bool,
         iris_config: IrisConfig,
-        clock: Arc<Clock>,
+        clock: Clock,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + Sync,

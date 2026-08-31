@@ -28,6 +28,17 @@ impl Default for Clock {
     }
 }
 
+impl Clone for Clock {
+    fn clone(&self) -> Self {
+        let offset = self.offset_millis();
+        let last_sync = *self.last_sync.lock().expect("Cannot read last_sync");
+        Self {
+            offset_millis: AtomicI64::from(offset),
+            last_sync: Mutex::from(last_sync),
+        }
+    }
+}
+
 impl Clock {
     pub fn new() -> Self {
         Self {
