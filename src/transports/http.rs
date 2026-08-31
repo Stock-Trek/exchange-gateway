@@ -15,7 +15,7 @@ use std::{
 };
 
 #[async_trait]
-pub(crate) trait HttpClientTrait: Send + Sync {
+pub trait HttpClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
 

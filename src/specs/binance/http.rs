@@ -5,8 +5,8 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, TryConvertValue},
-    rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
+    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    rate_limit::feedback::RateLimitFeedback,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
@@ -16,7 +16,7 @@ use crate::{
     },
     transports::{
         http::{HttpClientTrait, HttpEndpoint, HttpTransport},
-        reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
+        reqwest::{HttpRequest, HttpResponse},
         transport::Transport,
     },
     urls::{ExchangeTransportType, TradingMode},
@@ -42,41 +42,26 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
+    client_creator: ArcTryConvertValue<
+        String,
+        impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
+    >,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let url = exchange_urls().url(ExchangeTransportType::Http, trading_mode);
-    let client = Arc::new(ReqwestHttpClient::new(&url));
-    connector_with_client(
-        client,
-        rate_limits(),
-        to_unsigned_request,
-        to_external_response,
-        credentials,
-        clock,
-    )
-}
-
-pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
-    client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
-    rate_limits: RateLimits,
-    to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-    credentials: Option<ApiKeyCredentials>,
-    clock: Clock,
-) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-where
-    ExternalReq: Send,
-    ExternalRes: Clone + Send + Sync + 'static,
-{
+    let client = Arc::new(client_creator(url)?);
+    let rate_limits = rate_limits();
     let api_key = credentials
         .as_ref()
         .map(|credentials| credentials.api_key.clone());
+    let convert_request =
+        Arc::new(move |request: BinanceHttpRequest| to_request(request, api_key.as_deref()));
     let transport = HttpTransport::new(
         client,
-        Arc::new(move |request: BinanceHttpRequest| to_request(request, api_key.as_deref())),
+        convert_request,
         from_response,
         request_to_endpoint,
         endpoints(),

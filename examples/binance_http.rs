@@ -89,7 +89,7 @@ mod binance {
     }
 
     pub(crate) async fn main() -> EGResult<()> {
-        let connector = Connect.binance_http(
+        let connector = Connect::binance_http_reqwest(
             TradingMode::Paper,
             to_unsigned_request,
             to_external_response,

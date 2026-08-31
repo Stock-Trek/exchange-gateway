@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
-pub(crate) struct HttpRequest {
+pub struct HttpRequest {
     pub(crate) method: reqwest::Method,
     pub(crate) query: Option<String>,
     pub(crate) headers: Vec<(String, String)>,
