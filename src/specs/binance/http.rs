@@ -114,7 +114,10 @@ where
 /// the request is left untouched.
 fn to_filter(
     request: BinanceHttpUnsignedRequest,
-) -> (BinanceHttpUnsignedRequest, ArcPredicate<BinanceHttpResponse>) {
+) -> (
+    BinanceHttpUnsignedRequest,
+    ArcPredicate<BinanceHttpResponse>,
+) {
     (request, Arc::new(|_: &BinanceHttpResponse| true))
 }
 

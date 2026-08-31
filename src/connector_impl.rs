@@ -218,7 +218,8 @@ impl<
     TransportRes,
     EGRes,
     ExternalRes,
-> ConnectorImpl<
+>
+    ConnectorImpl<
         ExternalReq,
         EGUnsignedReq,
         TCredentials,

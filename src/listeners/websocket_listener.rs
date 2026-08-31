@@ -118,9 +118,7 @@ where
 /// just before a disconnect cannot be answered on the fresh connection, so its
 /// waiter must not sit out the full timeout. The handlers are drained so they
 /// cannot consume a later response (e.g. on a reconnected session).
-fn fail_pending_waiters<EGRes>(
-    handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>,
-) -> EGResult<()> {
+fn fail_pending_waiters<EGRes>(handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>) -> EGResult<()> {
     let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
     for handler in guard.drain(..) {
         let mut state = handler.state.lock().map_err(|_| EGError::MutexPoisoned)?;
@@ -437,7 +435,7 @@ mod tests {
         // Let the waiter register its waker, then drop the connection: the
         // waiter must be woken promptly with `NotConnected` instead of
         // sitting out the full timeout.
-        let wait_task = tokio::spawn(async move { waiter.await });
+        let wait_task = tokio::spawn(waiter);
         tokio::task::yield_now().await;
         listener
             .on_disconnected()
