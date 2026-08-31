@@ -1,11 +1,11 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, ArcTryConvertRef},
+    functions::{ArcCreate, ArcPredicate, ArcTryConvertRef},
 };
 use std::{
     sync::{
+        Mutex,
         atomic::{AtomicI64, Ordering},
-        {Arc, Mutex},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -17,7 +17,7 @@ pub struct Clock {
 }
 
 pub(crate) struct Synchronization<EGUnsignedReq, EGRes> {
-    pub create_time_request: Arc<dyn Fn() -> (EGUnsignedReq, ArcPredicate<EGRes>) + Send + Sync>,
+    pub create_time_request: ArcCreate<(EGUnsignedReq, ArcPredicate<EGRes>)>,
     pub timeout: Duration,
     pub to_server_time: ArcTryConvertRef<EGRes, i64>,
 }

@@ -1,14 +1,13 @@
 use crate::{
     clock::Clock,
-    functions::{ArcPredicate, ArcTryConvertValue},
+    functions::{ArcConvertRef, ArcPredicate, ArcTryConvertValue},
     sign::signer::Signer,
 };
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 #[derive(Clone)]
 pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
-    pub create_auth_attempt:
-        Arc<dyn Fn(&Clock) -> (EGUnsignedReq, ArcPredicate<EGRes>) + Send + Sync>,
+    pub create_auth_attempt: ArcConvertRef<Clock, (EGUnsignedReq, ArcPredicate<EGRes>)>,
     pub timeout: Duration,
     pub create_signer: ArcTryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
 }
