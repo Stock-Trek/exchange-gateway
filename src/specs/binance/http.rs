@@ -4,7 +4,7 @@ use crate::{
     connector::Connector,
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
-    error::{EGError, EGResult},
+    error::{EGError, EGResult, ExternalError},
     functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
     rate_limit::feedback::RateLimitFeedback,
     sign::{
@@ -182,7 +182,7 @@ fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
 fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
     if (200..300).contains(&response.status) {
         let result: BinanceHttpResponse = serde_json::from_slice(&response.body)
-            .map_err(|error| EGError::External(Box::new(error)))?;
+            .map_err(|error| EGError::External(ExternalError::from(error)))?;
         match result {
             BinanceHttpResponse::Success(response) => Ok(BinanceHttpResponse::Success(response)),
             BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
@@ -973,7 +973,7 @@ mod test {
         assert!(filter(&response));
         let server_time =
             (synchronization.to_server_time)(&response).expect("No server time from response");
-        clock.sync(server_time, Duration::ZERO);
+        clock.sync(server_time, Duration::ZERO).unwrap();
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",

@@ -25,7 +25,7 @@ impl RateLimits {
         }
         Ok(())
     }
-    pub fn apply_feedback_from_error(&self, error: &EGError) -> EGResult<()> {
+    pub fn apply_feedback_from_error<E>(&self, error: &EGError<E>) -> EGResult<()> {
         if let EGError::RateLimited(feedback) = error {
             self.apply_feedback(feedback)?;
         }
@@ -201,11 +201,15 @@ mod tests {
         // A 429 rejection travels back as RateLimited carrying the server's
         // feedback; applying it must drain the buckets until Retry-After.
         limits
-            .apply_feedback_from_error(&crate::error::EGError::RateLimited(RateLimitFeedback {
-                is_throttled: true,
-                retry_after: Some(Duration::from_secs(30)),
-                usage: vec![],
-            }))
+            .apply_feedback_from_error(
+                &crate::error::EGError::<crate::error::ExternalError>::RateLimited(
+                    RateLimitFeedback {
+                        is_throttled: true,
+                        retry_after: Some(Duration::from_secs(30)),
+                        usage: vec![],
+                    },
+                ),
+            )
             .unwrap();
         assert!(!limits.weight.did_acquire(1).unwrap());
     }
@@ -223,7 +227,7 @@ mod tests {
             orders: RateLimiter::new(vec![]),
         };
         limits
-            .apply_feedback_from_error(&crate::error::EGError::BadResponse)
+            .apply_feedback_from_error(&crate::error::EGError::<crate::error::ExternalError>::BadResponse)
             .unwrap();
         assert!(limits.weight.did_acquire(1).unwrap());
     }

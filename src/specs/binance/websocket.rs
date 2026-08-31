@@ -58,6 +58,7 @@ where
         dyn WebsocketClientTrait<
                 TransportReq = BinanceWebsocketRequest,
                 TransportRes = BinanceWebsocketResponse,
+                Error = iris::ConnectionError,
             >,
     > {
         let client =
@@ -80,13 +81,14 @@ where
     )
 }
 
-pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
+pub(crate) fn connector_with_client_factory<ClientError, ExternalReq, ExternalRes>(
     client_factory: impl FnOnce(
         Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
     ) -> Arc<
         dyn WebsocketClientTrait<
                 TransportReq = BinanceWebsocketRequest,
                 TransportRes = BinanceWebsocketResponse,
+                Error = ClientError,
             >,
     >,
     logon_timeout: Duration,
@@ -100,6 +102,7 @@ pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
 where
     ExternalReq: Send + Sync,
     ExternalRes: Clone + Send + Sync + 'static,
+    ClientError: std::error::Error + Send + Sync + 'static,
 {
     let rate_limits = rate_limits();
     let response_listener = ConvertListener::new(to_external_response, listener);
@@ -833,7 +836,7 @@ mod test {
         };
         assert!(filter(&response));
         let server_time = (synchronization.to_server_time)(&response).expect("No server time");
-        clock.sync(server_time, Duration::ZERO);
+        clock.sync(server_time, Duration::ZERO).unwrap();
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",

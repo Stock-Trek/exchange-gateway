@@ -40,14 +40,18 @@ where
         Self { client }
     }
 
-    async fn send_message_with_delay<D>(&self, message: TransportReq, delay: D) -> EGResult<()>
+    async fn send_message_with_delay<D>(
+        &self,
+        message: TransportReq,
+        delay: D,
+    ) -> EGResult<(), iris::ConnectionError>
     where
         D: Future<Output = ()> + Send + 'static,
     {
         let mut send = Box::pin(self.client.send(message));
         let mut delay = Box::pin(delay);
         poll_fn(move |cx| match send.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(result.map_err(|e| EGError::External(Box::new(e)))),
+            Poll::Ready(result) => Poll::Ready(result.map_err(EGError::External)),
             Poll::Pending => match delay.as_mut().poll(cx) {
                 Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
                 Poll::Pending => Poll::Pending,
@@ -66,28 +70,27 @@ where
 {
     type TransportReq = TransportReq;
     type TransportRes = TransportRes;
+    type Error = iris::ConnectionError;
 
-    async fn connect(&self) -> EGResult<()> {
-        self.client
-            .connect()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))
+    async fn connect(&self) -> EGResult<(), Self::Error> {
+        self.client.connect().await.map_err(EGError::External)
     }
 
     fn is_connected(&self) -> bool {
         self.client.is_connected()
     }
 
-    async fn send_message(&self, message: Self::TransportReq, timeout: Duration) -> EGResult<()> {
+    async fn send_message(
+        &self,
+        message: Self::TransportReq,
+        timeout: Duration,
+    ) -> EGResult<(), Self::Error> {
         self.send_message_with_delay(message, Delay::new(timeout))
             .await
     }
 
-    async fn disconnect(&self) -> EGResult<()> {
-        self.client
-            .disconnect()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))
+    async fn disconnect(&self) -> EGResult<(), Self::Error> {
+        self.client.disconnect().await.map_err(EGError::External)
     }
 }
 
@@ -113,15 +116,26 @@ where
     TransportRes: DeserializeOwned + Send + 'static,
 {
     async fn on_message(&self, message: TransportRes) {
-        let _ = self.delegate.on_message(message).await;
+        // iris's `Listener::on_message` cannot propagate errors: the failed
+        // message is dropped, but the failure is logged instead of being
+        // swallowed silently.
+        if let Err(error) = self.delegate.on_message(message).await {
+            log::error!(
+                "websocket listener dropped a message after a conversion/processing error: {error}"
+            );
+        }
     }
 
     async fn on_connected(&self) {
-        let _ = self.delegate.on_connected().await;
+        if let Err(error) = self.delegate.on_connected().await {
+            log::error!("websocket listener failed to handle the connection event: {error}");
+        }
     }
 
     async fn on_disconnected(&self) {
-        let _ = self.delegate.on_disconnected().await;
+        if let Err(error) = self.delegate.on_disconnected().await {
+            log::error!("websocket listener failed to handle the disconnection event: {error}");
+        }
     }
 }
 
@@ -295,7 +309,11 @@ mod tests {
     }
 
     async fn wait_until_connected(
-        client: &dyn WebsocketClientTrait<TransportReq = TestRequest, TransportRes = TestResponse>,
+        client: &dyn WebsocketClientTrait<
+            TransportReq = TestRequest,
+            TransportRes = TestResponse,
+            Error = iris::ConnectionError,
+        >,
     ) {
         with_paused_clock(async {
             for _ in 0..100 {
@@ -594,14 +612,9 @@ mod tests {
         assert!(
             matches!(
                 &result,
-                Err(EGError::External(e))
-                    if e
-                        .downcast_ref::<iris::ConnectionError>()
-                        .is_some_and(|error| {
-                            matches!(error, iris::ConnectionError::ConnectionClosed)
-                        })
+                Err(EGError::External(iris::ConnectionError::ConnectionClosed))
             ),
-            "send while reconnecting should fail fast with ConnectionClosed, got: {result:?}"
+            "send while reconnecting should fail fast with the concrete ConnectionClosed error, got: {result:?}"
         );
 
         // The client is stuck in the reconnecting state with every handshake

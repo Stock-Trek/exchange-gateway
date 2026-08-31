@@ -62,13 +62,14 @@ struct MockHttpClient {
 impl HttpClientTrait for MockHttpClient {
     type TransportReq = HttpRequest;
     type TransportRes = HttpResponse;
+    type Error = std::io::Error;
 
     async fn send_message(
         &self,
         endpoint: &str,
         _message: Self::TransportReq,
         _timeout: Duration,
-    ) -> EGResult<Self::TransportRes> {
+    ) -> EGResult<Self::TransportRes, Self::Error> {
         if endpoint == "time" {
             // sync_clock hits the unsigned `time` endpoint: answer it with
             // the clock's view of server time, as the real exchange would.
@@ -158,13 +159,14 @@ struct ScriptedHttpClient {
 impl HttpClientTrait for ScriptedHttpClient {
     type TransportReq = HttpRequest;
     type TransportRes = HttpResponse;
+    type Error = std::io::Error;
 
     async fn send_message(
         &self,
         _endpoint: &str,
         message: Self::TransportReq,
         _timeout: Duration,
-    ) -> EGResult<Self::TransportRes> {
+    ) -> EGResult<Self::TransportRes, Self::Error> {
         self.sent.lock().unwrap().push(message);
         match self.outcome {
             ScriptedOutcome::RateLimited => Err(EGError::RateLimited(RateLimitFeedback {

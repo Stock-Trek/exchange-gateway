@@ -28,6 +28,7 @@ pub struct ConnectorImpl<
     TransportRes,
     EGRes,
     ExternalRes,
+    E,
 > {
     rate_limits: RateLimits,
     clock: Clock,
@@ -38,7 +39,7 @@ pub struct ConnectorImpl<
     sync_timestamp_fields: TryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
     to_filter: fn(EGUnsignedReq) -> (EGUnsignedReq, ArcPredicate<EGRes>),
     to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
-    transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
+    transport: Transport<EGReq, TransportReq, TransportRes, EGRes, E>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
@@ -57,6 +58,7 @@ impl<
     TransportRes,
     EGRes,
     ExternalRes,
+    E,
 > Connector<ExternalReq, ExternalRes>
     for ConnectorImpl<
         ExternalReq,
@@ -67,6 +69,7 @@ impl<
         TransportRes,
         EGRes,
         ExternalRes,
+        E,
     >
 where
     ExternalReq: Send,
@@ -76,6 +79,7 @@ where
     TransportReq: Send,
     EGRes: Send + Sync + 'static,
     ExternalRes: Send,
+    E: std::error::Error + Send + Sync + 'static,
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await
@@ -103,13 +107,18 @@ where
         {
             Ok(response) => response,
             Err(error) => {
-                let _ = self.rate_limits.refund(weight, order_count);
+                // Only a server-side 429/418 rejection is not counted
+                // against the budget; business rejections are charged, so
+                // the locally-reserved capacity must not be refunded.
+                if matches!(&error, EGError::RateLimited { .. }) {
+                    let _ = self.rate_limits.refund(weight, order_count);
+                }
                 return Err(error);
             }
         };
         let round_trip_time = start.elapsed();
         let server_time = (self.synchronization.to_server_time)(&response)?;
-        self.clock.sync(server_time, round_trip_time);
+        self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     async fn authenticate(&self) -> EGResult<()> {
@@ -218,6 +227,7 @@ impl<
     TransportRes,
     EGRes,
     ExternalRes,
+    E,
 >
     ConnectorImpl<
         ExternalReq,
@@ -228,10 +238,12 @@ impl<
         TransportRes,
         EGRes,
         ExternalRes,
+        E,
     >
 where
     EGReq: Send,
     EGRes: Send + Sync + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     pub(crate) fn new(
         rate_limits: RateLimits,
@@ -243,7 +255,7 @@ where
         sync_timestamp_fields: TryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
         to_filter: fn(EGUnsignedReq) -> (EGUnsignedReq, ArcPredicate<EGRes>),
         to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
-        transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
+        transport: Transport<EGReq, TransportReq, TransportRes, EGRes, E>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
@@ -353,6 +365,7 @@ impl<
     TransportRes,
     EGRes,
     ExternalRes,
+    E,
 > std::fmt::Debug
     for ConnectorImpl<
         ExternalReq,
@@ -363,6 +376,7 @@ impl<
         TransportRes,
         EGRes,
         ExternalRes,
+        E,
     >
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

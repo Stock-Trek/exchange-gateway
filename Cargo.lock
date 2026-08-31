@@ -507,6 +507,7 @@ dependencies = [
  "futures-timer",
  "hmac",
  "iris",
+ "log",
  "p256",
  "p384",
  "reqwest",

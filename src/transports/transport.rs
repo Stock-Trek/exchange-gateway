@@ -6,9 +6,9 @@ use crate::{
 use async_trait::async_trait;
 use std::time::Duration;
 
-pub(crate) enum Transport<EGReq, TransportReq, TransportRes, EGRes> {
-    Http(HttpTransport<EGReq, TransportReq, TransportRes, EGRes>),
-    Websocket(WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes>),
+pub(crate) enum Transport<EGReq, TransportReq, TransportRes, EGRes, E> {
+    Http(HttpTransport<EGReq, TransportReq, TransportRes, EGRes, E>),
+    Websocket(WebsocketTransport<EGReq, TransportReq, TransportRes, EGRes, E>),
 }
 
 #[async_trait]
@@ -27,12 +27,13 @@ pub(crate) trait TransportTrait<EGReq, TransportReq, TransportRes, EGRes> {
 }
 
 #[async_trait]
-impl<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E>
     TransportTrait<EGReq, TransportReq, TransportRes, EGRes>
-    for Transport<EGReq, TransportReq, TransportRes, EGRes>
+    for Transport<EGReq, TransportReq, TransportRes, EGRes, E>
 where
     EGReq: Send,
     EGRes: Send + Sync + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
         match self {
@@ -79,8 +80,8 @@ where
     }
 }
 
-impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
-    for Transport<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E> std::fmt::Debug
+    for Transport<EGReq, TransportReq, TransportRes, EGRes, E>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

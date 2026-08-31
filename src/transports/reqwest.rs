@@ -60,13 +60,14 @@ impl ReqwestHttpClient {
 impl HttpClientTrait for ReqwestHttpClient {
     type TransportReq = HttpRequest;
     type TransportRes = HttpResponse;
+    type Error = reqwest::Error;
 
     async fn send_message(
         &self,
         endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
-    ) -> EGResult<Self::TransportRes> {
+    ) -> EGResult<Self::TransportRes, Self::Error> {
         let url = self.build_url(endpoint, message.query.as_deref());
         let mut request = self.client.request(message.method, &url).timeout(timeout);
         for (name, value) in &message.headers {
@@ -75,10 +76,7 @@ impl HttpClientTrait for ReqwestHttpClient {
         if let Some(body) = message.body {
             request = request.body(body);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let response = request.send().await?;
         let status = response.status();
         let headers = response
             .headers()
@@ -90,11 +88,7 @@ impl HttpClientTrait for ReqwestHttpClient {
                 )
             })
             .collect();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))?
-            .to_vec();
+        let body = response.bytes().await?.to_vec();
         if status.is_success() {
             Ok(HttpResponse {
                 status: status.as_u16(),

@@ -18,13 +18,17 @@ use std::{
 pub trait HttpClientTrait: Send + Sync {
     type TransportReq;
     type TransportRes;
+    /// The concrete error type produced by the transport (e.g.
+    /// `reqwest::Error`), carried by [`EGError::External`] instead of being
+    /// boxed into a trait object.
+    type Error: std::error::Error + Send + Sync + 'static;
 
     async fn send_message(
         &self,
         endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
-    ) -> EGResult<Self::TransportRes>;
+    ) -> EGResult<Self::TransportRes, Self::Error>;
 
     fn rate_limit_feedback(&self, _response: &Self::TransportRes) -> RateLimitFeedback {
         RateLimitFeedback::default()
@@ -42,8 +46,8 @@ pub(crate) enum HttpEndpoint {
     Time,
 }
 
-pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
-    client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
+pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes, E> {
+    client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes, Error = E>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
@@ -54,12 +58,13 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
 }
 
 #[async_trait]
-impl<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E>
     TransportTrait<EGReq, TransportReq, TransportRes, EGRes>
-    for HttpTransport<EGReq, TransportReq, TransportRes, EGRes>
+    for HttpTransport<EGReq, TransportReq, TransportRes, EGRes, E>
 where
     EGReq: Send,
     EGRes: 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn try_convert_request(&self, request: EGReq) -> EGResult<TransportReq> {
         (self.convert_request)(request)
@@ -93,14 +98,17 @@ where
     }
 }
 
-impl<EGReq, TransportReq, TransportRes, EGRes>
-    HttpTransport<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E>
+    HttpTransport<EGReq, TransportReq, TransportRes, EGRes, E>
 where
     EGReq: Send,
     EGRes: 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     pub fn new(
-        client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
+        client: Arc<
+            dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes, Error = E>,
+        >,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
         convert_response: TryConvertValue<TransportRes, EGRes>,
         to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
@@ -134,7 +142,7 @@ where
             Ok(response_dto) => response_dto,
             Err(error) => {
                 let _ = self.rate_limits.apply_feedback_from_error(&error);
-                return Err(error);
+                return Err(error.into_boxed_external());
             }
         };
         let header_feedback = self.client.rate_limit_feedback(&response_dto);
@@ -168,8 +176,8 @@ where
     }
 }
 
-impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
-    for HttpTransport<EGReq, TransportReq, TransportRes, EGRes>
+impl<EGReq, TransportReq, TransportRes, EGRes, E> std::fmt::Debug
+    for HttpTransport<EGReq, TransportReq, TransportRes, EGRes, E>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpTransport")
@@ -216,13 +224,14 @@ mod tests {
     impl HttpClientTrait for UsageClient {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
+        type Error = std::io::Error;
 
         async fn send_message(
             &self,
             _endpoint: &str,
             message: TestReq,
             _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        ) -> EGResult<TestRes, Self::Error> {
             Ok(TestRes {
                 id: message.id,
                 used: 42,
@@ -250,13 +259,14 @@ mod tests {
     impl HttpClientTrait for ThrottledClient {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
+        type Error = std::io::Error;
 
         async fn send_message(
             &self,
             _endpoint: &str,
             message: TestReq,
             _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        ) -> EGResult<TestRes, Self::Error> {
             Ok(TestRes {
                 id: message.id,
                 used: 60,
@@ -279,13 +289,14 @@ mod tests {
     impl HttpClientTrait for RejectingClient {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
+        type Error = std::io::Error;
 
         async fn send_message(
             &self,
             _endpoint: &str,
             _message: TestReq,
             _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        ) -> EGResult<TestRes, Self::Error> {
             Err(EGError::RateLimited(RateLimitFeedback {
                 is_throttled: true,
                 retry_after: Some(Duration::from_secs(30)),
@@ -311,7 +322,7 @@ mod tests {
     }
 
     fn transport() -> (
-        HttpTransport<TestReq, TestReq, TestRes, TestRes>,
+        HttpTransport<TestReq, TestReq, TestRes, TestRes, std::io::Error>,
         RateLimits,
     ) {
         let mut endpoints = HashMap::new();
@@ -330,7 +341,7 @@ mod tests {
     }
 
     fn throttled_transport() -> (
-        HttpTransport<TestReq, TestReq, TestRes, TestRes>,
+        HttpTransport<TestReq, TestReq, TestRes, TestRes, std::io::Error>,
         RateLimits,
     ) {
         let mut endpoints = HashMap::new();

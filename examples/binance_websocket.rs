@@ -106,8 +106,9 @@ mod binance {
     fn to_external_response(response: BinanceWebsocketResponse) -> EGResult<MyResponse> {
         match response.result {
             Some(BinanceWebsocketResponseResult::ExchangeInfo(info)) => {
-                let raw = serde_json::to_vec(&info)
-                    .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?;
+                let raw = serde_json::to_vec(&info).map_err(|e| {
+                    EGError::External(ExternalError::from(ExampleError(e.to_string())))
+                })?;
                 Ok(MyResponse { raw })
             }
             _ => Err(EGError::UnknownEndpoint),
