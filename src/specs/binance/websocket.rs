@@ -6,7 +6,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, TryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -262,8 +262,8 @@ fn null_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, BinanceWebsoc
 }
 
 fn sync_timestamp()
--> ArcTryConvertValue<(BinanceWebsocketUnsignedRequest, i64), BinanceWebsocketUnsignedRequest> {
-    Arc::new(move |(mut request, server_time)| {
+-> TryConvertValue<(BinanceWebsocketUnsignedRequest, i64), BinanceWebsocketUnsignedRequest> {
+    move |(mut request, server_time)| {
         match &mut request.params {
             BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
@@ -287,7 +287,7 @@ fn sync_timestamp()
             | BinanceWebsocketUnsignedParams::Time(..) => {}
         }
         Ok(request)
-    })
+    }
 }
 
 fn create_signer_from_credentials(

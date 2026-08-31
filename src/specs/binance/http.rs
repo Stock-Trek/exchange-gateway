@@ -5,7 +5,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, TryConvertValue},
     listeners::{convert_listener::ConvertListener, listener::ListenerTrait},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
@@ -246,9 +246,9 @@ fn null_signer() -> ConvertSigner<BinanceHttpUnsignedRequest, BinanceHttpRequest
     })
 }
 
-fn sync_timestamp()
--> ArcTryConvertValue<(BinanceHttpUnsignedRequest, i64), BinanceHttpUnsignedRequest> {
-    Arc::new(move |(request, server_time)| {
+fn sync_timestamp() -> TryConvertValue<(BinanceHttpUnsignedRequest, i64), BinanceHttpUnsignedRequest>
+{
+    move |(request, server_time)| {
         Ok(match request {
             BinanceHttpUnsignedRequest::AssetLimits(mut params) => {
                 sync_timestamp_fields(&mut params.timestamp, &mut params.recvWindow, server_time);
@@ -273,7 +273,7 @@ fn sync_timestamp()
             request @ BinanceHttpUnsignedRequest::ExchangeInfo(..) => request,
             request @ BinanceHttpUnsignedRequest::Time(..) => request,
         })
-    })
+    }
 }
 
 fn create_signer_from_credentials(
