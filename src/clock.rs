@@ -58,13 +58,15 @@ impl Clock {
         Ok(last_sync.map_or(Duration::MAX, |i| i.elapsed()))
     }
 
-    pub fn sync(&self, server_time_millis: i64, round_trip_time: Duration) {
+    pub fn sync(&self, server_time_millis: i64, round_trip_time: Duration) -> EGResult<()> {
         let rtt_ms = round_trip_time.as_millis() as i64;
         let system_millis = Self::system_millis();
         let midpoint_system_millis = system_millis - (rtt_ms / 2);
         let new_offset = midpoint_system_millis - server_time_millis;
         self.offset_millis.store(new_offset, Ordering::Relaxed);
-        *self.last_sync.lock().unwrap() = Some(Instant::now());
+        let mut last_sync = self.last_sync.lock().map_err(|_| EGError::MutexPoisoned)?;
+        *last_sync = Some(Instant::now());
+        Ok(())
     }
 
     pub fn now_millis(&self) -> i64 {
@@ -99,7 +101,9 @@ mod test {
     fn clock_applies_server_offset() {
         let clock = Clock::default();
         let local = clock.now_millis();
-        clock.sync(local + 10_000, Duration::ZERO);
+        clock
+            .sync(local + 10_000, Duration::ZERO)
+            .expect("Cannot sync clock");
         let synced = clock.now_millis();
         assert!(synced >= local + 10_000, "synced: {synced}");
         assert!(synced < local + 10_000 + 60_000, "synced: {synced}");

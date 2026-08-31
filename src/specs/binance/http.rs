@@ -973,7 +973,9 @@ mod test {
         assert!(filter(&response));
         let server_time =
             (synchronization.to_server_time)(&response).expect("No server time from response");
-        clock.sync(server_time, Duration::ZERO);
+        clock
+            .sync(server_time, Duration::ZERO)
+            .expect("Cannot sync clock");
         assert!(
             clock.now_millis() >= local + 10_000,
             "now: {}",
