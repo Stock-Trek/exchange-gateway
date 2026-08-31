@@ -169,13 +169,13 @@ mod tests {
                 errors: errors.clone(),
             },
         );
-        // The delegate itself fails: the failure is reported through
-        // `on_error` rather than dropped by a wrapping transport.
-        listener.on_message(7u64).await.unwrap();
-        assert_eq!(
-            *errors.lock().unwrap(),
-            vec![EGError::BadResponse.to_string()]
-        );
+        // The delegate itself fails: the failure propagates to the caller
+        // rather than being silently dropped by a wrapping transport.
+        assert!(matches!(
+            listener.on_message(7u64).await,
+            Err(EGError::BadResponse)
+        ));
+        assert!(errors.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
