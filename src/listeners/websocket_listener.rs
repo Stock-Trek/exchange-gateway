@@ -8,10 +8,7 @@ use crate::{
 use async_trait::async_trait;
 use std::{
     pin::Pin,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
 
@@ -22,7 +19,6 @@ pub(crate) struct WebsocketListener<TransportRes, EGRes> {
     rate_limits: RateLimits,
     delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
-    next_handler_id: Arc<AtomicU64>,
     auth_gate: Arc<AuthGate>,
 }
 
@@ -34,7 +30,6 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
             .field("rate_limits", &self.rate_limits)
             .field("delegate", &"<Listener>")
             .field("handlers", &"<Vec<ResponseHandler>>")
-            .field("next_handler_id", &self.next_handler_id)
             .field("auth_gate", &self.auth_gate)
             .finish()
     }
@@ -57,7 +52,6 @@ where
             rate_limits,
             delegate: Arc::new(delegate),
             handlers: Arc::new(Mutex::new(Vec::new())),
-            next_handler_id: Arc::new(AtomicU64::new(0)),
             auth_gate,
         }
     }
@@ -65,22 +59,16 @@ where
         &self,
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<WaiterForResponse<EGRes>> {
-        let handler_id = self.next_handler_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(Mutex::new(WaiterState::default()));
         let handler = Arc::new(ResponseHandler {
             state: state.clone(),
             filter,
-            handler_id,
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
             guard.push(handler);
         }
-        Ok(WaiterForResponse {
-            state,
-            handlers: self.handlers.clone(),
-            handler_id,
-        })
+        Ok(WaiterForResponse { state })
     }
 }
 
@@ -131,8 +119,6 @@ where
     EGRes: Send,
 {
     state: Arc<Mutex<WaiterState<EGRes>>>,
-    handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
-    handler_id: u64,
 }
 
 impl<EGRes> Future for WaiterForResponse<EGRes>
@@ -164,10 +150,10 @@ where
     EGRes: Send,
 {
     fn drop(&mut self) {
-        let _ = remove_handler(
-            &self.handlers,
-            |handler| Ok(handler.id() == self.handler_id),
-        );
+        let _ = self.state.lock().map(|mut state| {
+            state.abandoned = true;
+            state.waker = None;
+        });
     }
 }
 
@@ -194,7 +180,6 @@ fn remove_handler<EGRes>(
 struct ResponseHandler<EGRes> {
     state: Arc<Mutex<WaiterState<EGRes>>>,
     filter: ArcPredicate<EGRes>,
-    handler_id: u64,
 }
 
 impl<EGRes> ResponseHandler<EGRes> {
@@ -202,19 +187,18 @@ impl<EGRes> ResponseHandler<EGRes> {
         let is_handled = (self.filter)(&response);
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-            if feedback.has_retry_feedback() {
-                state.rate_limited = Some(EGError::RateLimited(feedback.clone()));
-            } else {
-                state.filtered_response = Some(response);
-            }
-            if let Some(waker) = state.waker.take() {
-                waker.wake();
+            if !state.abandoned {
+                if feedback.has_retry_feedback() {
+                    state.rate_limited = Some(EGError::RateLimited(feedback.clone()));
+                } else {
+                    state.filtered_response = Some(response);
+                }
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
+                }
             }
         }
         Ok(is_handled)
-    }
-    fn id(&self) -> u64 {
-        self.handler_id
     }
 }
 
@@ -223,6 +207,7 @@ struct WaiterState<EGRes> {
     rate_limited: Option<EGError>,
     connection_lost: Option<EGError>,
     waker: Option<Waker>,
+    abandoned: bool,
 }
 
 impl<EGRes> Default for WaiterState<EGRes>
@@ -235,6 +220,7 @@ where
             rate_limited: None,
             connection_lost: None,
             waker: None,
+            abandoned: false,
         }
     }
 }
@@ -445,5 +431,94 @@ mod tests {
         // No message was forwarded to the delegate, and the drained handler
         // cannot consume a later response.
         assert!(received.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn timed_out_waiter_consumes_late_response_without_leaking_to_delegate() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener =
+            WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
+        // A send-and-wait times out (or is cancelled): the waiter is dropped
+        // while the request may already be on the wire, so the matching
+        // response that arrives afterwards must be consumed, not forwarded to
+        // the delegate as if it were a push.
+        let waiter = listener
+            .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
+            .unwrap();
+        drop(waiter);
+        assert!(limits.weight.did_acquire(10).unwrap());
+        listener
+            .on_message(TestMessage { id: 7, used: 60 })
+            .await
+            .unwrap();
+        // The late response is swallowed: the delegate sees nothing ...
+        assert!(received.lock().unwrap().is_empty());
+        // ... but its rate-limit feedback is still applied, because the
+        // exchange charged the request regardless of the local timeout.
+        assert!(limits.weight.did_acquire(40).unwrap());
+        assert!(!limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[tokio::test]
+    async fn timed_out_waiter_consumes_exactly_one_late_response() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener =
+            WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
+        let waiter = listener
+            .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
+            .unwrap();
+        drop(waiter);
+        listener
+            .on_message(TestMessage { id: 7, used: 60 })
+            .await
+            .unwrap();
+        assert!(received.lock().unwrap().is_empty());
+        // The stale handler was removed once it consumed the late response,
+        // so a later message is forwarded to the delegate normally (a retried
+        // request uses a fresh id, but an unrelated message with a matching
+        // filter must not be swallowed forever).
+        listener
+            .on_message(TestMessage { id: 7, used: 60 })
+            .await
+            .unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![TestMessage { id: 7, used: 60 }]
+        );
+    }
+
+    #[tokio::test]
+    async fn abandoned_waiter_does_not_swallow_unrelated_messages() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener =
+            WebsocketListener::new(Arc::new(Ok), feedback, limits.clone(), delegate, auth_gate);
+        let waiter = listener
+            .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
+            .unwrap();
+        drop(waiter);
+        // An abandoned waiter's filter only swallows its own response.
+        listener
+            .on_message(TestMessage { id: 1, used: 60 })
+            .await
+            .unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![TestMessage { id: 1, used: 60 }]
+        );
     }
 }
