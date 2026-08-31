@@ -6,7 +6,9 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    functions::{
+        ArcCombineValues, ArcPredicate, ArcTryConvertValue, BoxTryCreateOnce, TryConvertValue,
+    },
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -20,7 +22,6 @@ use crate::{
         data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
     },
     transports::{
-        iris::IrisWebsocketClient,
         transport::Transport,
         websocket::{WebsocketClientTrait, WebsocketTransport},
     },
@@ -36,71 +37,33 @@ use exchange_types::binance::{
         BinanceWebsocketUnsignedRequest,
     },
 };
-use iris::Config as IrisConfig;
 use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
     to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
     to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
+    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     use_session: bool,
-    iris_config: IrisConfig,
+    logon_timeout: Duration,
+    client_creator: BoxTryCreateOnce<
+        (
+            String,
+            Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+        ),
+        impl WebsocketClientTrait<
+            TransportReq = BinanceWebsocketRequest,
+            TransportRes = BinanceWebsocketResponse,
+        > + 'static,
+    >,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,
     ExternalRes: Clone + Send + Sync + 'static,
 {
     let url = exchange_urls().url(ExchangeTransportType::Websocket, trading_mode);
-    let client_factory = move |websocket_listener| -> Arc<
-        dyn WebsocketClientTrait<
-                TransportReq = BinanceWebsocketRequest,
-                TransportRes = BinanceWebsocketResponse,
-            >,
-    > {
-        let client =
-            IrisWebsocketClient::<BinanceWebsocketRequest, BinanceWebsocketResponse>::with_config(
-                &url,
-                iris_config,
-                websocket_listener,
-            );
-        Arc::new(client)
-    };
-    connector_with_client_factory(
-        client_factory,
-        Duration::from_secs(20),
-        to_unsigned_request,
-        to_external_response,
-        listener,
-        credentials,
-        clock,
-        use_session,
-    )
-}
-
-pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
-    client_factory: impl FnOnce(
-        Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
-    ) -> Arc<
-        dyn WebsocketClientTrait<
-                TransportReq = BinanceWebsocketRequest,
-                TransportRes = BinanceWebsocketResponse,
-            >,
-    >,
-    logon_timeout: Duration,
-    to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-    listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
-    credentials: Option<ApiKeyCredentials>,
-    clock: Clock,
-    use_session: bool,
-) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-where
-    ExternalReq: Send + Sync,
-    ExternalRes: Clone + Send + Sync + 'static,
-{
     let rate_limits = rate_limits();
     let response_listener = ConvertListener::new(to_external_response, listener);
     let auth_gate = Arc::new(AuthGate::default());
@@ -111,7 +74,7 @@ where
         response_listener,
         auth_gate.clone(),
     ));
-    let client = client_factory(websocket_listener.clone());
+    let client = Arc::new(client_creator((url, websocket_listener.clone()))?);
     let transport = WebsocketTransport::new(
         client,
         to_request,

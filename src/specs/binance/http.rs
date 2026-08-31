@@ -5,7 +5,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, BoxTryCreateOnce, TryConvertValue},
     rate_limit::feedback::RateLimitFeedback,
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
@@ -42,7 +42,7 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
-    client_creator: ArcTryConvertValue<
+    client_creator: BoxTryCreateOnce<
         String,
         impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
     >,

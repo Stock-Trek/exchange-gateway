@@ -13,7 +13,7 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct WebsocketListener<TransportRes, EGRes> {
+pub struct WebsocketListener<TransportRes, EGRes> {
     converter: ArcTryConvertValue<TransportRes, EGRes>,
     feedback: ArcTryConvertRef<TransportRes, RateLimitFeedback>,
     rate_limits: RateLimits,
@@ -39,7 +39,7 @@ impl<TransportRes, EGRes> WebsocketListener<TransportRes, EGRes>
 where
     EGRes: Send + Sync + 'static,
 {
-    pub fn new(
+    pub(crate) fn new(
         converter: ArcTryConvertValue<TransportRes, EGRes>,
         feedback: impl Fn(&TransportRes) -> EGResult<RateLimitFeedback> + Send + Sync + 'static,
         rate_limits: RateLimits,
@@ -55,7 +55,7 @@ where
             auth_gate,
         }
     }
-    pub fn waiter_for_filtered_response(
+    pub(crate) fn waiter_for_filtered_response(
         &self,
         filter: ArcPredicate<EGRes>,
     ) -> EGResult<WaiterForResponse<EGRes>> {

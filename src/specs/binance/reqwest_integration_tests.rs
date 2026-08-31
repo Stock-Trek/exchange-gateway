@@ -113,7 +113,7 @@ fn mock_http_connector(
         to_external_response,
         Some(credentials),
         clock,
-        Arc::new(move |_url| Ok(mock_client.clone())),
+        Box::new(move |_url| Ok(mock_client.clone())),
     )
 }
 
@@ -205,7 +205,7 @@ fn scripted_http_connector(
         to_external_response,
         Some(credentials),
         clock,
-        Arc::new(move |_url| Ok(scripted_client.clone())),
+        Box::new(move |_url| Ok(scripted_client.clone())),
     )
 }
 
