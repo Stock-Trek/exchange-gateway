@@ -1,16 +1,16 @@
-use crate::{error::EGResult, functions::ArcTryConvertValue, listeners::listener::ListenerTrait};
+use crate::{error::EGResult, functions::TryConvertValue, listeners::listener::ListenerTrait};
 use async_trait::async_trait;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct ConvertListener<TFrom, TTo> {
-    converter: ArcTryConvertValue<TFrom, TTo>,
+    converter: TryConvertValue<TFrom, TTo>,
     delegate: Arc<dyn ListenerTrait<TMessage = TTo>>,
 }
 
 impl<TFrom, TTo> ConvertListener<TFrom, TTo> {
     pub fn new(
-        converter: ArcTryConvertValue<TFrom, TTo>,
+        converter: TryConvertValue<TFrom, TTo>,
         delegate: impl ListenerTrait<TMessage = TTo> + 'static,
     ) -> Self {
         Self {

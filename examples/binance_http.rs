@@ -25,7 +25,7 @@ mod binance {
         },
         http::{BinanceHttpResponse, BinanceHttpResponseResult, BinanceHttpUnsignedRequest},
     };
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     #[derive(Debug, Clone)]
     struct MyRequest {
@@ -101,8 +101,8 @@ mod binance {
     pub(crate) async fn main() -> EGResult<()> {
         let connector = Connect.binance_http(
             TradingMode::Paper,
-            Arc::new(to_unsigned_request),
-            Arc::new(to_external_response),
+            to_unsigned_request,
+            to_external_response,
             MyListener,
             None,
             Clock::default(),

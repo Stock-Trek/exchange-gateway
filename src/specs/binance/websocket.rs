@@ -6,7 +6,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -20,8 +20,9 @@ use crate::{
         data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
     },
     transports::{
-        iris::IrisWebsocketClient, transport::Transport, websocket::WebsocketClientTrait,
-        websocket::WebsocketTransport,
+        iris::IrisWebsocketClient,
+        transport::Transport,
+        websocket::{WebsocketClientTrait, WebsocketTransport},
     },
     urls::{ExchangeTransportType, TradingMode},
 };
@@ -40,8 +41,8 @@ use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+    to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
@@ -89,8 +90,8 @@ pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
             >,
     >,
     logon_timeout: Duration,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-    to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+    to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,

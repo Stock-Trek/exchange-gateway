@@ -3,7 +3,6 @@ use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
     specs::binance::websocket::connector_with_client_factory,
     transports::websocket::WebsocketClientTrait,
@@ -194,14 +193,8 @@ fn mock_session_connector(
         api_key: "api-key".into(),
         secret: SecretString::from("secret"),
     };
-    let to_unsigned_request: ArcTryConvertValue<
-        BinanceWebsocketUnsignedRequest,
-        BinanceWebsocketUnsignedRequest,
-    > = Arc::new(Ok);
-    let to_external_response: ArcTryConvertValue<
-        BinanceWebsocketResponse,
-        BinanceWebsocketResponse,
-    > = Arc::new(Ok);
+    let to_unsigned_request = Ok;
+    let to_external_response = Ok;
     let clock_for_factory = clock.clone();
     let client_factory =
         move |websocket_listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>| {

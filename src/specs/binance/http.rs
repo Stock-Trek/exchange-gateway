@@ -5,22 +5,20 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue},
-    listeners::convert_listener::ConvertListener,
-    listeners::listener::ListenerTrait,
-    rate_limit::feedback::RateLimitFeedback,
-    rate_limit::rate_limits::RateLimits,
+    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
+    listeners::{convert_listener::ConvertListener, listener::ListenerTrait},
+    rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
         message_signer::MessageSigner, signer::Signer,
     },
-    specs::binance::common::{data_signer, rate_limit_usage, sync_timestamp_fields},
-    specs::binance::common::{exchange_urls, rate_limits},
-    transports::http::{HttpClientTrait, HttpEndpoint},
-    transports::transport::Transport,
+    specs::binance::common::{
+        data_signer, exchange_urls, rate_limit_usage, rate_limits, sync_timestamp_fields,
+    },
     transports::{
-        http::HttpTransport,
+        http::{HttpClientTrait, HttpEndpoint, HttpTransport},
         reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
+        transport::Transport,
     },
     urls::{ExchangeTransportType, TradingMode},
 };
@@ -41,8 +39,8 @@ use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
 
 pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+    to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,
@@ -67,8 +65,8 @@ where
 pub(crate) fn connector_with_client<ExternalReq, ExternalRes>(
     client: Arc<dyn HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse>>,
     rate_limits: RateLimits,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-    to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+    to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+    to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
     listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
     clock: Clock,

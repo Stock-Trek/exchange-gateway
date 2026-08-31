@@ -13,10 +13,12 @@ use {
     exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
 };
 
+#[cfg(feature = "reqwest")]
+use crate::functions::TryConvertValue;
 #[cfg(any(feature = "iris", feature = "reqwest"))]
 use crate::{
     connector::Connector, credentials::api_key_credential::ApiKeyCredentials, error::EGResult,
-    functions::ArcTryConvertValue, listeners::listener::ListenerTrait, urls::TradingMode,
+    listeners::listener::ListenerTrait, urls::TradingMode,
 };
 
 #[derive(Debug, Clone)]
@@ -27,8 +29,8 @@ impl Connect {
     pub fn binance_http<ExternalReq, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-        to_external_response: ArcTryConvertValue<BinanceHttpResponse, ExternalRes>,
+        to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
+        to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
         listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
         clock: Clock,
@@ -51,8 +53,8 @@ impl Connect {
     pub fn binance_websocket<ExternalReq, ExternalRes>(
         &self,
         trading_mode: TradingMode,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-        to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+        to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
+        to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
         listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
         clock: Clock,

@@ -3,7 +3,6 @@ use crate::{
     connector::Connector,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::ArcTryConvertValue,
     listeners::listener::ListenerTrait,
     rate_limit::{
         feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
@@ -119,12 +118,8 @@ fn mock_http_connector(
         api_key: "api-key".into(),
         secret: SecretString::from("secret"),
     };
-    let to_unsigned_request: ArcTryConvertValue<
-        BinanceHttpUnsignedRequest,
-        BinanceHttpUnsignedRequest,
-    > = Arc::new(Ok);
-    let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
-        Arc::new(Ok);
+    let to_unsigned_request = Ok;
+    let to_external_response = Ok;
     let mock_client = MockHttpClient {
         sent: Arc::new(Mutex::new(Vec::new())),
         clock: clock.clone(),
@@ -226,12 +221,8 @@ fn scripted_http_connector(
         api_key: "api-key".into(),
         secret: SecretString::from("secret"),
     };
-    let to_unsigned_request: ArcTryConvertValue<
-        BinanceHttpUnsignedRequest,
-        BinanceHttpUnsignedRequest,
-    > = Arc::new(Ok);
-    let to_external_response: ArcTryConvertValue<BinanceHttpResponse, BinanceHttpResponse> =
-        Arc::new(Ok);
+    let to_unsigned_request = Ok;
+    let to_external_response = Ok;
     let scripted_client = ScriptedHttpClient {
         sent: Arc::new(Mutex::new(Vec::new())),
         outcome,
