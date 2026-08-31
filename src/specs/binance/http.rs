@@ -115,13 +115,7 @@ fn to_filter(
 fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<HttpRequest> {
     let BinanceSignedParams { params, signature } = request;
     let mut headers = Vec::new();
-    // Every signed endpoint authenticates with the X-MBX-APIKEY header.
-    // The connector-level credentials are the authoritative source and
-    // overwrite any apiKey the caller left on the request params (the
-    // signature is built from the connector's secret, so the header must
-    // match); the per-request apiKey is only used when the connector has
-    // no credentials. The apiKey never appears in the query string.
-    let mut push_api_key = |request_api_key: Option<String>| {
+    let mut set_api_key_header = |request_api_key: Option<String>| {
         if let Some(api_key) = api_key.or(request_api_key.as_deref()) {
             headers.push(("X-MBX-APIKEY".into(), api_key.into()));
         }
@@ -131,7 +125,7 @@ fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<Ht
             (Method::GET, Some(exchange_info_query(&params)))
         }
         BinanceHttpUnsignedRequest::AssetLimits(params) => {
-            push_api_key(None);
+            set_api_key_header(None);
             (
                 Method::GET,
                 Some(signed_query(params.query_params(true), signature)),
@@ -139,28 +133,28 @@ fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<Ht
         }
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
             let mut params = *params;
-            push_api_key(params.apiKey.take());
+            set_api_key_header(params.apiKey.take());
             (
                 Method::POST,
                 Some(signed_query(params.query_params(true), signature)),
             )
         }
         BinanceHttpUnsignedRequest::AmendOrderRequest(mut params) => {
-            push_api_key(params.apiKey.take());
+            set_api_key_header(params.apiKey.take());
             (
                 Method::POST,
                 Some(signed_query(params.query_params(true), signature)),
             )
         }
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(mut params) => {
-            push_api_key(params.apiKey.take());
+            set_api_key_header(params.apiKey.take());
             (
                 Method::DELETE,
                 Some(signed_query(params.query_params(true), signature)),
             )
         }
         BinanceHttpUnsignedRequest::CancelOrderRequest(mut params) => {
-            push_api_key(params.apiKey.take());
+            set_api_key_header(params.apiKey.take());
             (
                 Method::DELETE,
                 Some(signed_query(params.query_params(true), signature)),
