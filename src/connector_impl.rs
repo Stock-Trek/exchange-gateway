@@ -4,7 +4,7 @@ use crate::{
     clock::{Clock, Synchronization},
     connector::Connector,
     error::{EGError, EGResult},
-    functions::{TryConvertRef, TryConvertValue},
+    functions::{ArcTryConvertValue, ToFilter, TryConvertRef, TryConvertValue},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner,
@@ -27,6 +27,7 @@ pub struct ConnectorImpl<
     TransportReq,
     TransportRes,
     EGRes,
+    ExternalRes,
 > {
     rate_limits: RateLimits,
     clock: Clock,
@@ -35,6 +36,8 @@ pub struct ConnectorImpl<
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
     sync_timestamp_fields: TryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
+    to_filter: ToFilter<EGUnsignedReq, EGRes>,
+    to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
@@ -63,9 +66,11 @@ impl<
         TransportReq,
         TransportRes,
         EGRes,
+        ExternalRes,
     >
 where
     ExternalReq: Send,
+    ExternalRes: Send,
     TCredentials: Sync,
     EGReq: Send,
     TransportRes: Send,
@@ -151,12 +156,18 @@ where
             .is_some();
         Ok(has_signer && !self.is_authentication_stale()?)
     }
-    async fn send(&self, request: ExternalReq, signed: bool, timeout: Duration) -> EGResult<()> {
+    async fn send(
+        &self,
+        request: ExternalReq,
+        signed: bool,
+        timeout: Duration,
+    ) -> EGResult<ExternalRes> {
         if signed && self.is_authentication_stale()? {
             return Err(EGError::NotAuthenticated);
         }
-        let (signed_request, weight, order_count) = {
+        let (signed_request, weight, order_count, filter) = {
             let unsigned = (self.to_unsigned_request)(request)?;
+            let (unsigned, filter) = (self.to_filter)(unsigned);
             let unsigned = if signed {
                 (self.sync_timestamp_fields)((unsigned, self.clock.now_millis()))?
             } else {
@@ -172,21 +183,22 @@ where
                     return Err(error);
                 }
             };
-            (signed_request, weight, order_count)
+            (signed_request, weight, order_count, filter)
         };
-        match self
+        let response = match self
             .transport
-            .fire_and_forget(signed_request, timeout)
+            .send_and_wait_for(signed_request, timeout, filter)
             .await
         {
-            Ok(()) => Ok(()),
+            Ok(response) => response,
             Err(error) => {
                 if matches!(&error, EGError::RateLimited { .. }) {
                     let _ = self.rate_limits.refund(weight, order_count);
                 }
-                Err(error)
+                return Err(error);
             }
-        }
+        };
+        (self.to_external_response)(response)
     }
     async fn disconnect(&self) -> EGResult<()> {
         {
@@ -197,8 +209,16 @@ where
     }
 }
 
-impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
-    ConnectorImpl<
+impl<
+    ExternalReq,
+    EGUnsignedReq,
+    TCredentials,
+    EGReq,
+    TransportReq,
+    TransportRes,
+    EGRes,
+    ExternalRes,
+> ConnectorImpl<
         ExternalReq,
         EGUnsignedReq,
         TCredentials,
@@ -206,6 +226,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         TransportReq,
         TransportRes,
         EGRes,
+        ExternalRes,
     >
 where
     EGReq: Send,
@@ -219,6 +240,8 @@ where
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
         sync_timestamp_fields: TryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
+        to_filter: ToFilter<EGUnsignedReq, EGRes>,
+        to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
@@ -233,6 +256,8 @@ where
             to_order_count,
             to_unsigned_request,
             sync_timestamp_fields,
+            to_filter,
+            to_external_response,
             transport,
             null_signer,
             credentials,
@@ -318,8 +343,16 @@ where
     }
 }
 
-impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes, EGRes>
-    std::fmt::Debug
+impl<
+    ExternalReq,
+    EGUnsignedReq,
+    TCredentials,
+    EGReq,
+    TransportReq,
+    TransportRes,
+    EGRes,
+    ExternalRes,
+> std::fmt::Debug
     for ConnectorImpl<
         ExternalReq,
         EGUnsignedReq,
@@ -328,6 +361,7 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
         TransportReq,
         TransportRes,
         EGRes,
+        ExternalRes,
     >
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -339,6 +373,8 @@ impl<ExternalReq, EGUnsignedReq, TCredentials, EGReq, TransportReq, TransportRes
             .field("to_weight", &"<function>")
             .field("to_order_count", &"<function>")
             .field("sync_timestamp", &"<function>")
+            .field("to_filter", &"<function>")
+            .field("to_external_response", &"<function>")
             .field("transport", &self.transport)
             .field("null_signer", &self.null_signer)
             .field("credentials", &"<redacted>")

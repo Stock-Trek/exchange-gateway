@@ -24,6 +24,8 @@ pub enum EGError {
     MutexPoisoned,
     #[error("Connector is not authenticated")]
     NotAuthenticated,
+    #[error("Connector is not connected")]
+    NotConnected,
     #[error("Rate limit exceeded")]
     RateLimited(RateLimitFeedback),
     #[error("Request timed out waiting for a response")]

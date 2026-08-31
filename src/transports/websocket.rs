@@ -51,11 +51,6 @@ where
     fn is_connected(&self) -> bool {
         self.client.is_connected()
     }
-    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
-        let transport_req = self.try_convert_request(request)?;
-        self.client.send_message(transport_req, timeout).await?;
-        Ok(())
-    }
     async fn send_and_wait_for(
         &self,
         request: EGReq,

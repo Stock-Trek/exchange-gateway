@@ -98,6 +98,8 @@ where
         request_weight,
         order_count,
         sync_timestamp(),
+        to_filter,
+        Arc::new(to_external_response),
         Transport::Http(transport),
         null_signer(),
         credentials,
@@ -105,6 +107,15 @@ where
         authenticate_legs,
         Arc::new(AuthGate::default()),
     ))
+}
+
+/// HTTP is strictly request/response, so every reply is the response to the
+/// request that produced it: the filter accepts any converted response and
+/// the request is left untouched.
+fn to_filter(
+    request: BinanceHttpUnsignedRequest,
+) -> (BinanceHttpUnsignedRequest, ArcPredicate<BinanceHttpResponse>) {
+    (request, Arc::new(|_: &BinanceHttpResponse| true))
 }
 
 fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<HttpRequest> {

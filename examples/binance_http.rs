@@ -1,5 +1,7 @@
 //! A minimal, runnable REST example: polls `GET /api/v3/exchangeInfo` on the
-//! Binance testnet through the gateway's HTTP connector.
+//! Binance testnet through the gateway's HTTP connector. `send` is a
+//! send-and-wait call: it returns the exchange's response directly, so no
+//! listener is needed to observe it.
 //!
 //! ```sh
 //! cargo run --example binance_http --features reqwest
@@ -43,8 +45,9 @@ mod binance {
     #[async_trait::async_trait]
     impl ListenerTrait for MyListener {
         type TMessage = MyResponse;
-        async fn on_message(&self, message: MyResponse) -> EGResult<()> {
-            println!("exchangeInfo: {} bytes", message.raw.len());
+        async fn on_message(&self, _message: MyResponse) -> EGResult<()> {
+            // HTTP is strictly request/response, so the listener is never
+            // called: responses are returned by `send` instead.
             Ok(())
         }
     }
@@ -108,7 +111,7 @@ mod binance {
             Clock::default(),
         )?;
         connector.connect().await?;
-        connector
+        let response = connector
             .send(
                 MyRequest {
                     exchange_info: true,
@@ -117,7 +120,7 @@ mod binance {
                 Duration::from_secs(10),
             )
             .await?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        println!("exchangeInfo: {} bytes", response.raw.len());
         connector.disconnect().await?;
         Ok(())
     }

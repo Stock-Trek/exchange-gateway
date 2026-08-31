@@ -109,8 +109,27 @@ where
     }
     async fn on_disconnected(&self) -> EGResult<()> {
         self.auth_gate.on_connection_lost()?;
+        fail_pending_waiters(&self.handlers)?;
         self.delegate.on_disconnected().await
     }
+}
+
+/// Fails every pending waiter promptly on a connection loss: a request sent
+/// just before a disconnect cannot be answered on the fresh connection, so its
+/// waiter must not sit out the full timeout. The handlers are drained so they
+/// cannot consume a later response (e.g. on a reconnected session).
+fn fail_pending_waiters<EGRes>(
+    handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>,
+) -> EGResult<()> {
+    let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
+    for handler in guard.drain(..) {
+        let mut state = handler.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+        state.connection_lost = Some(EGError::NotConnected);
+        if let Some(waker) = state.waker.take() {
+            waker.wake();
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct WaiterForResponse<EGRes>
@@ -136,6 +155,8 @@ where
         if let Some(msg) = state.filtered_response.take() {
             Poll::Ready(Ok(msg))
         } else if let Some(error) = state.rate_limited.take() {
+            Poll::Ready(Err(error))
+        } else if let Some(error) = state.connection_lost.take() {
             Poll::Ready(Err(error))
         } else {
             state.waker = Some(cx.waker().clone());
@@ -206,6 +227,7 @@ impl<EGRes> ResponseHandler<EGRes> {
 struct WaiterState<EGRes> {
     filtered_response: Option<EGRes>,
     rate_limited: Option<EGError>,
+    connection_lost: Option<EGError>,
     waker: Option<Waker>,
 }
 
@@ -217,6 +239,7 @@ where
         Self {
             filtered_response: None,
             rate_limited: None,
+            connection_lost: None,
             waker: None,
         }
     }
@@ -369,7 +392,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fire_and_forget_message_applies_feedback_and_forwards() {
+    async fn partial_message_applies_feedback_and_forwards() {
         let limits = rate_limits();
         let received = Arc::new(Mutex::new(Vec::new()));
         let delegate = RecordingListener {
@@ -391,5 +414,42 @@ mod tests {
         // ... and feedback is applied on the way through.
         assert!(limits.weight.did_acquire(40).unwrap());
         assert!(!limits.weight.did_acquire(1).unwrap());
+    }
+
+    #[tokio::test]
+    async fn waiters_fail_promptly_on_disconnect() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
+        let auth_gate = Arc::new(AuthGate::default());
+        let listener = WebsocketListener::new(
+            Arc::new(Ok),
+            feedback,
+            limits.clone(),
+            delegate,
+            auth_gate.clone(),
+        );
+        let waiter = listener
+            .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
+            .unwrap();
+        // Let the waiter register its waker, then drop the connection: the
+        // waiter must be woken promptly with `NotConnected` instead of
+        // sitting out the full timeout.
+        let wait_task = tokio::spawn(async move { waiter.await });
+        tokio::task::yield_now().await;
+        listener
+            .on_disconnected()
+            .await
+            .expect("disconnect should succeed");
+        let error = tokio::time::timeout(Duration::from_secs(1), wait_task)
+            .await
+            .expect("waiter should resolve promptly")
+            .expect("wait task should not panic");
+        assert!(matches!(error, Err(EGError::NotConnected)));
+        // No message was forwarded to the delegate, and the drained handler
+        // cannot consume a later response.
+        assert!(received.lock().unwrap().is_empty());
     }
 }

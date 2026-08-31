@@ -47,6 +47,10 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
     convert_response: ArcTryConvertValue<TransportRes, EGRes>,
+    // Kept as an unused hook: HTTP is strictly request/response, so there are
+    // no partial responses to deliver to the listener (see
+    // docs/design/send-and-wait-paradigm.md).
+    #[allow(dead_code)]
     listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
@@ -75,11 +79,6 @@ where
     }
     fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::SeqCst)
-    }
-    async fn fire_and_forget(&self, request: EGReq, timeout: Duration) -> EGResult<()> {
-        let response = self.to_converted_response(request, timeout).await?;
-        self.listener.on_message(response).await?;
-        Ok(())
     }
     async fn send_and_wait_for(
         &self,
@@ -423,25 +422,6 @@ mod tests {
             .await
             .expect_err("non-matching response should be an error");
         assert!(matches!(error, EGError::BadResponse));
-    }
-
-    #[tokio::test]
-    async fn fire_and_forget_forwards_response_to_listener() {
-        let (transport, _) = transport();
-        transport
-            .fire_and_forget(TestReq { id: 1 }, Duration::from_secs(5))
-            .await
-            .expect("fire and forget should succeed");
-    }
-
-    #[tokio::test]
-    async fn fire_and_forget_interprets_retry_feedback_as_error() {
-        let (transport, _) = throttled_transport();
-        let error = transport
-            .fire_and_forget(TestReq { id: 1 }, Duration::from_secs(5))
-            .await
-            .expect_err("retry feedback should be an error");
-        assert!(matches!(error, EGError::RateLimited(..)));
     }
 
     #[tokio::test]

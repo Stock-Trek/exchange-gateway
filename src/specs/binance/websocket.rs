@@ -6,7 +6,7 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{ArcCombineValues, ArcPredicate, TryConvertValue},
+    functions::{ArcCombineValues, ArcPredicate, ArcTryConvertValue, TryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
@@ -135,13 +135,48 @@ where
         request_weight,
         order_count,
         sync_timestamp(),
-        Transport::Websocket(transport),
+        to_filter,
+        send_to_external_response(to_external_response),        Transport::Websocket(transport),
         null_signer(),
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
         auth_gate,
     ))
+}
+
+/// Correlates a user request to its reply: the connector owns id generation,
+/// overwriting any caller-supplied id with a fresh one (unique across
+/// concurrent sends), and the filter matches the exchange's echo of it.
+/// Partial/push messages carry ids that never match an in-flight request, so
+/// they continue to flow to the user's listener.
+fn to_filter(
+    mut request: BinanceWebsocketUnsignedRequest,
+) -> (
+    BinanceWebsocketUnsignedRequest,
+    ArcPredicate<BinanceWebsocketResponse>,
+) {
+    let request_id = id();
+    request.metadata.id = request_id.clone();
+    let filter: ArcPredicate<BinanceWebsocketResponse> =
+        Arc::new(move |response: &BinanceWebsocketResponse| response.id == request_id);
+    (request, filter)
+}
+
+/// The send path must surface exchange errors (a matching-id reply carrying
+/// `error` or a non-2xx status) as a `send()` error, not hand the raw
+/// response to the caller's conversion. The listener path is unaffected:
+/// partial/push messages are not request replies and are not validated here.
+fn send_to_external_response<ExternalRes>(
+    to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
+) -> ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>
+where
+    ExternalRes: Send + Sync + 'static,
+{
+    Arc::new(move |response| {
+        validate_response(&response)?;
+        to_external_response(response)
+    })
 }
 
 fn to_request(request: BinanceWebsocketRequest) -> EGResult<BinanceWebsocketRequest> {

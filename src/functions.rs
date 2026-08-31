@@ -12,3 +12,10 @@ pub type ArcPredicate<T> = Arc<dyn for<'a> Fn(&'a T) -> bool + Send + Sync>;
 
 pub(crate) type TryConvertRef<From, To> = fn(&From) -> EGResult<To>;
 pub(crate) type TryConvertValue<From, To> = fn(From) -> EGResult<To>;
+
+/// Correlates an unsigned request to the exchange response it expects: the
+/// spec stamps any request metadata (e.g. an id) and returns the filter used
+/// to match the reply. HTTP is always request/response, so the filter accepts
+/// anything; WebSocket matches on the id the connector generated.
+pub(crate) type ToFilter<EGUnsignedReq, EGRes> =
+    fn(EGUnsignedReq) -> (EGUnsignedReq, ArcPredicate<EGRes>);
