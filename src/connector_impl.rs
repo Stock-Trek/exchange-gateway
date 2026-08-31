@@ -109,7 +109,7 @@ where
         };
         let round_trip_time = start.elapsed();
         let server_time = (self.synchronization.to_server_time)(&response)?;
-        self.clock.sync(server_time, round_trip_time);
+        self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     async fn authenticate(&self) -> EGResult<()> {
