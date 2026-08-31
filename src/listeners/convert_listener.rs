@@ -43,7 +43,12 @@ where
     }
     async fn on_message(&self, message: TFrom) -> EGResult<()> {
         match (self.converter)(message) {
-            Ok(converted) => self.delegate.on_message(converted).await,
+            Ok(converted) => {
+                if let Err(error) = self.delegate.on_message(converted).await {
+                    self.delegate.on_error(error).await?;
+                }
+                Ok(())
+            }
             Err(error) => self.delegate.on_error(error).await,
         }
     }
