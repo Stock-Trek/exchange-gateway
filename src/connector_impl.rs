@@ -30,16 +30,16 @@ pub struct ConnectorImpl<
 > {
     rate_limits: RateLimits,
     clock: Arc<Clock>,
+    synchronization: Synchronization<EGUnsignedReq, EGRes>,
+    to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
-    to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
     sync_timestamp_fields: ArcTryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
     credentials: Option<TCredentials>,
     create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
     authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-    synchronization: Synchronization<EGUnsignedReq, EGRes>,
     signer: Arc<Mutex<Option<Signer<EGUnsignedReq, EGReq>>>>,
     auth_gate: Arc<AuthGate>,
 }
@@ -214,16 +214,16 @@ where
     pub(crate) fn new(
         rate_limits: RateLimits,
         clock: Arc<Clock>,
+        synchronization: Synchronization<EGUnsignedReq, EGRes>,
+        to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, EGUnsignedReq>,
         sync_timestamp_fields: ArcTryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
         credentials: Option<TCredentials>,
         create_signer: TryConvertRef<TCredentials, Signer<EGUnsignedReq, EGReq>>,
         authenticate_legs: Vec<AuthenticateLeg<EGUnsignedReq, EGReq, EGRes>>,
-        synchronization: Synchronization<EGUnsignedReq, EGRes>,
         auth_gate: Arc<AuthGate>,
     ) -> Self {
         Self {

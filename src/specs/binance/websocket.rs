@@ -133,16 +133,16 @@ where
     Ok(ConnectorImpl::new(
         rate_limits,
         clock,
+        synchronization(Duration::from_secs(20)),
+        to_unsigned_request,
         request_weight,
         order_count,
-        to_unsigned_request,
         sync_timestamp(),
         Transport::Websocket(transport),
         null_signer(),
         credentials,
         create_signer_from_credentials,
         authenticate_legs,
-        synchronization(Duration::from_secs(20)),
         auth_gate,
     ))
 }
