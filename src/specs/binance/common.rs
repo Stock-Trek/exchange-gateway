@@ -34,9 +34,9 @@ pub(crate) fn exchange_urls() -> ExchangeUrls {
 pub(crate) fn sync_timestamp_fields(
     timestamp: &mut i64,
     recv_window: &mut Option<Decimal>,
-    now_millis: i64,
+    server_time_millis: i64,
 ) {
-    *timestamp = now_millis;
+    *timestamp = server_time_millis;
     if recv_window.is_none() {
         *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MILLIS));
     }
