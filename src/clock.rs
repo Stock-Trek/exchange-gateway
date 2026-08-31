@@ -1,7 +1,11 @@
+use crate::{
+    error::{EGError, EGResult},
+    functions::{ArcPredicate, ArcTryConvertRef},
+};
 use std::{
     sync::{
-        Mutex,
         atomic::{AtomicI64, Ordering},
+        {Arc, Mutex},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -9,22 +13,26 @@ use std::{
 #[derive(Debug)]
 pub struct Clock {
     offset_millis: AtomicI64,
-    last_sync: Mutex<Instant>,
-    sync_interval: Duration,
+    last_sync: Mutex<Option<Instant>>,
+}
+
+pub(crate) struct Synchronization<EGUnsignedReq, EGRes> {
+    pub create_time_request: Arc<dyn Fn() -> (EGUnsignedReq, ArcPredicate<EGRes>) + Send + Sync>,
+    pub timeout: Duration,
+    pub to_server_time: ArcTryConvertRef<EGRes, i64>,
 }
 
 impl Default for Clock {
     fn default() -> Self {
-        Clock::new(Duration::from_mins(1))
+        Clock::new()
     }
 }
 
 impl Clock {
-    pub fn new(sync_interval: Duration) -> Self {
+    pub fn new() -> Self {
         Self {
             offset_millis: AtomicI64::new(0),
-            last_sync: Mutex::new(Instant::now() - sync_interval),
-            sync_interval,
+            last_sync: Mutex::new(None),
         }
     }
 
@@ -32,9 +40,11 @@ impl Clock {
         self.offset_millis.load(Ordering::Relaxed)
     }
 
-    pub fn should_sync(&self) -> bool {
-        let last = *self.last_sync.lock().unwrap();
-        last.elapsed() >= self.sync_interval
+    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+        let result = self.last_sync.lock();
+        let mutex = result.map_err(|_| EGError::MutexPoisoned)?;
+        let last_sync = *mutex;
+        Ok(last_sync.map_or(Duration::MAX, |i| i.elapsed()))
     }
 
     pub fn sync(&self, server_time_millis: i64, round_trip_time: Duration) {
@@ -43,7 +53,7 @@ impl Clock {
         let midpoint_system_millis = system_millis - (rtt_ms / 2);
         let new_offset = midpoint_system_millis - server_time_millis;
         self.offset_millis.store(new_offset, Ordering::Relaxed);
-        *self.last_sync.lock().unwrap() = Instant::now();
+        *self.last_sync.lock().unwrap() = Some(Instant::now());
     }
 
     pub fn now_millis(&self) -> i64 {
@@ -57,6 +67,16 @@ impl Clock {
             .duration_since(UNIX_EPOCH)
             .expect("SystemTime is before UNIX_EPOCH");
         system_time.as_millis() as i64
+    }
+}
+
+impl<EGUnsignedReq, EGRes> std::fmt::Debug for Synchronization<EGUnsignedReq, EGRes> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Synchronization")
+            .field("create_request", &"<function>")
+            .field("timeout", &self.timeout)
+            .field("to_server_time", &"<function>")
+            .finish()
     }
 }
 

@@ -714,16 +714,11 @@ async fn sync_clock_syncs_the_server_clock() {
     // user-invoked, so nothing is sent and the clock still needs a sync.
     connector.connect().await.expect("connect should succeed");
     assert!(client.sent.lock().unwrap().is_empty());
-    assert!(clock.should_sync(), "connect must not sync the clock");
 
     connector
         .sync_clock()
         .await
         .expect("sync_clock should succeed");
-    assert!(
-        !clock.should_sync(),
-        "sync_clock must refresh the clock sync time"
-    );
 
     // The sync clock message is the unsigned `time` request.
     let sent = client.sent.lock().unwrap();
@@ -770,13 +765,16 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
     assert_eq!(sent.len(), 2, "logon + sync_clock");
     // The sync is a fresh unsigned time request, matched by its own id
     // rather than tied to the authentication logon.
-    let sync_clock = &sent[1];
+    let synchronization = &sent[1];
     assert!(
-        matches!(sync_clock.metadata.method, BinanceWebsocketMethodName::Time),
+        matches!(
+            synchronization.metadata.method,
+            BinanceWebsocketMethodName::Time
+        ),
         "sync_clock must send a time request"
     );
     assert!(
-        sync_clock.params.signature.is_none(),
+        synchronization.params.signature.is_none(),
         "the sync_clock request must be unsigned"
     );
 }

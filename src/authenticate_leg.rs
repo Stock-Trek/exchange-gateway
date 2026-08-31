@@ -1,12 +1,14 @@
 use crate::{
-    functions::{ArcCreateAuthAttemptWithClock, ArcTryConvertValue},
+    clock::Clock,
+    functions::{ArcPredicate, ArcTryConvertValue},
     sign::signer::Signer,
 };
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub(crate) struct AuthenticateLeg<EGUnsignedReq, EGReq, EGRes> {
-    pub create_auth_attempt: ArcCreateAuthAttemptWithClock<EGUnsignedReq, EGRes>,
+    pub create_auth_attempt:
+        Arc<dyn Fn(&Clock) -> (EGUnsignedReq, ArcPredicate<EGRes>) + Send + Sync>,
     pub timeout: Duration,
     pub create_signer: ArcTryConvertValue<EGRes, Option<Signer<EGUnsignedReq, EGReq>>>,
 }

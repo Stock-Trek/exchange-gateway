@@ -1,14 +1,8 @@
-use crate::{clock::Clock, error::EGResult};
+use crate::error::EGResult;
 use std::sync::Arc;
 
 pub(crate) type ArcCombineValues<TValue0, TValue1, TCombined> =
     Arc<dyn Fn(TValue0, TValue1) -> TCombined + Send + Sync>;
-pub(crate) type ArcCreateAuthAttempt<EGUnsignedReq, EGRes> =
-    Arc<dyn Fn() -> (EGUnsignedReq, ArcPredicate<EGRes>) + Send + Sync>;
-pub(crate) type ArcCreateAuthAttemptWithClock<EGUnsignedReq, EGRes> =
-    Arc<dyn Fn(&Clock) -> (EGUnsignedReq, ArcPredicate<EGRes>) + Send + Sync>;
-pub(crate) type ArcTryConvertValueWithClock<TFrom, TTo> =
-    Arc<dyn Fn(&Clock, TFrom) -> EGResult<TTo> + Send + Sync>;
 
 pub type ArcTryConvertRef<TFrom, TTo> = Arc<dyn Fn(&TFrom) -> EGResult<TTo> + Send + Sync>;
 pub type ArcTryConvertValue<TFrom, TTo> = Arc<dyn Fn(TFrom) -> EGResult<TTo> + Send + Sync>;
