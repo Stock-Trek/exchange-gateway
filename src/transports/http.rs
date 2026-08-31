@@ -1,7 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, ArcTryConvertRef, ArcTryConvertValue},
-    listeners::listener::ListenerTrait,
+    functions::{ArcPredicate, ArcTryConvertRef, ArcTryConvertValue, TryConvertValue},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     transports::transport::TransportTrait,
 };
@@ -46,12 +45,7 @@ pub(crate) enum HttpEndpoint {
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-    convert_response: ArcTryConvertValue<TransportRes, EGRes>,
-    // Kept as an unused hook: HTTP is strictly request/response, so there are
-    // no partial responses to deliver to the listener (see
-    // docs/design/send-and-wait-paradigm.md).
-    #[allow(dead_code)]
-    listener: Arc<dyn ListenerTrait<TMessage = EGRes>>,
+    convert_response: TryConvertValue<TransportRes, EGRes>,
     to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
     endpoints: HashMap<HttpEndpoint, String>,
     rate_limits: RateLimits,
@@ -108,8 +102,7 @@ where
     pub fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
-        convert_response: ArcTryConvertValue<TransportRes, EGRes>,
-        listener: impl ListenerTrait<TMessage = EGRes> + 'static,
+        convert_response: TryConvertValue<TransportRes, EGRes>,
         to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
         endpoints: HashMap<HttpEndpoint, String>,
         rate_limits: RateLimits,
@@ -119,7 +112,6 @@ where
             client,
             convert_request,
             convert_response,
-            listener: Arc::new(listener),
             to_http_endpoint,
             endpoints,
             rate_limits,
@@ -198,7 +190,6 @@ mod tests {
     use super::*;
     use crate::{
         error::{EGError, EGResult},
-        listeners::listener::ListenerTrait,
         rate_limit::{
             feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
             rate_limit_type::RateLimitType, rate_limiter::RateLimiter,
@@ -308,17 +299,6 @@ mod tests {
         }
     }
 
-    struct NoopListener;
-
-    #[async_trait]
-    impl ListenerTrait for NoopListener {
-        type TMessage = TestRes;
-
-        async fn on_message(&self, _message: TestRes) -> EGResult<()> {
-            Ok(())
-        }
-    }
-
     fn rate_limits() -> RateLimits {
         RateLimits {
             weight: RateLimiter::new(vec![RateLimitConfig {
@@ -340,8 +320,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
             Arc::new(Ok),
-            Arc::new(Ok),
-            NoopListener,
+            Ok,
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),
@@ -360,8 +339,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(ThrottledClient),
             Arc::new(Ok),
-            Arc::new(Ok),
-            NoopListener,
+            Ok,
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),
@@ -436,13 +414,12 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
             Arc::new(Ok),
-            Arc::new(|_: TestRes| -> EGResult<TestRes> {
+            |_: TestRes| -> EGResult<TestRes> {
                 Err(EGError::ApiError {
                     code: -2015,
                     message: "Invalid API-key.".into(),
                 })
-            }),
-            NoopListener,
+            },
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),
@@ -473,8 +450,7 @@ mod tests {
         let transport = HttpTransport::new(
             Arc::new(RejectingClient),
             Arc::new(Ok),
-            Arc::new(Ok),
-            NoopListener,
+            Ok,
             |_| HttpEndpoint::ExchangeInfo,
             endpoints,
             rate_limits.clone(),

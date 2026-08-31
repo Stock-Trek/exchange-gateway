@@ -39,19 +39,6 @@ mod binance {
         raw: Vec<u8>,
     }
 
-    #[derive(Debug, Clone)]
-    struct MyListener;
-
-    #[async_trait::async_trait]
-    impl ListenerTrait for MyListener {
-        type TMessage = MyResponse;
-        async fn on_message(&self, _message: MyResponse) -> EGResult<()> {
-            // HTTP is strictly request/response, so the listener is never
-            // called: responses are returned by `send` instead.
-            Ok(())
-        }
-    }
-
     #[derive(Debug)]
     struct ExampleError(String);
 
@@ -106,7 +93,6 @@ mod binance {
             TradingMode::Paper,
             to_unsigned_request,
             to_external_response,
-            MyListener,
             None,
             Clock::default(),
         )?;

@@ -114,10 +114,6 @@ where
     }
 }
 
-/// Fails every pending waiter promptly on a connection loss: a request sent
-/// just before a disconnect cannot be answered on the fresh connection, so its
-/// waiter must not sit out the full timeout. The handlers are drained so they
-/// cannot consume a later response (e.g. on a reconnected session).
 fn fail_pending_waiters<EGRes>(handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>) -> EGResult<()> {
     let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
     for handler in guard.drain(..) {

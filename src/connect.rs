@@ -31,7 +31,6 @@ impl Connect {
         trading_mode: TradingMode,
         to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
         to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
         clock: Clock,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
@@ -43,7 +42,6 @@ impl Connect {
             trading_mode,
             to_unsigned_request,
             to_external_response,
-            listener,
             credentials,
             clock,
         )

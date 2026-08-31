@@ -4,7 +4,7 @@ use crate::{
     clock::{Clock, Synchronization},
     connector::Connector,
     error::{EGError, EGResult},
-    functions::{ArcTryConvertValue, ToFilter, TryConvertRef, TryConvertValue},
+    functions::{ArcPredicate, ArcTryConvertValue, TryConvertRef, TryConvertValue},
     rate_limit::{feedback::RateLimitFeedback, rate_limits::RateLimits},
     sign::{
         convert_signer::ConvertSigner,
@@ -36,7 +36,7 @@ pub struct ConnectorImpl<
     to_weight: fn(&EGUnsignedReq) -> u32,
     to_order_count: fn(&EGUnsignedReq) -> u32,
     sync_timestamp_fields: TryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
-    to_filter: ToFilter<EGUnsignedReq, EGRes>,
+    to_filter: fn(EGUnsignedReq) -> (EGUnsignedReq, ArcPredicate<EGRes>),
     to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
     transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
     null_signer: ConvertSigner<EGUnsignedReq, EGReq>,
@@ -70,12 +70,12 @@ impl<
     >
 where
     ExternalReq: Send,
-    ExternalRes: Send,
     TCredentials: Sync,
     EGReq: Send,
     TransportRes: Send,
     TransportReq: Send,
     EGRes: Send + Sync + 'static,
+    ExternalRes: Send,
 {
     async fn connect(&self) -> EGResult<()> {
         self.transport.connect().await
@@ -241,7 +241,7 @@ where
         to_weight: fn(&EGUnsignedReq) -> u32,
         to_order_count: fn(&EGUnsignedReq) -> u32,
         sync_timestamp_fields: TryConvertValue<(EGUnsignedReq, i64), EGUnsignedReq>,
-        to_filter: ToFilter<EGUnsignedReq, EGRes>,
+        to_filter: fn(EGUnsignedReq) -> (EGUnsignedReq, ArcPredicate<EGRes>),
         to_external_response: ArcTryConvertValue<EGRes, ExternalRes>,
         transport: Transport<EGReq, TransportReq, TransportRes, EGRes>,
         null_signer: ConvertSigner<EGUnsignedReq, EGReq>,

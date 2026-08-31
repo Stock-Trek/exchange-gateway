@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcCreate, ArcPredicate, ArcTryConvertRef},
+    functions::{ArcPredicate, TryConvertRef},
 };
 use std::{
     sync::{
@@ -17,9 +17,9 @@ pub struct Clock {
 }
 
 pub(crate) struct Synchronization<EGUnsignedReq, EGRes> {
-    pub create_time_request: ArcCreate<(EGUnsignedReq, ArcPredicate<EGRes>)>,
+    pub create_time_request: fn() -> (EGUnsignedReq, ArcPredicate<EGRes>),
     pub timeout: Duration,
-    pub to_server_time: ArcTryConvertRef<EGRes, i64>,
+    pub to_server_time: TryConvertRef<EGRes, i64>,
 }
 
 impl Default for Clock {
