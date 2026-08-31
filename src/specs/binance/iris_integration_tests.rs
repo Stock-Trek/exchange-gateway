@@ -229,8 +229,8 @@ fn mock_session_connector(
         to_external_response,
         listener,
         Some(credentials),
-        true,
         clock,
+        true,
     )
 }
 

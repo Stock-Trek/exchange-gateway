@@ -44,9 +44,9 @@ pub(crate) fn connector<ExternalReq, ExternalRes>(
     to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
+    clock: Clock,
     use_session: bool,
     iris_config: IrisConfig,
-    clock: Clock,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,
@@ -74,8 +74,8 @@ where
         to_external_response,
         listener,
         credentials,
-        use_session,
         clock,
+        use_session,
     )
 }
 
@@ -93,8 +93,8 @@ pub(crate) fn connector_with_client_factory<ExternalReq, ExternalRes>(
     to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
     listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
     credentials: Option<ApiKeyCredentials>,
-    use_session: bool,
     clock: Clock,
+    use_session: bool,
 ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
 where
     ExternalReq: Send + Sync,

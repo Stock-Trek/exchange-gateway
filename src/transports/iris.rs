@@ -5,9 +5,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_timer::Delay;
-use iris::{
-    Client as IrisClient, Config as IrisConfig, Listener as IrisListener, ServerCloseBehavior,
-};
+use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     future::{Future, poll_fn},
@@ -57,10 +55,6 @@ where
         })
         .await
     }
-}
-
-pub(crate) fn default_config() -> IrisConfig {
-    IrisConfig::new().with_server_close_behavior(ServerCloseBehavior::Reconnect)
 }
 
 #[async_trait]
@@ -143,7 +137,7 @@ impl<TransportRes> std::fmt::Debug for IrisListenerAdapter<TransportRes> {
 mod tests {
     use super::*;
     use futures::SinkExt;
-    use iris::CircuitBreakerConfig;
+    use iris::{CircuitBreakerConfig, ServerCloseBehavior};
     use serde::{Deserialize, Serialize};
     use std::{
         sync::{
@@ -162,6 +156,10 @@ mod tests {
 
     fn ensure_crypto() {
         let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    fn default_config() -> IrisConfig {
+        IrisConfig::new().with_server_close_behavior(ServerCloseBehavior::Reconnect)
     }
 
     #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

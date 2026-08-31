@@ -1,9 +1,6 @@
 #[cfg(feature = "iris")]
 use {
-    crate::{
-        clock::Clock, specs::binance::websocket::connector as binance_websocket_connector,
-        transports::iris::default_config,
-    },
+    crate::{clock::Clock, specs::binance::websocket::connector as binance_websocket_connector},
     exchange_types::binance::websocket::{
         BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
     },
@@ -58,36 +55,9 @@ impl Connect {
         to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
         listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
         credentials: Option<ApiKeyCredentials>,
-        use_session: bool,
         clock: Clock,
-    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-    where
-        ExternalReq: Send + Sync,
-        ExternalRes: Clone + Send + Sync + 'static,
-    {
-        self.binance_websocket_with_config(
-            trading_mode,
-            to_unsigned_request,
-            to_external_response,
-            listener,
-            credentials,
-            use_session,
-            default_config(),
-            clock,
-        )
-    }
-
-    #[cfg(feature = "iris")]
-    pub fn binance_websocket_with_config<ExternalReq, ExternalRes>(
-        &self,
-        trading_mode: TradingMode,
-        to_unsigned_request: ArcTryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-        to_external_response: ArcTryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
-        credentials: Option<ApiKeyCredentials>,
         use_session: bool,
         iris_config: IrisConfig,
-        clock: Clock,
     ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
     where
         ExternalReq: Send + Sync,
@@ -99,9 +69,9 @@ impl Connect {
             to_external_response,
             listener,
             credentials,
+            clock,
             use_session,
             iris_config,
-            clock,
         )
     }
 }
