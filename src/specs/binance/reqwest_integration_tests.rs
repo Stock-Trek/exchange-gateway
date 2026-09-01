@@ -14,12 +14,11 @@ use crate::{
 use async_trait::async_trait;
 use exchange_types::binance::{
     exchange_info::BinanceOrderType,
-    http::{BinanceHttpResponse, BinanceHttpResponseResult, BinanceHttpUnsignedRequest},
+    http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
     spot::{
         BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
         BinanceSpotOrderParams, BinanceTimeInForce,
     },
-    time::BinanceTimeResult,
 };
 use secrecy::SecretString;
 use std::{
@@ -29,7 +28,6 @@ use std::{
 
 fn spot_order_params() -> BinanceSpotOrderParams {
     BinanceSpotOrderParams {
-        apiKey: "my-api-key".into(),
         icebergQty: None,
         newClientOrderId: "abc".into(),
         newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -72,10 +70,7 @@ impl HttpClientTrait for MockHttpClient {
         if endpoint == "time" {
             // sync_clock hits the unsigned `time` endpoint: answer it with
             // the clock's view of server time, as the real exchange would.
-            let body = serde_json::to_vec(&BinanceHttpResponseResult::Time(BinanceTimeResult {
-                serverTime: self.clock.now_millis(),
-            }))
-            .expect("serializing a time response should not fail");
+            let body = format!("{{\"serverTime\":{}}}", self.clock.now_millis()).into_bytes();
             return Ok(HttpResponse {
                 status: 200,
                 body,

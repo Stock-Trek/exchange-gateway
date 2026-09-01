@@ -1,17 +1,20 @@
 use crate::{
-    error::EGResult,
+    credentials::api_key_credential::ApiKeyCredentials,
+    error::{EGError, EGResult},
     rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
-    sign::encrypt::{data_signer::DataSigner, signing_algorithm::SigningAlgorithm},
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
-use exchange_types::binance::rate_limits::{
-    BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType,
+use exchange_types::{
+    api_key_credential::ApiKeyCredentials as ExchangeApiKeyCredentials,
+    binance::rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
+    encode::ByteEncoder,
+    encrypt::EncryptionAlgorithm,
+    signer::Signer,
 };
 use rust_decimal::Decimal;
-use secrecy::SecretString;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -42,8 +45,18 @@ pub(crate) fn sync_timestamp_fields(
     }
 }
 
-pub(crate) fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
-    SigningAlgorithm::HmacSha256.signer(secret)
+pub(crate) fn signer(credentials: &ApiKeyCredentials) -> EGResult<Signer> {
+    let encryptor = EncryptionAlgorithm::HmacSha256
+        .encryptor(ExchangeApiKeyCredentials {
+            api_key: credentials.api_key.clone(),
+            secret: credentials.secret.clone(),
+        })
+        .map_err(|error| EGError::External(Box::new(error)))?;
+    Ok(Signer::new(
+        credentials.api_key.clone(),
+        encryptor,
+        ByteEncoder::HexLower,
+    ))
 }
 
 pub(crate) fn rate_limits() -> RateLimits {

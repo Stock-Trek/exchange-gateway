@@ -6,20 +6,18 @@ use crate::{
     connector_impl::ConnectorImpl,
     credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    functions::{
-        ArcCombineValues, ArcPredicate, ArcTryConvertValue, BoxTryCreateOnce, TryConvertValue,
-    },
+    functions::{ArcPredicate, ArcTryConvertValue, BoxTryCreateOnce, TryConvertValue},
     listeners::{
         convert_listener::ConvertListener, listener::ListenerTrait,
         websocket_listener::WebsocketListener,
     },
     rate_limit::feedback::RateLimitFeedback,
     sign::{
-        convert_signer::ConvertSigner, encode::byte_encoding::ByteEncoding,
-        message_signer::MessageSigner, signer::Signer,
+        convert_signer::ConvertSigner, into_signed::IntoSigned, message_signer::MessageSigner,
+        signer::Signer,
     },
     specs::binance::common::{
-        data_signer, exchange_urls, id, rate_limit_usage, rate_limits, sync_timestamp_fields,
+        exchange_urls, id, rate_limit_usage, rate_limits, signer, sync_timestamp_fields,
     },
     transports::{
         transport::Transport,
@@ -29,11 +27,11 @@ use crate::{
 };
 use exchange_types::binance::{
     logon::BinanceLogonParams,
-    signed::BinanceSignedParams,
     time::BinanceTimeParams,
     websocket::{
         BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
-        BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
+        BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
+        BinanceWebsocketUnsignedRequest,
     },
 };
 use std::{sync::Arc, time::Duration};
@@ -81,11 +79,10 @@ where
         websocket_listener,
     );
     let authenticate_legs = if use_session {
-        let api_key = match &credentials {
-            Some(credentials) => credentials.api_key.clone(),
-            None => return Err(EGError::NotAuthenticated),
-        };
-        vec![authenticate_leg(api_key, logon_timeout)]
+        if credentials.is_none() {
+            return Err(EGError::NotAuthenticated);
+        }
+        vec![authenticate_leg(logon_timeout)]
     } else {
         vec![]
     };
@@ -142,23 +139,19 @@ fn from_response(response: BinanceWebsocketResponse) -> EGResult<BinanceWebsocke
 }
 
 fn authenticate_leg(
-    api_key: String,
     timeout: Duration,
 ) -> AuthenticateLeg<
     BinanceWebsocketUnsignedRequest,
     BinanceWebsocketRequest,
     BinanceWebsocketResponse,
 > {
-    let create_auth_attempt = {
-        let api_key = api_key.clone();
-        Arc::new(move |clock: &Clock| {
-            let id = id();
-            let message = auth_message(&id, &api_key, clock);
-            let filter: ArcPredicate<BinanceWebsocketResponse> =
-                Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
-            (message, filter)
-        })
-    };
+    let create_auth_attempt = Arc::new(|clock: &Clock| {
+        let id = id();
+        let message = auth_message(&id, clock);
+        let filter: ArcPredicate<BinanceWebsocketResponse> =
+            Arc::new(move |response: &BinanceWebsocketResponse| response.id == id);
+        (message, filter)
+    });
     let create_signer = {
         move |message| -> EGResult<
             Option<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>>,
@@ -174,12 +167,9 @@ fn authenticate_leg(
     }
 }
 
-fn auth_message(id: &str, api_key: &str, clock: &Clock) -> BinanceWebsocketUnsignedRequest {
+fn auth_message(id: &str, clock: &Clock) -> BinanceWebsocketUnsignedRequest {
     let timestamp = clock.now_millis();
-    let params = BinanceLogonParams {
-        apiKey: api_key.to_string(),
-        timestamp,
-    };
+    let params = BinanceLogonParams { timestamp };
     BinanceWebsocketUnsignedRequest {
         id: id.to_string(),
         params: BinanceWebsocketUnsignedParams::Logon(params),
@@ -234,8 +224,8 @@ fn null_signer() -> ConvertSigner<BinanceWebsocketUnsignedRequest, BinanceWebsoc
         let BinanceWebsocketUnsignedRequest { id, params } = unsigned;
         Ok(BinanceWebsocketRequest {
             id,
-            params: BinanceSignedParams {
-                params,
+            params: BinanceWebsocketSignedParams {
+                unsigned: params,
                 signature: None,
             },
         })
@@ -274,80 +264,26 @@ fn sync_timestamp()
 fn create_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
-    let ApiKeyCredentials { secret, .. } = credentials;
-    Ok(Box::new(MessageSigner::<
-        BinanceWebsocketUnsignedRequest,
-        BinanceWebsocketRequest,
-    >::new(
-        Arc::new(unsigned_request_params_to_bytes),
-        data_signer(secret)?,
-        ByteEncoding::HexLower,
-        signature_appender(),
-    )))
+    Ok(Box::new(MessageSigner::new(signer(credentials)?)))
 }
 
-fn unsigned_request_params_to_bytes(
-    request: &BinanceWebsocketUnsignedRequest,
-) -> EGResult<Option<Vec<u8>>> {
-    Ok(match &request.params {
-        BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::AssetLimits(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => None,
-        BinanceWebsocketUnsignedParams::Logon(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => {
-            Some(params.query_params(true).into_bytes())
-        }
-        BinanceWebsocketUnsignedParams::Time(..) => None,
-    })
+impl IntoSigned for BinanceWebsocketUnsignedRequest {
+    type Signed = BinanceWebsocketRequest;
+    fn into_signed(self, signer: &exchange_types::signer::Signer) -> EGResult<Self::Signed> {
+        self.into_signed(signer)
+            .map_err(|error| EGError::External(Box::new(error)))
+    }
 }
 
 fn converter(unsigned: BinanceWebsocketUnsignedRequest) -> EGResult<BinanceWebsocketRequest> {
     let BinanceWebsocketUnsignedRequest { id, params } = unsigned;
-    let params = BinanceSignedParams {
-        signature: None,
-        params: session_params(params),
-    };
-    Ok(BinanceWebsocketRequest { id, params })
-}
-
-fn session_params(params: BinanceWebsocketUnsignedParams) -> BinanceWebsocketUnsignedParams {
-    match params {
-        BinanceWebsocketUnsignedParams::AmendOrderRequest(mut params) => {
-            params.apiKey = String::new();
-            BinanceWebsocketUnsignedParams::AmendOrderRequest(params)
-        }
-        BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(mut params) => {
-            params.apiKey = String::new();
-            BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params)
-        }
-        BinanceWebsocketUnsignedParams::CancelOrderRequest(mut params) => {
-            params.apiKey = String::new();
-            BinanceWebsocketUnsignedParams::CancelOrderRequest(params)
-        }
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(mut params) => {
-            params.apiKey = String::new();
-            BinanceWebsocketUnsignedParams::SpotOrderRequest(params)
-        }
-        // The `logon` (re-authentication goes through the full HMAC signer,
-        // never the session signer) and the unsigned requests carry no
-        // apiKey to strip.
-        params @ (BinanceWebsocketUnsignedParams::AssetLimits(..)
-        | BinanceWebsocketUnsignedParams::ExchangeInfo(..)
-        | BinanceWebsocketUnsignedParams::Logon(..)
-        | BinanceWebsocketUnsignedParams::Time(..)) => params,
-    }
+    Ok(BinanceWebsocketRequest {
+        id,
+        params: BinanceWebsocketSignedParams {
+            unsigned: params,
+            signature: None,
+        },
+    })
 }
 
 fn response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitFeedback> {
@@ -378,21 +314,6 @@ fn order_count(request: &BinanceWebsocketUnsignedRequest) -> u32 {
     }
 }
 
-fn signature_appender()
--> ArcCombineValues<BinanceWebsocketUnsignedRequest, Option<String>, BinanceWebsocketRequest> {
-    Arc::new(move |unsigned, signature| {
-        let BinanceWebsocketUnsignedRequest {
-            id,
-            params: unsigned_params,
-        } = unsigned;
-        let params = BinanceSignedParams {
-            params: unsigned_params,
-            signature,
-        };
-        BinanceWebsocketRequest { id, params }
-    })
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -413,6 +334,7 @@ mod test {
         },
     };
     use rust_decimal::Decimal;
+    use secrecy::SecretString;
     use std::{sync::Arc, time::Duration};
 
     fn logon_response(
@@ -430,7 +352,6 @@ mod test {
     }
     fn spot_order_params() -> BinanceSpotOrderParams {
         BinanceSpotOrderParams {
-            apiKey: "my-api-key".into(),
             icebergQty: None,
             newClientOrderId: "abc".into(),
             newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -471,8 +392,7 @@ mod test {
 
     #[test]
     fn logon_filter_matches_any_response_for_the_logon_id() {
-        let api_key = "api-key";
-        let leg = authenticate_leg(api_key.into(), Duration::from_secs(20));
+        let leg = authenticate_leg(Duration::from_secs(20));
         let clock = Arc::new(Clock::default());
         let (message, filter) = (leg.create_auth_attempt)(&clock);
         let id = message.id;
@@ -495,8 +415,7 @@ mod test {
 
     #[test]
     fn each_authentication_attempt_uses_a_fresh_logon_id() {
-        let api_key = "api-key";
-        let leg = authenticate_leg(api_key.into(), Duration::from_secs(20));
+        let leg = authenticate_leg(Duration::from_secs(20));
         let clock = Arc::new(Clock::default());
         // A retried authentication must not reuse the previous attempt's id:
         // a slow response to the earlier attempt (e.g. one arriving after a
@@ -534,8 +453,7 @@ mod test {
 
     #[test]
     fn logon_signer_surfaces_rejected_logon_error() {
-        let api_key = "api-key";
-        let leg = authenticate_leg(api_key.into(), Duration::from_secs(20));
+        let leg = authenticate_leg(Duration::from_secs(20));
         let clock = Arc::new(Clock::default());
         let id = (leg.create_auth_attempt)(&clock).0.id;
         // A successful logon response yields a signer.
@@ -566,29 +484,25 @@ mod test {
     }
 
     #[test]
-    fn converter_omits_api_key_and_signature_after_session_logon() {
+    fn converter_omits_signature_after_session_logon() {
         // After session.logon the WebSocket API authenticates the connection:
-        // post-logon requests must omit both apiKey and signature. Sending
-        // apiKey without signature is an undocumented combination and is
-        // rejected (-1022), so the session signer must strip the apiKey the
-        // caller placed on the request.
+        // post-logon requests carry no signature.
         let unsigned = BinanceWebsocketUnsignedRequest {
             id: "1".into(),
             params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
         };
         let signed = converter(unsigned).unwrap();
         assert!(signed.params.signature.is_none());
-        let BinanceWebsocketUnsignedParams::SpotOrderRequest(params) = signed.params.params else {
-            panic!("expected a spot order request");
-        };
-        assert!(params.apiKey.is_empty());
+        assert!(matches!(
+            signed.params.unsigned,
+            BinanceWebsocketUnsignedParams::SpotOrderRequest(..)
+        ));
     }
 
     #[test]
-    fn converter_strips_api_key_from_every_signed_request_type() {
+    fn converter_omits_signature_from_every_signed_request_type() {
         let params = vec![
             BinanceWebsocketUnsignedParams::AmendOrderRequest(BinanceAmendOrderParams {
-                apiKey: "key".into(),
                 newClientOrderId: None,
                 newQty: Decimal::from(1),
                 orderId: Some(1),
@@ -598,13 +512,11 @@ mod test {
                 timestamp: 0,
             }),
             BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(BinanceCancelAllOrdersParams {
-                apiKey: "key".into(),
                 recvWindow: None,
                 symbol: "BTCUSDT".into(),
                 timestamp: 0,
             }),
             BinanceWebsocketUnsignedParams::CancelOrderRequest(BinanceCancelOrderParams {
-                apiKey: "key".into(),
                 cancelRestrictions: None,
                 newClientOrderId: None,
                 orderId: Some(1),
@@ -622,35 +534,30 @@ mod test {
             };
             let signed = converter(unsigned).unwrap();
             assert!(signed.params.signature.is_none());
-            let api_key = match &signed.params.params {
-                BinanceWebsocketUnsignedParams::AmendOrderRequest(params) => &params.apiKey,
-                BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(params) => &params.apiKey,
-                BinanceWebsocketUnsignedParams::CancelOrderRequest(params) => &params.apiKey,
-                BinanceWebsocketUnsignedParams::SpotOrderRequest(params) => &params.apiKey,
-                _ => panic!("unexpected request type"),
-            };
-            assert!(
-                api_key.is_empty(),
-                "post-logon {:?} must omit apiKey: {api_key:?}",
-                signed.params.params.method_name()
-            );
         }
     }
 
     #[test]
-    fn order_signature_payload_includes_api_key() {
-        // The WebSocket API signs all params except signature, including
-        // apiKey, sorted alphabetically.
+    fn signed_request_carries_api_key_and_signature() {
+        // The WebSocket API signs all params except signature and sends the
+        // apiKey in the signed payload; the exchange-types signer does this
+        // internally.
+        let credentials = ApiKeyCredentials {
+            api_key: "my-api-key".into(),
+            secret: SecretString::from("my-secret"),
+        };
+        let signer = create_signer_from_credentials(&credentials).unwrap();
         let request = BinanceWebsocketUnsignedRequest {
             id: "1".into(),
             params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
         };
-        let payload =
-            String::from_utf8(unsigned_request_params_to_bytes(&request).unwrap().unwrap())
-                .unwrap();
-        assert!(payload.contains("apiKey=my-api-key"), "payload: {payload}");
-        assert!(payload.contains("type=LIMIT"), "payload: {payload}");
-        assert!(!payload.contains("r%23type"), "payload: {payload}");
+        let signed = signer.sign(request).unwrap();
+        let signature = signed
+            .params
+            .signature
+            .expect("signed request must carry a signature");
+        assert_eq!(signature.apiKey, "my-api-key");
+        assert!(!signature.signature.is_empty());
     }
 
     #[test]
@@ -723,10 +630,7 @@ mod test {
     fn request_weights_match_binance_docs() {
         let logon = BinanceWebsocketUnsignedRequest {
             id: "1".into(),
-            params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams {
-                apiKey: "k".into(),
-                timestamp: 0,
-            }),
+            params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams { timestamp: 0 }),
         };
         assert_eq!(request_weight(&logon), 2);
         let exchange_info = BinanceWebsocketUnsignedRequest {

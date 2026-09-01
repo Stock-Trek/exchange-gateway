@@ -14,6 +14,7 @@ pub mod error;
 pub mod functions;
 pub mod listeners;
 pub mod rate_limit;
+pub(crate) mod sign;
 mod specs;
 mod transports;
 pub mod urls;
