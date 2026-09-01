@@ -22,19 +22,16 @@ use crate::{
     urls::{ExchangeTransportType, TradingMode},
 };
 use exchange_types::binance::{
-    amend::BinanceAmendOrderParams,
-    cancel::{BinanceCancelAllOrdersParams, BinanceCancelOrderParams},
     exchange_info::BinanceExchangeInfoParams,
     http::{
         BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
         BinanceHttpUnsignedRequest,
     },
     signed::BinanceSignedParams,
-    spot::BinanceSpotOrderParams,
     time::BinanceTimeParams,
 };
 use reqwest::Method;
-use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 pub(crate) fn connector<ExternalReq, ExternalRes>(
     trading_mode: TradingMode,
@@ -109,40 +106,55 @@ fn to_request(request: BinanceHttpRequest, api_key: Option<&str>) -> EGResult<Ht
         BinanceHttpUnsignedRequest::ExchangeInfo(params) => {
             (Method::GET, Some(exchange_info_query(&params)))
         }
-        BinanceHttpUnsignedRequest::AssetLimits(params) => {
-            set_api_key_header(None);
+        BinanceHttpUnsignedRequest::AssetLimits(mut params) => {
+            set_api_key_header(api_key_from_params(&mut params.apiKey));
             (
                 Method::GET,
-                Some(signed_query(params.query_params(true), signature)),
+                Some(signed_query(
+                    strip_api_key_from_query(&params.query_params(true)),
+                    signature,
+                )),
             )
         }
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
             let mut params = *params;
-            set_api_key_header(params.apiKey.take());
+            set_api_key_header(api_key_from_params(&mut params.apiKey));
             (
                 Method::POST,
-                Some(signed_query(params.query_params(true), signature)),
+                Some(signed_query(
+                    strip_api_key_from_query(&params.query_params(true)),
+                    signature,
+                )),
             )
         }
         BinanceHttpUnsignedRequest::AmendOrderRequest(mut params) => {
-            set_api_key_header(params.apiKey.take());
+            set_api_key_header(api_key_from_params(&mut params.apiKey));
             (
                 Method::POST,
-                Some(signed_query(params.query_params(true), signature)),
+                Some(signed_query(
+                    strip_api_key_from_query(&params.query_params(true)),
+                    signature,
+                )),
             )
         }
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(mut params) => {
-            set_api_key_header(params.apiKey.take());
+            set_api_key_header(api_key_from_params(&mut params.apiKey));
             (
                 Method::DELETE,
-                Some(signed_query(params.query_params(true), signature)),
+                Some(signed_query(
+                    strip_api_key_from_query(&params.query_params(true)),
+                    signature,
+                )),
             )
         }
         BinanceHttpUnsignedRequest::CancelOrderRequest(mut params) => {
-            set_api_key_header(params.apiKey.take());
+            set_api_key_header(api_key_from_params(&mut params.apiKey));
             (
                 Method::DELETE,
-                Some(signed_query(params.query_params(true), signature)),
+                Some(signed_query(
+                    strip_api_key_from_query(&params.query_params(true)),
+                    signature,
+                )),
             )
         }
         BinanceHttpUnsignedRequest::Time(..) => (Method::GET, None),
@@ -279,81 +291,44 @@ fn create_signer_from_credentials(
 fn unsigned_request_to_bytes(request: &BinanceHttpUnsignedRequest) -> EGResult<Option<Vec<u8>>> {
     Ok(match request {
         BinanceHttpUnsignedRequest::AssetLimits(params) => {
-            Some(params.query_params(true).into_bytes())
+            Some(strip_api_key_from_query(&params.query_params(true)).into_bytes())
         }
         BinanceHttpUnsignedRequest::ExchangeInfo(..) => None,
         BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
-            let params_without_api_key = strip_api_key(params.as_ref());
-            Some(params_without_api_key.query_params(true).into_bytes())
+            Some(strip_api_key_from_query(&params.query_params(true)).into_bytes())
         }
         BinanceHttpUnsignedRequest::AmendOrderRequest(params) => {
-            let params_without_api_key = strip_api_key(params);
-            Some(params_without_api_key.query_params(true).into_bytes())
+            Some(strip_api_key_from_query(&params.query_params(true)).into_bytes())
         }
         BinanceHttpUnsignedRequest::CancelAllOrdersRequest(params) => {
-            let params_without_api_key = strip_api_key(params);
-            Some(params_without_api_key.query_params(true).into_bytes())
+            Some(strip_api_key_from_query(&params.query_params(true)).into_bytes())
         }
         BinanceHttpUnsignedRequest::CancelOrderRequest(params) => {
-            let params_without_api_key = strip_api_key(params);
-            Some(params_without_api_key.query_params(true).into_bytes())
+            Some(strip_api_key_from_query(&params.query_params(true)).into_bytes())
         }
         BinanceHttpUnsignedRequest::Time(..) => None,
     })
 }
 
-fn strip_api_key<T>(params: &T) -> Cow<'_, T>
-where
-    T: Clone + HasApiKey,
-{
-    if params.api_key().is_none() {
-        Cow::Borrowed(params)
-    } else {
-        let mut cloned = params.clone();
-        cloned.set_api_key(None);
-        Cow::Owned(cloned)
-    }
+/// REST signs the query string only: the apiKey lives in the
+/// X-MBX-APIKEY header and must not leak into the signed payload.
+/// v0.5.0 made `apiKey` a plain `String`, so it can no longer be omitted
+/// from the query-params serialization; the `apiKey=<value>` pair is
+/// stripped from the encoded query string instead.
+fn strip_api_key_from_query(query: &str) -> String {
+    query
+        .split('&')
+        .filter(|pair| !pair.starts_with("apiKey="))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
-trait HasApiKey {
-    fn api_key(&self) -> &Option<String>;
-    fn set_api_key(&mut self, api_key: Option<String>);
-}
-
-impl HasApiKey for BinanceSpotOrderParams {
-    fn api_key(&self) -> &Option<String> {
-        &self.apiKey
-    }
-    fn set_api_key(&mut self, api_key: Option<String>) {
-        self.apiKey = api_key;
-    }
-}
-
-impl HasApiKey for BinanceAmendOrderParams {
-    fn api_key(&self) -> &Option<String> {
-        &self.apiKey
-    }
-    fn set_api_key(&mut self, api_key: Option<String>) {
-        self.apiKey = api_key;
-    }
-}
-
-impl HasApiKey for BinanceCancelAllOrdersParams {
-    fn api_key(&self) -> &Option<String> {
-        &self.apiKey
-    }
-    fn set_api_key(&mut self, api_key: Option<String>) {
-        self.apiKey = api_key;
-    }
-}
-
-impl HasApiKey for BinanceCancelOrderParams {
-    fn api_key(&self) -> &Option<String> {
-        &self.apiKey
-    }
-    fn set_api_key(&mut self, api_key: Option<String>) {
-        self.apiKey = api_key;
-    }
+/// Moves the params' apiKey out of the request (it belongs in the
+/// X-MBX-APIKEY header) and returns it as an `Option` for the header
+/// builder: an absent (empty) apiKey yields `None`.
+fn api_key_from_params(api_key: &mut String) -> Option<String> {
+    let api_key = std::mem::take(api_key);
+    (!api_key.is_empty()).then_some(api_key)
 }
 
 fn synchronization(
@@ -460,7 +435,7 @@ mod test {
 
     fn spot_order_params() -> BinanceSpotOrderParams {
         BinanceSpotOrderParams {
-            apiKey: Some("my-api-key".into()),
+            apiKey: "my-api-key".into(),
             icebergQty: None,
             newClientOrderId: "abc".into(),
             newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -529,6 +504,7 @@ mod test {
     fn asset_limits_signature_payload_is_built() {
         // `/api/v3/myFilters` is a signed endpoint; a payload must exist.
         let request = BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            apiKey: "my-api-key".into(),
             recvWindow: None,
             symbol: "BNBUSDT".into(),
             timestamp: 1700000000000,
@@ -587,6 +563,7 @@ mod test {
         // connector's credentials (the params carry no `apiKey` field).
         let request = BinanceHttpRequest {
             params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+                apiKey: String::new(),
                 recvWindow: None,
                 symbol: "BNBUSDT".into(),
                 timestamp: 1700000000000,
@@ -613,6 +590,7 @@ mod test {
     fn asset_limits_request_without_credentials_omits_the_api_key_header() {
         let request = BinanceHttpRequest {
             params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+                apiKey: String::new(),
                 recvWindow: None,
                 symbol: "BNBUSDT".into(),
                 timestamp: 1700000000000,
@@ -638,7 +616,7 @@ mod test {
         // header (the signature is built from the connector's secret, so the
         // header must match it) and never leaks into the query string.
         let mut params = spot_order_params();
-        params.apiKey = Some("caller-api-key".into());
+        params.apiKey = "caller-api-key".into();
         let request = BinanceHttpRequest {
             params: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(params)),
             signature: Some("signature".into()),
@@ -666,11 +644,11 @@ mod test {
         // caller to set apiKey on the params; with credentials configured
         // the connector now supplies the X-MBX-APIKEY header itself.
         let mut spot = spot_order_params();
-        spot.apiKey = None;
+        spot.apiKey = String::new();
         let requests = vec![
             BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot)),
             BinanceHttpUnsignedRequest::AmendOrderRequest(BinanceAmendOrderParams {
-                apiKey: None,
+                apiKey: String::new(),
                 newClientOrderId: None,
                 newQty: Decimal::from(1),
                 orderId: Some(1),
@@ -680,13 +658,13 @@ mod test {
                 timestamp: 1700000000000,
             }),
             BinanceHttpUnsignedRequest::CancelAllOrdersRequest(BinanceCancelAllOrdersParams {
-                apiKey: None,
+                apiKey: String::new(),
                 recvWindow: None,
                 symbol: "BTCUSDT".into(),
                 timestamp: 1700000000000,
             }),
             BinanceHttpUnsignedRequest::CancelOrderRequest(BinanceCancelOrderParams {
-                apiKey: None,
+                apiKey: String::new(),
                 cancelRestrictions: None,
                 newClientOrderId: None,
                 orderId: Some(1),
@@ -735,7 +713,7 @@ mod test {
     #[cfg(feature = "reqwest")]
     fn order_request_without_credentials_or_params_api_key_omits_the_header() {
         let mut params = spot_order_params();
-        params.apiKey = None;
+        params.apiKey = String::new();
         let request = BinanceHttpRequest {
             params: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(params)),
             signature: Some("signature".into()),
@@ -919,6 +897,7 @@ mod test {
         });
         assert_eq!(request_weight(&exchange_info), 20);
         let asset_limits = BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            apiKey: String::new(),
             recvWindow: None,
             symbol: "BNBUSDT".into(),
             timestamp: 0,

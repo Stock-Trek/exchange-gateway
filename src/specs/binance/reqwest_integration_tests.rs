@@ -29,7 +29,7 @@ use std::{
 
 fn spot_order_params() -> BinanceSpotOrderParams {
     BinanceSpotOrderParams {
-        apiKey: Some("my-api-key".into()),
+        apiKey: "my-api-key".into(),
         icebergQty: None,
         newClientOrderId: "abc".into(),
         newOrderRespType: BinanceNewOrderResponseType::ACK,

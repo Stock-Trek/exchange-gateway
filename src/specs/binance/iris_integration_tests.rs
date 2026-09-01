@@ -21,8 +21,8 @@ use exchange_types::binance::{
     },
     time::BinanceTimeResult,
     websocket::{
-        BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
+        BinanceWebsocketMethodName, BinanceWebsocketRequest, BinanceWebsocketResponse,
+        BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
         BinanceWebsocketUnsignedRequest,
     },
 };
@@ -52,7 +52,7 @@ fn logon_response(
 
 fn spot_order_params() -> BinanceSpotOrderParams {
     BinanceSpotOrderParams {
-        apiKey: Some("my-api-key".into()),
+        apiKey: "my-api-key".into(),
         icebergQty: None,
         newClientOrderId: "abc".into(),
         newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -115,7 +115,7 @@ impl WebsocketClientTrait for MockWebsocketClient {
             .lock()
             .expect("mutex should not be poisoned")
             .push(message.clone());
-        match message.metadata.method {
+        match message.params.params.method_name() {
             BinanceWebsocketMethodName::Logon => {
                 if let Some(gate) = &self.logon_gate {
                     if gate.fail.load(Ordering::SeqCst) {
@@ -126,15 +126,15 @@ impl WebsocketClientTrait for MockWebsocketClient {
                     }
                 }
                 let response = match &self.logon_error {
-                    Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
-                    None => logon_response(message.metadata.id, 200, None),
+                    Some(error) => logon_response(message.id, 401, Some(error.clone())),
+                    None => logon_response(message.id, 200, None),
                 };
                 self.listener.on_message(response).await?;
             }
             BinanceWebsocketMethodName::Time => {
                 let response = BinanceWebsocketResponse {
                     error: None,
-                    id: message.metadata.id,
+                    id: message.id,
                     rateLimits: vec![],
                     result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
                         serverTime: self.clock.now_millis(),
@@ -149,7 +149,7 @@ impl WebsocketClientTrait for MockWebsocketClient {
             _ => {
                 let response = BinanceWebsocketResponse {
                     error: None,
-                    id: message.metadata.id,
+                    id: message.id,
                     rateLimits: vec![],
                     result: None,
                     status: 200,
@@ -243,20 +243,14 @@ fn mock_session_connector(
 
 fn order_request() -> BinanceWebsocketUnsignedRequest {
     BinanceWebsocketUnsignedRequest {
-        metadata: BinanceWebsocketMetadata {
-            id: "order-1".into(),
-            method: BinanceWebsocketMethodName::PlaceOrder,
-        },
+        id: "order-1".into(),
         params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
     }
 }
 
 fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
     BinanceWebsocketUnsignedRequest {
-        metadata: BinanceWebsocketMetadata {
-            id: "exchange-info".into(),
-            method: BinanceWebsocketMethodName::ExchangeInfo,
-        },
+        id: "exchange-info".into(),
         params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
             permissions: vec![BinanceExchangeInfoPermission::SPOT],
             symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
@@ -266,7 +260,12 @@ fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
 
 fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
     sent.iter()
-        .filter(|message| matches!(message.metadata.method, BinanceWebsocketMethodName::Logon))
+        .filter(|message| {
+            matches!(
+                message.params.params.method_name(),
+                BinanceWebsocketMethodName::Logon
+            )
+        })
         .count()
 }
 
@@ -331,7 +330,7 @@ async fn post_logon_requests_omit_api_key_and_signature() {
         .iter()
         .find(|message| {
             matches!(
-                message.metadata.method,
+                message.params.params.method_name(),
                 BinanceWebsocketMethodName::PlaceOrder
             )
         })
@@ -341,7 +340,7 @@ async fn post_logon_requests_omit_api_key_and_signature() {
         panic!("expected a spot order request");
     };
     assert!(
-        params.apiKey.is_none(),
+        params.apiKey.is_empty(),
         "post-logon requests must omit apiKey"
     );
 }
@@ -397,7 +396,7 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
     // happens before any message reaches the transport.
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
     assert!(!client.sent.lock().unwrap().iter().any(|message| matches!(
-        message.metadata.method,
+        message.params.params.method_name(),
         BinanceWebsocketMethodName::PlaceOrder
     )));
     assert!(!connector.is_authenticated().unwrap());
@@ -416,7 +415,7 @@ async fn sends_during_a_drop_fail_fast_until_reconnect() {
     assert!(connector.is_authenticated().unwrap());
     assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
     assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
-        message.metadata.method,
+        message.params.params.method_name(),
         BinanceWebsocketMethodName::PlaceOrder
     )));
 }
@@ -595,7 +594,7 @@ async fn concurrent_sends_wait_for_in_flight_authentication() {
         .iter()
         .filter(|message| {
             matches!(
-                message.metadata.method,
+                message.params.params.method_name(),
                 BinanceWebsocketMethodName::PlaceOrder
             )
         })
@@ -675,12 +674,15 @@ async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
         .expect("the retried authentication should send its logon");
     let (initial_logon_id, retried_logon_id) = {
         let sent = client.sent.lock().unwrap();
-        let mut logons = sent
-            .iter()
-            .filter(|message| matches!(message.metadata.method, BinanceWebsocketMethodName::Logon));
+        let mut logons = sent.iter().filter(|message| {
+            matches!(
+                message.params.params.method_name(),
+                BinanceWebsocketMethodName::Logon
+            )
+        });
         (
-            logons.next().expect("initial logon").metadata.id.clone(),
-            logons.next().expect("retried logon").metadata.id.clone(),
+            logons.next().expect("initial logon").id.clone(),
+            logons.next().expect("retried logon").id.clone(),
         )
     };
     assert_ne!(
@@ -729,7 +731,7 @@ async fn sync_clock_syncs_the_server_clock() {
     let sent = client.sent.lock().unwrap();
     assert_eq!(sent.len(), 1, "sync clock");
     assert!(matches!(
-        sent[0].metadata.method,
+        sent[0].params.params.method_name(),
         BinanceWebsocketMethodName::Time
     ));
     assert!(
@@ -773,7 +775,7 @@ async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
     let synchronization = &sent[1];
     assert!(
         matches!(
-            synchronization.metadata.method,
+            synchronization.params.params.method_name(),
             BinanceWebsocketMethodName::Time
         ),
         "sync_clock must send a time request"

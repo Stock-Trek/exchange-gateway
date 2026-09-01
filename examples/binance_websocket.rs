@@ -33,9 +33,8 @@ mod binance {
             BinanceExchangeInfoSymbolStatus,
         },
         websocket::{
-            BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketResponse,
-            BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
-            BinanceWebsocketUnsignedRequest,
+            BinanceWebsocketResponse, BinanceWebsocketResponseResult,
+            BinanceWebsocketUnsignedParams, BinanceWebsocketUnsignedRequest,
         },
     };
     use std::time::Duration;
@@ -89,10 +88,7 @@ mod binance {
     fn to_unsigned_request(request: MyRequest) -> EGResult<BinanceWebsocketUnsignedRequest> {
         if request.exchange_info {
             Ok(BinanceWebsocketUnsignedRequest {
-                metadata: BinanceWebsocketMetadata {
-                    id: "exchange-info".into(),
-                    method: BinanceWebsocketMethodName::ExchangeInfo,
-                },
+                id: "exchange-info".into(),
                 params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
                     permissions: vec![BinanceExchangeInfoPermission::SPOT],
                     symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
