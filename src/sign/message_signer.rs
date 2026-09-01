@@ -1,7 +1,8 @@
 use crate::{
-    error::EGResult,
-    sign::{into_signed::IntoSigned, signer::SignerTrait},
+    error::{EGError, EGResult},
+    sign::signer::SignerTrait,
 };
+use exchange_types::signer::IntoSigned;
 use std::marker::PhantomData;
 
 pub(crate) struct MessageSigner<TUnsignedMessage, TSignedMessage> {
@@ -27,6 +28,8 @@ where
     TUnsignedMessage: IntoSigned<Signed = TSignedMessage>,
 {
     fn sign(&self, unsigned: TUnsignedMessage) -> EGResult<TSignedMessage> {
-        unsigned.into_signed(&self.signer)
+        unsigned
+            .into_signed(&self.signer)
+            .map_err(|e| EGError::External(Box::new(e)))
     }
 }

@@ -7,7 +7,7 @@ repository = "https://github.com/Stock-Trek/exchange-gateway"
 
 [dependencies]
 async-trait = "0.1.89"
-exchange-types = { version = "0.6.1", registry = "shipyard" }
+exchange-types = { version = "0.6.2", registry = "shipyard" }
 futures-timer = "3.0"
 iris = { version = "1.0.1", registry = "shipyard", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }

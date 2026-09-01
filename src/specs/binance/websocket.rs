@@ -12,10 +12,7 @@ use crate::{
         websocket_listener::WebsocketListener,
     },
     rate_limit::feedback::RateLimitFeedback,
-    sign::{
-        convert_signer::ConvertSigner, into_signed::IntoSigned, message_signer::MessageSigner,
-        signer::Signer,
-    },
+    sign::{convert_signer::ConvertSigner, message_signer::MessageSigner, signer::Signer},
     specs::binance::common::{
         exchange_urls, id, rate_limit_usage, rate_limits, signer, sync_timestamp_fields,
     },
@@ -265,14 +262,6 @@ fn create_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceWebsocketUnsignedRequest, BinanceWebsocketRequest>> {
     Ok(Box::new(MessageSigner::new(signer(credentials)?)))
-}
-
-impl IntoSigned for BinanceWebsocketUnsignedRequest {
-    type Signed = BinanceWebsocketRequest;
-    fn into_signed(self, signer: &exchange_types::signer::Signer) -> EGResult<Self::Signed> {
-        self.into_signed(signer)
-            .map_err(|error| EGError::External(Box::new(error)))
-    }
 }
 
 fn converter(unsigned: BinanceWebsocketUnsignedRequest) -> EGResult<BinanceWebsocketRequest> {

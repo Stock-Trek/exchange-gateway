@@ -7,10 +7,7 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcPredicate, BoxTryCreateOnce, TryConvertValue},
     rate_limit::feedback::RateLimitFeedback,
-    sign::{
-        convert_signer::ConvertSigner, into_signed::IntoSigned, message_signer::MessageSigner,
-        signer::Signer,
-    },
+    sign::{convert_signer::ConvertSigner, message_signer::MessageSigner, signer::Signer},
     specs::binance::common::{
         exchange_urls, rate_limit_usage, rate_limits, signer, sync_timestamp_fields,
     },
@@ -246,14 +243,6 @@ fn create_signer_from_credentials(
     credentials: &ApiKeyCredentials,
 ) -> EGResult<Signer<BinanceHttpUnsignedRequest, BinanceHttpRequest>> {
     Ok(Box::new(MessageSigner::new(signer(credentials)?)))
-}
-
-impl IntoSigned for BinanceHttpUnsignedRequest {
-    type Signed = BinanceHttpRequest;
-    fn into_signed(self, signer: &exchange_types::signer::Signer) -> EGResult<Self::Signed> {
-        self.into_signed(signer)
-            .map_err(|error| EGError::External(Box::new(error)))
-    }
 }
 
 fn synchronization(
