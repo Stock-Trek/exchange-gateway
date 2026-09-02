@@ -57,7 +57,7 @@ struct AcceptingRateLimiter;
 impl RateLimiter for AcceptingRateLimiter {
     fn did_acquire(
         &self,
-        _limit_costs: &Vec<(exchange_types::rate_limited::RateLimitType, u32)>,
+        _limit_costs: &[(exchange_types::rate_limited::RateLimitType, u32)],
     ) -> bool {
         true
     }
