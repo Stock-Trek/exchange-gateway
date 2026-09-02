@@ -1,4 +1,4 @@
-use crate::rate_limit::feedback::RateLimitFeedback;
+use exchange_types::rate_limited::RateLimitType;
 use std::time::SystemTimeError;
 
 pub type EGResult<T> = Result<T, EGError>;
@@ -26,8 +26,8 @@ pub enum EGError {
     NotAuthenticated,
     #[error("Connector is not connected")]
     NotConnected,
-    #[error("Rate limit exceeded")]
-    RateLimited(RateLimitFeedback),
+    #[error("Rate limit exceeded: {0:?}")]
+    RateLimited(Vec<(RateLimitType, u32)>),
     #[error("Request timed out waiting for a response")]
     TimedOut,
     #[error("Unknown endpoint")]

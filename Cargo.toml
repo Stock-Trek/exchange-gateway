@@ -1,13 +1,13 @@
 [package]
 name = "exchange-gateway"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 description = "A gateway library for connecting to cryptocurrency exchange APIs over HTTP and WebSocket, with authentication, rate limiting, and request/response handling"
 repository = "https://github.com/Stock-Trek/exchange-gateway"
 
 [dependencies]
 async-trait = "0.1.89"
-exchange-types = { version = "0.6.2", registry = "shipyard" }
+exchange-types = { version = "0.6.9", registry = "shipyard" }
 futures-timer = "3.0"
 iris = { version = "1.0.1", registry = "shipyard", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }

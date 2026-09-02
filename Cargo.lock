@@ -495,7 +495,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "exchange-gateway"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "ctor",
@@ -519,9 +519,9 @@ dependencies = [
 
 [[package]]
 name = "exchange-types"
-version = "0.6.2"
+version = "0.6.9"
 source = "registry+ssh://git@ssh.shipyard.rs/stock-trek/crate-index.git"
-checksum = "257288402381d480a7526c79d43c82d9e850351cf70fcab0b9ad929ff19577a3"
+checksum = "f5743805e41914380d26924e6f8479f90e444f45e599ba8129f93dc2c3ef503a"
 dependencies = [
  "bs58",
  "data-encoding",

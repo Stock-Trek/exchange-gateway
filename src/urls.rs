@@ -1,75 +1,17 @@
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
-use strum::Display;
+use exchange_types::urls::{Protocol, TradingMode, Urls};
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub(crate) struct ExchangeUrls {
-    name: String,
-    http: ExchangeTransportUrls,
-    websocket: ExchangeTransportUrls,
-}
-
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub(crate) struct ExchangeTransportUrls {
-    real: String,
-    paper: String,
-}
-
-#[derive(Debug, Display, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum ExchangeTransportType {
-    Http,
-    Websocket,
-}
-
-#[derive(Debug, Display, Clone, Copy)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum TradingMode {
-    Real,
-    Paper,
-}
-
-impl ExchangeTransportUrls {
-    pub fn new(real: &str, paper: &str) -> Self {
-        Self {
-            real: real.into(),
-            paper: paper.into(),
-        }
-    }
-}
+#[derive(Debug, Clone, Copy)]
+pub struct ExchangeUrls {}
 
 impl ExchangeUrls {
-    pub fn new(name: &str, http: ExchangeTransportUrls, websocket: ExchangeTransportUrls) -> Self {
-        Self {
-            name: name.into(),
-            http,
-            websocket,
-        }
-    }
-    pub fn url(&self, transport_type: ExchangeTransportType, trading_mode: TradingMode) -> String {
+    pub fn url(&self, urls: &impl Urls, protocol: Protocol, trading_mode: TradingMode) -> String {
+        let exchange_name = urls.name().to_uppercase();
         let env_var_name = format!(
             "{}_{}_{}",
-            self.name.to_uppercase(),
-            transport_type.to_string().to_uppercase(),
+            exchange_name,
+            protocol.to_string().to_uppercase(),
             trading_mode.to_string().to_uppercase()
         );
-        std::env::var(env_var_name)
-            .unwrap_or_else(|_| self.default_url(transport_type, trading_mode).into())
-    }
-    fn default_url(
-        &self,
-        transport_type: ExchangeTransportType,
-        trading_mode: TradingMode,
-    ) -> &str {
-        let transport_urls = match transport_type {
-            ExchangeTransportType::Http => &self.http,
-            ExchangeTransportType::Websocket => &self.websocket,
-        };
-        match trading_mode {
-            TradingMode::Real => &transport_urls.real,
-            TradingMode::Paper => &transport_urls.paper,
-        }
+        std::env::var(env_var_name).unwrap_or_else(|_| urls.url(protocol, trading_mode).into())
     }
 }
