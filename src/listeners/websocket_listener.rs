@@ -185,6 +185,7 @@ impl<EGRes> ResponseHandler<EGRes> {
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
             if !state.abandoned {
+                state.filtered_response = Some(response);
                 if let Some(waker) = state.waker.take() {
                     waker.wake();
                 }
