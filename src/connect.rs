@@ -45,7 +45,7 @@ impl Connect {
             trading_mode,
             clock,
             rate_limiter,
-            Box::new(|url| Ok(ReqwestHttpClient::new(&url))),
+            Box::new(|url| Ok(ReqwestHttpClient::new(url))),
         )
     }
     pub fn binance_http(
@@ -87,6 +87,7 @@ impl Connect {
         );
         binance_websocket_connector(trading_mode, clock, rate_limiter, listener, client_creator)
     }
+    #[allow(clippy::type_complexity)]
     pub fn binance_websocket(
         trading_mode: TradingMode,
         clock: Clock,

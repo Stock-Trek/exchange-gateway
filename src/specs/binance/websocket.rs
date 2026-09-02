@@ -26,6 +26,7 @@ use exchange_types::{
 };
 use std::{sync::Arc, time::Duration};
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn connector(
     trading_mode: TradingMode,
     clock: Clock,
