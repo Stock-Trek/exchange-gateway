@@ -1,27 +1,26 @@
 use crate::{
     clock::Clock,
     connector::Connector,
-    credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
-    rate_limit::feedback::RateLimitFeedback,
+    rate_limiter::RateLimiter,
     specs::binance::http::connector,
     transports::{
         http::HttpClientTrait,
         reqwest::{HttpRequest, HttpResponse},
     },
-    urls::TradingMode,
 };
 use async_trait::async_trait;
-use exchange_types::binance::{
-    exchange_info::BinanceOrderType,
-    http::{BinanceHttpResponse, BinanceHttpResponseResult, BinanceHttpUnsignedRequest},
-    spot::{
-        BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
-        BinanceSpotOrderParams, BinanceTimeInForce,
+use exchange_types::{
+    binance::{
+        exchange_info::BinanceOrderType,
+        http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
+        spot::{
+            BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
+            BinanceSpotOrderParams, BinanceTimeInForce,
+        },
     },
-    time::BinanceTimeResult,
+    urls::TradingMode,
 };
-use secrecy::SecretString;
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -29,7 +28,6 @@ use std::{
 
 fn spot_order_params() -> BinanceSpotOrderParams {
     BinanceSpotOrderParams {
-        apiKey: Some("my-api-key".into()),
         icebergQty: None,
         newClientOrderId: "abc".into(),
         newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -53,6 +51,18 @@ fn spot_order_params() -> BinanceSpotOrderParams {
     }
 }
 
+#[derive(Debug)]
+struct AcceptingRateLimiter;
+
+impl RateLimiter for AcceptingRateLimiter {
+    fn did_acquire(
+        &self,
+        _limit_costs: &Vec<(exchange_types::rate_limited::RateLimitType, u32)>,
+    ) -> bool {
+        true
+    }
+}
+
 #[derive(Clone)]
 struct MockHttpClient {
     clock: Clock,
@@ -65,17 +75,13 @@ impl HttpClientTrait for MockHttpClient {
 
     async fn send_message(
         &self,
-        endpoint: &str,
-        _message: Self::TransportReq,
+        message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        if endpoint == "time" {
+        if message.endpoint == "time" {
             // sync_clock hits the unsigned `time` endpoint: answer it with
             // the clock's view of server time, as the real exchange would.
-            let body = serde_json::to_vec(&BinanceHttpResponseResult::Time(BinanceTimeResult {
-                serverTime: self.clock.now_millis(),
-            }))
-            .expect("serializing a time response should not fail");
+            let body = format!("{{\"serverTime\":{}}}", self.clock.now_millis()).into_bytes();
             return Ok(HttpResponse {
                 status: 200,
                 body,
@@ -97,22 +103,14 @@ impl HttpClientTrait for MockHttpClient {
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
     clock: Clock,
-) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
-    let credentials = ApiKeyCredentials {
-        api_key: "api-key".into(),
-        secret: SecretString::from("secret"),
-    };
-    let to_unsigned_request = Ok;
-    let to_external_response = Ok;
+) -> EGResult<impl Connector> {
     let mock_clock = clock.clone();
     let mock_client = MockHttpClient { clock: mock_clock };
     let _ = client_handle.send(mock_client.clone());
     connector(
         TradingMode::Paper,
-        to_unsigned_request,
-        to_external_response,
-        Some(credentials),
         clock,
+        Arc::new(AcceptingRateLimiter),
         Box::new(move |_url| Ok(mock_client.clone())),
     )
 }
@@ -161,17 +159,12 @@ impl HttpClientTrait for ScriptedHttpClient {
 
     async fn send_message(
         &self,
-        _endpoint: &str,
         message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
         self.sent.lock().unwrap().push(message);
         match self.outcome {
-            ScriptedOutcome::RateLimited => Err(EGError::RateLimited(RateLimitFeedback {
-                is_throttled: true,
-                retry_after: Some(Duration::from_millis(50)),
-                usage: vec![],
-            })),
+            ScriptedOutcome::RateLimited => Err(EGError::RateLimited(vec![])),
             ScriptedOutcome::HttpError => Err(EGError::HttpError {
                 status: 400,
                 body: br#"{"code":-2010,"msg":"insufficient balance"}"#.to_vec(),
@@ -187,13 +180,7 @@ fn scripted_http_connector(
     client_handle: std::sync::mpsc::Sender<ScriptedHttpClient>,
     outcome: ScriptedOutcome,
     clock: Clock,
-) -> EGResult<impl Connector<BinanceHttpUnsignedRequest, BinanceHttpResponse>> {
-    let credentials = ApiKeyCredentials {
-        api_key: "api-key".into(),
-        secret: SecretString::from("secret"),
-    };
-    let to_unsigned_request = Ok;
-    let to_external_response = Ok;
+) -> EGResult<impl Connector<Request = BinanceHttpRequest, Response = BinanceHttpResponse>> {
     let scripted_client = ScriptedHttpClient {
         sent: Arc::new(Mutex::new(Vec::new())),
         outcome,
@@ -201,10 +188,8 @@ fn scripted_http_connector(
     let _ = client_handle.send(scripted_client.clone());
     connector(
         TradingMode::Paper,
-        to_unsigned_request,
-        to_external_response,
-        Some(credentials),
         clock,
+        Arc::new(AcceptingRateLimiter),
         Box::new(move |_url| Ok(scripted_client.clone())),
     )
 }
@@ -227,8 +212,11 @@ impl ManualClock {
     }
 }
 
-fn spot_order_request() -> BinanceHttpUnsignedRequest {
-    BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params()))
+fn spot_order_request() -> BinanceHttpRequest {
+    BinanceHttpRequest {
+        unsigned: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
+        signature: None,
+    }
 }
 
 #[tokio::test]
@@ -242,7 +230,7 @@ async fn http_send_keeps_local_reservation_on_business_rejection() {
     // Binance counts its weight anyway: the locally-reserved capacity
     // must not be refunded.
     let result = connector
-        .send(spot_order_request(), false, Duration::from_secs(5))
+        .send(spot_order_request(), Duration::from_secs(5))
         .await;
     assert!(matches!(
         result,
@@ -269,7 +257,7 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
     // A server-side 429 is not counted against the request-weight budget,
     // so the locally-reserved capacity is refunded.
     let result = connector
-        .send(spot_order_request(), false, Duration::from_secs(5))
+        .send(spot_order_request(), Duration::from_secs(5))
         .await;
     assert!(matches!(result, Err(EGError::RateLimited { .. })));
     assert_eq!(client.sent.lock().unwrap().len(), 1);
@@ -280,7 +268,7 @@ async fn http_send_refunds_local_reservation_on_rate_limited() {
     // manual clock, so the throttle expires without sleeping.
     clock.advance(Duration::from_millis(100));
     let result = connector
-        .send(spot_order_request(), false, Duration::from_secs(5))
+        .send(spot_order_request(), Duration::from_secs(5))
         .await;
     assert!(matches!(result, Err(EGError::RateLimited { .. })));
 }

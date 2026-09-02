@@ -122,14 +122,7 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        auth_gate::AuthGate,
-        error::EGResult,
-        listeners::listener::ListenerTrait,
-        rate_limit::{
-            feedback::RateLimitFeedback, rate_limiter::RateLimiter, rate_limits::RateLimits,
-        },
-    };
+    use crate::{error::EGResult, listeners::listener::ListenerTrait};
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -201,15 +194,9 @@ mod tests {
         let release = Arc::new(tokio::sync::Notify::new());
         let listener = Arc::new(WebsocketListener::new(
             Arc::new(Ok),
-            |_: &u64| Ok(RateLimitFeedback::default()),
-            RateLimits {
-                weight: RateLimiter::new(vec![]),
-                orders: RateLimiter::new(vec![]),
-            },
             RecordingDelegate {
                 received: received.clone(),
             },
-            Arc::new(AuthGate::default()),
         ));
         let client = Arc::new(TimeoutClient {
             listener: listener.clone(),

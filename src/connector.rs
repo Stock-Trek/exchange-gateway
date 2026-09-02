@@ -3,17 +3,13 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 #[async_trait]
-pub trait Connector<ExternalReq, ExternalRes> {
+pub trait Connector {
+    type Request;
+    type Response;
+
     async fn connect(&self) -> EGResult<()>;
     async fn sync_clock(&self) -> EGResult<()>;
-    async fn authenticate(&self) -> EGResult<()>;
     fn is_connected(&self) -> EGResult<bool>;
-    fn is_authenticated(&self) -> EGResult<bool>;
-    async fn send(
-        &self,
-        request: ExternalReq,
-        signed: bool,
-        timeout: Duration,
-    ) -> EGResult<ExternalRes>;
+    async fn send(&self, request: Self::Request, timeout: Duration) -> EGResult<Self::Response>;
     async fn disconnect(&self) -> EGResult<()>;
 }
