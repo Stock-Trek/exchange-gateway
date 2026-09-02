@@ -1,9 +1,5 @@
 use crate::{
     error::{EGError, EGResult},
-    rate_limit::{
-        feedback::{RateLimitFeedback, RateLimitUsage},
-        rate_limit_type::RateLimitType,
-    },
     transports::http::HttpClientTrait,
 };
 use async_trait::async_trait;
@@ -11,6 +7,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
+    pub(crate) endpoint: String,
     pub(crate) method: reqwest::Method,
     pub(crate) query: Option<String>,
     pub(crate) headers: Vec<(String, String)>,
@@ -48,12 +45,6 @@ impl ReqwestHttpClient {
         }
         url
     }
-    fn parse_header(headers: &[(String, String)], name: &str) -> Option<u32> {
-        headers
-            .iter()
-            .find(|(header_name, _)| header_name == name)
-            .and_then(|(_, value)| value.trim().parse().ok())
-    }
 }
 
 #[async_trait]
@@ -63,11 +54,10 @@ impl HttpClientTrait for ReqwestHttpClient {
 
     async fn send_message(
         &self,
-        endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        let url = self.build_url(endpoint, message.query.as_deref());
+        let url = self.build_url(&message.endpoint, message.query.as_deref());
         let mut request = self.client.request(message.method, &url).timeout(timeout);
         for (name, value) in &message.headers {
             request = request.header(name, value);
@@ -101,12 +91,6 @@ impl HttpClientTrait for ReqwestHttpClient {
                 headers,
                 body,
             })
-        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || status == reqwest::StatusCode::IM_A_TEAPOT
-        {
-            Err(EGError::RateLimited(
-                rate_limit_feedback_from_status_and_headers(status.as_u16(), &headers),
-            ))
         } else {
             Err(EGError::HttpError {
                 status: status.as_u16(),
@@ -114,51 +98,6 @@ impl HttpClientTrait for ReqwestHttpClient {
             })
         }
     }
-
-    fn rate_limit_feedback(&self, response: &Self::TransportRes) -> RateLimitFeedback {
-        rate_limit_feedback_from_status_and_headers(response.status, &response.headers)
-    }
-}
-
-fn rate_limit_feedback_from_status_and_headers(
-    status: u16,
-    headers: &[(String, String)],
-) -> RateLimitFeedback {
-    let retry_after = headers
-        .iter()
-        .find(|(name, _)| name == "retry-after")
-        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs);
-    let mut feedback = RateLimitFeedback {
-        retry_after,
-        is_throttled: matches!(status, 429 | 418),
-        ..Default::default()
-    };
-    if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-used-weight-1m") {
-        feedback.usage.push(RateLimitUsage {
-            rate_limit_type: RateLimitType::RequestWeight,
-            interval_nanos: Duration::from_secs(60).as_nanos(),
-            used: Some(used),
-            limit: None,
-        });
-    }
-    if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-order-count-10s") {
-        feedback.usage.push(RateLimitUsage {
-            rate_limit_type: RateLimitType::Orders,
-            interval_nanos: Duration::from_secs(10).as_nanos(),
-            used: Some(used),
-            limit: None,
-        });
-    }
-    if let Some(used) = ReqwestHttpClient::parse_header(headers, "x-mbx-order-count-1d") {
-        feedback.usage.push(RateLimitUsage {
-            rate_limit_type: RateLimitType::Orders,
-            interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-            used: Some(used),
-            limit: None,
-        });
-    }
-    feedback
 }
 
 impl std::fmt::Debug for ReqwestHttpClient {
@@ -188,8 +127,8 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let response = client
             .send_message(
-                "order",
                 HttpRequest {
+                    endpoint: "order".into(),
                     method: reqwest::Method::POST,
                     query: Some("symbol=BTCUSDT".into()),
                     headers: vec![("X-Test".into(), "abc".into())],
@@ -219,8 +158,8 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let error = client
             .send_message(
-                "order",
                 HttpRequest {
+                    endpoint: "order".into(),
                     method: reqwest::Method::POST,
                     query: None,
                     headers: vec![],
@@ -251,8 +190,8 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let error = client
             .send_message(
-                "order",
                 HttpRequest {
+                    endpoint: "order".into(),
                     method: reqwest::Method::POST,
                     query: None,
                     headers: vec![],
@@ -306,87 +245,5 @@ mod tests {
                 .expect("should write the response");
         });
         format!("http://{addr}")
-    }
-
-    #[tokio::test]
-    async fn rate_limit_feedback_parses_usage_and_retry_after() {
-        let request_log = Arc::new(Mutex::new(String::new()));
-        let base_url = spawn_mock_server_with_response(
-            request_log.clone(),
-            429,
-            "Retry-After: 30\r\nX-MBX-USED-WEIGHT-1M: 6000\r\nX-MBX-ORDER-COUNT-10S: 3",
-            br#"{"code":-1003,"msg":"Too many requests"}"#,
-        );
-        let client = ReqwestHttpClient::new(&base_url);
-        let error = client
-            .send_message(
-                "order",
-                HttpRequest {
-                    method: reqwest::Method::POST,
-                    query: None,
-                    headers: vec![],
-                    body: None,
-                },
-                Duration::from_secs(5),
-            )
-            .await
-            .expect_err("429 should be returned as an error");
-        let feedback = match error {
-            EGError::RateLimited(feedback) => feedback,
-            other => panic!("expected RateLimited with feedback, got: {other:?}"),
-        };
-        assert!(feedback.is_throttled);
-        assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
-        assert_eq!(feedback.usage.len(), 2);
-        assert_eq!(
-            feedback.usage[0].interval_nanos,
-            Duration::from_secs(60).as_nanos()
-        );
-        assert_eq!(feedback.usage[0].used, Some(6000));
-        assert_eq!(feedback.usage[0].limit, None);
-        assert_eq!(
-            feedback.usage[1].interval_nanos,
-            Duration::from_secs(10).as_nanos()
-        );
-        assert_eq!(feedback.usage[1].used, Some(3));
-    }
-
-    #[tokio::test]
-    async fn rate_limit_feedback_parses_usage_on_success() {
-        let request_log = Arc::new(Mutex::new(String::new()));
-        let base_url = spawn_mock_server_with_response(
-            request_log.clone(),
-            200,
-            "X-MBX-USED-WEIGHT-1M: 1200\r\nX-MBX-ORDER-COUNT-1D: 12",
-            br#"{"ok":true}"#,
-        );
-        let client = ReqwestHttpClient::new(&base_url);
-        let response = client
-            .send_message(
-                "order",
-                HttpRequest {
-                    method: reqwest::Method::POST,
-                    query: None,
-                    headers: vec![],
-                    body: None,
-                },
-                Duration::from_secs(5),
-            )
-            .await
-            .expect("200 should succeed");
-        let feedback = client.rate_limit_feedback(&response);
-        assert!(!feedback.is_throttled);
-        assert_eq!(feedback.retry_after, None);
-        assert_eq!(feedback.usage.len(), 2);
-        assert_eq!(
-            feedback.usage[0].interval_nanos,
-            Duration::from_secs(60).as_nanos()
-        );
-        assert_eq!(feedback.usage[0].used, Some(1200));
-        assert_eq!(
-            feedback.usage[1].interval_nanos,
-            Duration::from_secs(24 * 60 * 60).as_nanos()
-        );
-        assert_eq!(feedback.usage[1].used, Some(12));
     }
 }

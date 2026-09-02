@@ -1,13 +1,11 @@
-use crate::{
-    clock::Clock,
-    connector::Connector,
-    credentials::api_key_credential::ApiKeyCredentials,
-    error::EGResult,
-    functions::{BoxTryCreateOnce, TryConvertValue},
-    transports::websocket::WebsocketClientTrait,
-    urls::TradingMode,
+use {
+    crate::{
+        clock::Clock, connector::Connector, error::EGResult, functions::BoxTryCreateOnce,
+        rate_limiter::RateLimiter, transports::websocket::WebsocketClientTrait,
+    },
+    exchange_types::urls::TradingMode,
+    std::sync::Arc,
 };
-use std::sync::Arc;
 
 #[cfg(feature = "iris")]
 use {
@@ -16,11 +14,8 @@ use {
         specs::binance::websocket::connector as binance_websocket_connector,
         transports::iris::IrisWebsocketClient,
     },
-    exchange_types::binance::websocket::{
-        BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketUnsignedRequest,
-    },
+    exchange_types::binance::websocket::{BinanceWebsocketRequest, BinanceWebsocketResponse},
     iris::Config as IrisConfig,
-    std::time::Duration,
 };
 
 #[cfg(feature = "reqwest")]
@@ -32,7 +27,7 @@ use {
             reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
         },
     },
-    exchange_types::binance::http::{BinanceHttpResponse, BinanceHttpUnsignedRequest},
+    exchange_types::binance::http::{BinanceHttpRequest, BinanceHttpResponse},
 };
 
 #[derive(Debug, Clone)]
@@ -40,105 +35,67 @@ pub struct Connect;
 
 impl Connect {
     #[cfg(feature = "reqwest")]
-    pub fn binance_http_reqwest<ExternalReq, ExternalRes>(
+    pub fn binance_http_reqwest(
         trading_mode: TradingMode,
-        to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-        to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-        credentials: Option<ApiKeyCredentials>,
         clock: Clock,
-    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-    where
-        ExternalReq: Send + 'static,
-        ExternalRes: Clone + Send + Sync + 'static,
+        rate_limiter: Arc<dyn RateLimiter>,
+    ) -> EGResult<impl Connector<Request = BinanceHttpRequest, Response = BinanceHttpResponse>>
     {
         binance_http_connector(
             trading_mode,
-            to_unsigned_request,
-            to_external_response,
-            credentials,
             clock,
-            Box::new(|url| Ok(ReqwestHttpClient::new(&url))),
+            rate_limiter,
+            Box::new(|url| Ok(ReqwestHttpClient::new(url))),
         )
     }
-    pub fn binance_http<ExternalReq, ExternalRes>(
+    pub fn binance_http(
         trading_mode: TradingMode,
-        to_unsigned_request: TryConvertValue<ExternalReq, BinanceHttpUnsignedRequest>,
-        to_external_response: TryConvertValue<BinanceHttpResponse, ExternalRes>,
-        credentials: Option<ApiKeyCredentials>,
         clock: Clock,
+        rate_limiter: Arc<dyn RateLimiter>,
         client_creator: BoxTryCreateOnce<
-            String,
+            &str,
             impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
         >,
-    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-    where
-        ExternalReq: Send + 'static,
-        ExternalRes: Clone + Send + Sync + 'static,
+    ) -> EGResult<impl Connector<Request = BinanceHttpRequest, Response = BinanceHttpResponse>>
     {
-        binance_http_connector(
-            trading_mode,
-            to_unsigned_request,
-            to_external_response,
-            credentials,
-            clock,
-            client_creator,
-        )
+        binance_http_connector(trading_mode, clock, rate_limiter, client_creator)
     }
 
     #[cfg(feature = "iris")]
-    pub fn binance_websocket_iris<ExternalReq, ExternalRes>(
+    pub fn binance_websocket_iris(
         trading_mode: TradingMode,
-        to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-        to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
-        credentials: Option<ApiKeyCredentials>,
         clock: Clock,
-        use_session: bool,
-        logon_timeout: Duration,
+        rate_limiter: Arc<dyn RateLimiter>,
+        listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
         iris_config: IrisConfig,
-    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-    where
-        ExternalReq: Send + Sync,
-        ExternalRes: Clone + Send + Sync + 'static,
-    {
+    ) -> EGResult<
+        impl Connector<Request = BinanceWebsocketRequest, Response = BinanceWebsocketResponse>,
+    > {
         let client_creator = Box::new(
             move |(url, websocket_listener): (
-                String,
+                &str,
                 Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
             )| {
                 let client =
                 IrisWebsocketClient::<BinanceWebsocketRequest, BinanceWebsocketResponse>::with_config(
-                    &url,
+                    url,
                     iris_config,
                     websocket_listener,
                 );
                 Ok(client)
             },
         );
-        binance_websocket_connector(
-            trading_mode,
-            to_unsigned_request,
-            to_external_response,
-            credentials,
-            clock,
-            listener,
-            use_session,
-            logon_timeout,
-            client_creator,
-        )
+        binance_websocket_connector(trading_mode, clock, rate_limiter, listener, client_creator)
     }
-    pub fn binance_websocket<ExternalReq, ExternalRes>(
+    #[allow(clippy::type_complexity)]
+    pub fn binance_websocket(
         trading_mode: TradingMode,
-        to_unsigned_request: TryConvertValue<ExternalReq, BinanceWebsocketUnsignedRequest>,
-        to_external_response: TryConvertValue<BinanceWebsocketResponse, ExternalRes>,
-        listener: impl ListenerTrait<TMessage = ExternalRes> + 'static,
-        credentials: Option<ApiKeyCredentials>,
         clock: Clock,
-        use_session: bool,
-        logon_timeout: Duration,
+        rate_limiter: Arc<dyn RateLimiter>,
+        listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
         client_creator: BoxTryCreateOnce<
             (
-                String,
+                &str,
                 Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
             ),
             impl WebsocketClientTrait<
@@ -146,21 +103,9 @@ impl Connect {
                 TransportRes = BinanceWebsocketResponse,
             > + 'static,
         >,
-    ) -> EGResult<impl Connector<ExternalReq, ExternalRes>>
-    where
-        ExternalReq: Send + Sync,
-        ExternalRes: Clone + Send + Sync + 'static,
-    {
-        binance_websocket_connector(
-            trading_mode,
-            to_unsigned_request,
-            to_external_response,
-            credentials,
-            clock,
-            listener,
-            use_session,
-            logon_timeout,
-            client_creator,
-        )
+    ) -> EGResult<
+        impl Connector<Request = BinanceWebsocketRequest, Response = BinanceWebsocketResponse>,
+    > {
+        binance_websocket_connector(trading_mode, clock, rate_limiter, listener, client_creator)
     }
 }
