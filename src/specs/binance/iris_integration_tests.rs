@@ -126,9 +126,8 @@ impl ListenerTrait for RecordingListener {
 fn mock_websocket_connector(
     client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
     listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
-    clock: Clock,
+    server_clock: Clock,
 ) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
-    let clock_clone = clock.clone();
     let client_creator = Box::new(
         move |(_url, websocket_listener): (
             String,
@@ -138,13 +137,13 @@ fn mock_websocket_connector(
                 listener: websocket_listener,
                 connected: Arc::new(AtomicBool::new(false)),
                 sent: Arc::new(Mutex::new(Vec::new())),
-                clock: clock_clone,
+                clock: server_clock,
             };
             let _ = client_handle.send(mock_client.clone());
             Ok(mock_client)
         },
     );
-    connector(TradingMode::Paper, clock, listener, client_creator)
+    connector(TradingMode::Paper, listener, client_creator)
 }
 
 fn exchange_info_request() -> BinanceWebsocketRequest {
@@ -223,22 +222,32 @@ async fn websocket_connector_forwards_unsolicited_messages_to_the_listener() {
 #[tokio::test]
 async fn websocket_connector_sync_clock_syncs_the_server_clock() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = Clock::default();
+    let server_clock = Clock::default();
+    server_clock
+        .sync(server_clock.now_millis() + 10_000, Duration::ZERO)
+        .expect("Cannot sync the server clock");
     let listener = RecordingListener {
         connected: Arc::new(AtomicBool::new(false)),
         disconnected: Arc::new(AtomicBool::new(false)),
         received: Arc::new(Mutex::new(Vec::new())),
     };
-    let connector = mock_websocket_connector(client_tx, listener, clock.clone()).unwrap();
+    let connector = mock_websocket_connector(client_tx, listener, server_clock).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
     // Nothing is sent until sync_clock is invoked.
     assert!(client.sent.lock().unwrap().is_empty());
+    let local = connector.server_time_millis().expect("No local time");
     connector
         .sync_clock()
         .await
         .expect("sync_clock should succeed");
+    let server_time = connector.server_time_millis().expect("No server time");
+    assert!(server_time >= local + 10_000, "server_time: {server_time}");
+    assert!(
+        server_time < local + 10_000 + 60_000,
+        "server_time: {server_time}"
+    );
 
     // The sync clock message is the unsigned `time` request, answered with
     // the mock's view of server time.

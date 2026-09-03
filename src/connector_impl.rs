@@ -24,7 +24,6 @@ impl<Request, TransportReq, TransportRes, Response>
 {
     pub(crate) fn new(
         rate_limits: RateLimits,
-        clock: Clock,
         synchronization: Synchronization<Request, Response>,
         to_weight: fn(&Request) -> u32,
         to_order_count: fn(&Request) -> u32,
@@ -33,7 +32,7 @@ impl<Request, TransportReq, TransportRes, Response>
     ) -> ConnectorImpl<Request, TransportReq, TransportRes, Response> {
         ConnectorImpl {
             rate_limits,
-            clock,
+            clock: Clock::new(),
             synchronization,
             to_weight,
             to_order_count,
@@ -68,6 +67,10 @@ where
 
     async fn disconnect(&self) -> EGResult<()> {
         self.transport.disconnect().await
+    }
+
+    fn server_time_millis(&self) -> EGResult<i64> {
+        Ok(self.clock.now_millis())
     }
 
     async fn sync_clock(&self) -> EGResult<()> {

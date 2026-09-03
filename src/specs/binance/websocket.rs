@@ -1,5 +1,5 @@
 use crate::{
-    clock::{Clock, Synchronization},
+    clock::Synchronization,
     connector::Connector,
     connector_impl::ConnectorImpl,
     error::{EGError, EGResult},
@@ -29,7 +29,6 @@ use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector(
     trading_mode: TradingMode,
-    clock: Clock,
     listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
     client_creator: BoxTryCreateOnce<
         (
@@ -59,7 +58,6 @@ pub(crate) fn connector(
     );
     Ok(ConnectorImpl::new(
         rate_limits,
-        clock,
         synchronization(Duration::from_secs(20)),
         request_weight,
         order_count,
@@ -143,6 +141,7 @@ fn order_count(request: &BinanceWebsocketRequest) -> u32 {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::clock::Clock;
     use crate::rate_limit::rate_limit_type::RateLimitType;
     use exchange_types::binance::{
         error::BinanceError,

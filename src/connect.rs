@@ -1,5 +1,4 @@
 use crate::{
-    clock::Clock,
     connector::Connector,
     error::EGResult,
     functions::BoxTryCreateOnce,
@@ -35,30 +34,26 @@ impl Connect {
     #[cfg(feature = "reqwest")]
     pub fn binance_http_reqwest(
         trading_mode: TradingMode,
-        clock: Clock,
     ) -> EGResult<impl Connector<BinanceHttpRequest, BinanceHttpResponse>> {
         binance_http_connector(
             trading_mode,
-            clock,
             Box::new(|url| Ok(ReqwestHttpClient::new(&url))),
         )
     }
 
     pub fn binance_http(
         trading_mode: TradingMode,
-        clock: Clock,
         client_creator: BoxTryCreateOnce<
             String,
             impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
         >,
     ) -> EGResult<impl Connector<BinanceHttpRequest, BinanceHttpResponse>> {
-        binance_http_connector(trading_mode, clock, client_creator)
+        binance_http_connector(trading_mode, client_creator)
     }
 
     #[cfg(feature = "iris")]
     pub fn binance_websocket_iris(
         trading_mode: TradingMode,
-        clock: Clock,
         listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
         iris_config: IrisConfig,
     ) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
@@ -76,12 +71,11 @@ impl Connect {
                 Ok(client)
             },
         );
-        binance_websocket_connector(trading_mode, clock, listener, client_creator)
+        binance_websocket_connector(trading_mode, listener, client_creator)
     }
 
     pub fn binance_websocket(
         trading_mode: TradingMode,
-        clock: Clock,
         listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
         client_creator: BoxTryCreateOnce<
             (
@@ -94,6 +88,6 @@ impl Connect {
             > + 'static,
         >,
     ) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
-        binance_websocket_connector(trading_mode, clock, listener, client_creator)
+        binance_websocket_connector(trading_mode, listener, client_creator)
     }
 }
