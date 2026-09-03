@@ -61,7 +61,13 @@ where
         let waiter = self
             .websocket_listener
             .waiter_for_filtered_response(filter)?;
-        self.client.send_message(transport_req, timeout).await?;
+        self.client
+            .send_message(transport_req, timeout)
+            .await
+            .map_err(|error| match error {
+                EGError::TimedOut => error,
+                error => EGError::NotSent(Box::new(error)),
+            })?;
         self.wait_for_response(waiter, timeout).await
     }
     async fn disconnect(&self) -> EGResult<()> {
@@ -123,15 +129,20 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
 mod tests {
     use super::*;
     use crate::{
+        clock::{Clock, Synchronization},
+        connector::Connector,
+        connector_impl::ConnectorImpl,
         error::EGResult,
         listeners::listener::ListenerTrait,
         rate_limit::{
-            feedback::RateLimitFeedback, rate_limiter::RateLimiter, rate_limits::RateLimits,
+            feedback::RateLimitFeedback, rate_limit_config::RateLimitConfig,
+            rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
         },
+        transports::transport::Transport,
     };
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     };
 
     #[derive(Default)]
@@ -237,5 +248,165 @@ mod tests {
             received.lock().unwrap().is_empty(),
             "the late response to a timed-out send must not leak to the delegate"
         );
+    }
+
+    struct RefusingClient {
+        attempts: Arc<AtomicU32>,
+    }
+
+    #[async_trait]
+    impl WebsocketClientTrait for RefusingClient {
+        type TransportReq = u64;
+        type TransportRes = u64;
+
+        async fn connect(&self) -> EGResult<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            false
+        }
+        async fn send_message(&self, _message: u64, _timeout: Duration) -> EGResult<()> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            Err(EGError::NotConnected)
+        }
+        async fn disconnect(&self) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    struct SendThenDisconnectClient {
+        listener: Arc<dyn ListenerTrait<TMessage = u64>>,
+        attempts: Arc<AtomicU32>,
+    }
+
+    #[async_trait]
+    impl WebsocketClientTrait for SendThenDisconnectClient {
+        type TransportReq = u64;
+        type TransportRes = u64;
+
+        async fn connect(&self) -> EGResult<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            false
+        }
+        async fn send_message(&self, _message: u64, _timeout: Duration) -> EGResult<()> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            self.listener.on_disconnected().await
+        }
+        async fn disconnect(&self) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    fn listener_with(limits: RateLimits) -> Arc<WebsocketListener<u64, u64>> {
+        Arc::new(WebsocketListener::new(
+            Arc::new(Ok),
+            |_: &u64| Ok(RateLimitFeedback::default()),
+            limits,
+            RecordingDelegate::default(),
+        ))
+    }
+
+    fn connector_with_client(
+        listener: Arc<WebsocketListener<u64, u64>>,
+        client: Arc<dyn WebsocketClientTrait<TransportReq = u64, TransportRes = u64>>,
+        limits: RateLimits,
+    ) -> ConnectorImpl<u64, u64, u64, u64> {
+        ConnectorImpl::new(
+            limits,
+            Clock::default(),
+            Synchronization {
+                create_time_request: || 0,
+                timeout: Duration::from_secs(5),
+                to_server_time: |_: &u64| Ok(0),
+            },
+            |_: &u64| 1,
+            |_: &u64| 0,
+            |_: &u64| -> ArcPredicate<u64> { Arc::new(|_: &u64| true) },
+            Transport::Websocket(WebsocketTransport::new(client, Ok, Arc::new(Ok), listener)),
+        )
+    }
+
+    fn single_slot_rate_limits() -> RateLimits {
+        RateLimits {
+            weight: RateLimiter::new(vec![RateLimitConfig {
+                rate_limit_type: RateLimitType::RequestWeight,
+                capacity_per_interval: 1,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+            }]),
+            orders: RateLimiter::new(vec![]),
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_send_is_reported_as_not_sent() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let transport = WebsocketTransport::new(
+            Arc::new(RefusingClient {
+                attempts: attempts.clone(),
+            }),
+            Ok,
+            Arc::new(Ok),
+            listener_with(RateLimits {
+                weight: RateLimiter::new(vec![]),
+                orders: RateLimiter::new(vec![]),
+            }),
+        );
+        let error = transport
+            .send_and_wait_for(1, Duration::from_secs(1), Arc::new(|_: &u64| true))
+            .await
+            .expect_err("a refused send must fail");
+        match error {
+            EGError::NotSent(inner) => assert!(matches!(*inner, EGError::NotConnected)),
+            other => panic!("expected NotSent, got: {other:?}"),
+        }
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn send_refunds_local_reservation_when_the_request_was_never_sent() {
+        let limits = single_slot_rate_limits();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let client = Arc::new(RefusingClient {
+            attempts: attempts.clone(),
+        });
+        let connector =
+            connector_with_client(listener_with(limits.clone()), client, limits.clone());
+        let error = connector
+            .send(1, Duration::from_secs(1))
+            .await
+            .expect_err("a refused send must fail");
+        assert!(matches!(error, EGError::NotSent(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let error = connector
+            .send(1, Duration::from_secs(1))
+            .await
+            .expect_err("the refunded reservation must let the second send reach the transport");
+        assert!(matches!(error, EGError::NotSent(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn send_keeps_local_reservation_when_the_connection_drops_after_the_send() {
+        let limits = single_slot_rate_limits();
+        let attempts = Arc::new(AtomicU32::new(0));
+        let listener = listener_with(limits.clone());
+        let client = Arc::new(SendThenDisconnectClient {
+            listener: listener.clone(),
+            attempts: attempts.clone(),
+        });
+        let connector = connector_with_client(listener, client, limits);
+        let error = connector
+            .send(1, Duration::from_secs(1))
+            .await
+            .expect_err("the waiter must fail with NotConnected when the connection drops");
+        assert!(matches!(error, EGError::NotConnected));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        let error = connector.send(1, Duration::from_secs(1)).await.expect_err(
+            "a sent request keeps its reservation, so the second send is rejected locally",
+        );
+        assert!(matches!(error, EGError::RateLimited(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

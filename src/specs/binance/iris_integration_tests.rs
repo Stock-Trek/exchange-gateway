@@ -317,7 +317,7 @@ async fn websocket_connector_send_fails_when_the_connection_is_down() {
     .expect("send on a dead connection should fail fast, not hang")
     .expect_err("send must fail while the connection is down");
     assert!(
-        matches!(error, EGError::External(_) | EGError::NotConnected),
+        matches!(error, EGError::NotSent(_)),
         "unexpected error: {error:?}"
     );
 }

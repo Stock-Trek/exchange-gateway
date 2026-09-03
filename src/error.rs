@@ -26,6 +26,8 @@ pub enum EGError {
     NotAuthenticated,
     #[error("Connector is not connected")]
     NotConnected,
+    #[error("The request was not sent: {0}")]
+    NotSent(Box<EGError>),
     #[error("Rate limit exceeded")]
     RateLimited(RateLimitFeedback),
     #[error("Request timed out waiting for a response")]

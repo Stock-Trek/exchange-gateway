@@ -87,11 +87,7 @@ where
         {
             Ok(response) => response,
             Err(error) => {
-                // The exchange counts request weight even for rejected
-                // requests (a 4xx/5xx time error surfaces as HttpError), so
-                // only the RateLimited (429/418) path, which the server does
-                // not count, refunds the locally-reserved capacity.
-                if matches!(&error, EGError::RateLimited(..)) {
+                if matches!(&error, EGError::RateLimited(..) | EGError::NotSent(..)) {
                     let _ = self.rate_limits.refund(weight, order_count);
                 }
                 return Err(error);
@@ -118,7 +114,7 @@ where
         {
             Ok(response) => response,
             Err(error) => {
-                if matches!(&error, EGError::RateLimited(..)) {
+                if matches!(&error, EGError::RateLimited(..) | EGError::NotSent(..)) {
                     let _ = self.rate_limits.refund(weight, order_count);
                 }
                 return Err(error);
