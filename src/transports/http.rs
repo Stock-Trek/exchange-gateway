@@ -5,13 +5,7 @@ use crate::{
     transports::transport::TransportTrait,
 };
 use async_trait::async_trait;
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 #[async_trait]
 pub trait HttpClientTrait: Send + Sync {
@@ -45,7 +39,6 @@ pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     rate_limits: RateLimits,
     header_feedback: Arc<dyn Fn(&TransportRes) -> RateLimitFeedback + Send + Sync>,
     feedback: ArcTryConvertRef<EGRes, RateLimitFeedback>,
-    is_connected: AtomicBool,
 }
 
 #[async_trait]
@@ -63,11 +56,14 @@ where
         (self.convert_response)(response)
     }
     async fn connect(&self) -> EGResult<()> {
-        self.is_connected.store(true, Ordering::SeqCst);
+        // HTTP is connectionless: every request opens its own connection, so
+        // there is no connection to establish (or to check for liveness).
         Ok(())
     }
     fn is_connected(&self) -> bool {
-        self.is_connected.load(Ordering::SeqCst)
+        // The transport is always able to send; liveness is per-request and
+        // surfaces as a send error, not as a connect state.
+        true
     }
     async fn send_and_wait_for(
         &self,
@@ -83,7 +79,7 @@ where
         }
     }
     async fn disconnect(&self) -> EGResult<()> {
-        self.is_connected.store(false, Ordering::SeqCst);
+        // See connect: there is no persistent connection to tear down.
         Ok(())
     }
 }
@@ -109,7 +105,6 @@ where
             rate_limits,
             header_feedback: Arc::new(header_feedback),
             feedback: Arc::new(feedback),
-            is_connected: AtomicBool::new(false),
         }
     }
     async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {

@@ -129,7 +129,7 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
 mod tests {
     use super::*;
     use crate::{
-        clock::{Clock, Synchronization},
+        clock::Synchronization,
         connector::Connector,
         connector_impl::ConnectorImpl,
         error::EGResult,
@@ -315,7 +315,6 @@ mod tests {
     ) -> ConnectorImpl<u64, u64, u64, u64> {
         ConnectorImpl::new(
             limits,
-            Clock::default(),
             Synchronization {
                 create_time_request: || 0,
                 timeout: Duration::from_secs(5),
