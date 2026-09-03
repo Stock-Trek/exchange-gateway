@@ -6,7 +6,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::{
-    collections::HashMap,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -21,34 +20,30 @@ pub trait HttpClientTrait: Send + Sync {
 
     async fn send_message(
         &self,
-        endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes>;
-
-    fn rate_limit_feedback(&self, _response: &Self::TransportRes) -> RateLimitFeedback {
-        RateLimitFeedback::default()
-    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum HttpEndpoint {
-    AmendOrder,
-    AssetLimits,
-    CancelAllOrders,
-    CancelOrder,
-    ExchangeInfo,
-    PlaceOrder,
-    Time,
-}
+/// The HTTP request shape transports exchange. It mirrors
+/// `exchange_types::http::HttpRequest`, which the `From<BinanceHttpRequest>
+/// for HttpRequest` impl produces: `query` carries the origin-form request
+/// target, i.e. the endpoint and any query parameters together (e.g.
+/// `"order?symbol=BTCUSDT&signature=..."`), so the endpoint, headers and
+/// body all live on the transport request.
+pub(crate) type HttpRequest = exchange_types::http::HttpRequest;
+
+/// The HTTP response shape transports exchange. It is
+/// `exchange_types::http::HttpResponse`, which `TryFrom<HttpResponse> for
+/// BinanceHttpResponse` consumes to parse the exchange response.
+pub(crate) type HttpResponse = exchange_types::http::HttpResponse;
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
-    to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
-    endpoints: HashMap<HttpEndpoint, String>,
     rate_limits: RateLimits,
+    header_feedback: Arc<dyn Fn(&TransportRes) -> RateLimitFeedback + Send + Sync>,
     feedback: ArcTryConvertRef<EGRes, RateLimitFeedback>,
     is_connected: AtomicBool,
 }
@@ -99,46 +94,34 @@ where
     EGReq: Send,
     EGRes: 'static,
 {
-    pub fn new(
+    pub(crate) fn new(
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
         convert_response: TryConvertValue<TransportRes, EGRes>,
-        to_http_endpoint: fn(&EGReq) -> HttpEndpoint,
-        endpoints: HashMap<HttpEndpoint, String>,
         rate_limits: RateLimits,
+        header_feedback: impl Fn(&TransportRes) -> RateLimitFeedback + Send + Sync + 'static,
         feedback: impl Fn(&EGRes) -> EGResult<RateLimitFeedback> + Send + Sync + 'static,
     ) -> Self {
         Self {
             client,
             convert_request,
             convert_response,
-            to_http_endpoint,
-            endpoints,
             rate_limits,
+            header_feedback: Arc::new(header_feedback),
             feedback: Arc::new(feedback),
             is_connected: AtomicBool::new(false),
         }
     }
     async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
-        let http_endpoint = (self.to_http_endpoint)(&request);
-        let endpoint = self
-            .endpoints
-            .get(&http_endpoint)
-            .ok_or(EGError::UnknownEndpoint)?;
         let request_dto = self.try_convert_request(request)?;
-        let response_dto = match self
-            .client
-            .send_message(endpoint, request_dto, timeout)
-            .await
-        {
+        let response_dto = match self.client.send_message(request_dto, timeout).await {
             Ok(response_dto) => response_dto,
             Err(error) => {
                 let _ = self.rate_limits.apply_feedback_from_error(&error);
                 return Err(error);
             }
         };
-        let header_feedback = self.client.rate_limit_feedback(&response_dto);
-        let mut feedback = header_feedback;
+        let mut feedback = (self.header_feedback)(&response_dto);
         let response = match self.try_convert_response(response_dto) {
             Ok(response) => {
                 let exchange_feedback = (self.feedback)(&response)?;
@@ -176,10 +159,8 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("client", &"<HttpClientTrait>")
             .field("convert_request", &"<function>")
             .field("convert_response", &"<function>")
-            .field("listener", &"<Listener>")
-            .field("to_http_endpoint", &self.to_http_endpoint)
-            .field("action_endpoints", &self.endpoints)
             .field("rate_limits", &self.rate_limits)
+            .field("header_feedback", &"<function>")
             .field("feedback", &"<function>")
             .finish()
     }
@@ -217,28 +198,11 @@ mod tests {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
 
-        async fn send_message(
-            &self,
-            _endpoint: &str,
-            message: TestReq,
-            _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        async fn send_message(&self, message: TestReq, _timeout: Duration) -> EGResult<TestRes> {
             Ok(TestRes {
                 id: message.id,
                 used: 42,
             })
-        }
-
-        fn rate_limit_feedback(&self, response: &TestRes) -> RateLimitFeedback {
-            RateLimitFeedback {
-                usage: vec![RateLimitUsage {
-                    rate_limit_type: RateLimitType::RequestWeight,
-                    interval_nanos: Duration::from_secs(60).as_nanos(),
-                    used: Some(response.used),
-                    limit: None,
-                }],
-                ..Default::default()
-            }
         }
     }
 
@@ -251,23 +215,11 @@ mod tests {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
 
-        async fn send_message(
-            &self,
-            _endpoint: &str,
-            message: TestReq,
-            _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        async fn send_message(&self, message: TestReq, _timeout: Duration) -> EGResult<TestRes> {
             Ok(TestRes {
                 id: message.id,
                 used: 60,
             })
-        }
-
-        fn rate_limit_feedback(&self, _response: &TestRes) -> RateLimitFeedback {
-            RateLimitFeedback {
-                retry_after: Some(Duration::from_secs(30)),
-                ..Default::default()
-            }
         }
     }
 
@@ -280,12 +232,7 @@ mod tests {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
 
-        async fn send_message(
-            &self,
-            _endpoint: &str,
-            _message: TestReq,
-            _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        async fn send_message(&self, _message: TestReq, _timeout: Duration) -> EGResult<TestRes> {
             Err(EGError::RateLimited(RateLimitFeedback {
                 is_throttled: true,
                 retry_after: Some(Duration::from_secs(30)),
@@ -314,35 +261,44 @@ mod tests {
         HttpTransport<TestReq, TestReq, TestRes, TestRes>,
         RateLimits,
     ) {
-        let mut endpoints = HashMap::new();
-        endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
         let rate_limits = rate_limits();
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
             Arc::new(Ok),
             Ok,
-            |_| HttpEndpoint::ExchangeInfo,
-            endpoints,
             rate_limits.clone(),
+            header_feedback,
             |_: &TestRes| Ok(RateLimitFeedback::default()),
         );
         (transport, rate_limits)
+    }
+
+    fn header_feedback(response: &TestRes) -> RateLimitFeedback {
+        RateLimitFeedback {
+            usage: vec![RateLimitUsage {
+                rate_limit_type: RateLimitType::RequestWeight,
+                interval_nanos: Duration::from_secs(60).as_nanos(),
+                used: Some(response.used),
+                limit: None,
+            }],
+            ..Default::default()
+        }
     }
 
     fn throttled_transport() -> (
         HttpTransport<TestReq, TestReq, TestRes, TestRes>,
         RateLimits,
     ) {
-        let mut endpoints = HashMap::new();
-        endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
         let rate_limits = rate_limits();
         let transport = HttpTransport::new(
             Arc::new(ThrottledClient),
             Arc::new(Ok),
             Ok,
-            |_| HttpEndpoint::ExchangeInfo,
-            endpoints,
             rate_limits.clone(),
+            |_: &TestRes| RateLimitFeedback {
+                retry_after: Some(Duration::from_secs(30)),
+                ..Default::default()
+            },
             |_: &TestRes| Ok(RateLimitFeedback::default()),
         );
         (transport, rate_limits)
@@ -408,8 +364,6 @@ mod tests {
         // body (e.g. `{"code":-2015,"msg":"Invalid API-key."}`), which
         // converts to an ApiError. The X-MBX-* header usage on that response
         // must still be fed back to the local limiter.
-        let mut endpoints = HashMap::new();
-        endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
         let rate_limits = rate_limits();
         let transport = HttpTransport::new(
             Arc::new(UsageClient),
@@ -420,9 +374,8 @@ mod tests {
                     message: "Invalid API-key.".into(),
                 })
             },
-            |_| HttpEndpoint::ExchangeInfo,
-            endpoints,
             rate_limits.clone(),
+            header_feedback,
             |_: &TestRes| Ok(RateLimitFeedback::default()),
         );
         assert!(rate_limits.weight.did_acquire(40).unwrap());
@@ -444,16 +397,13 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_request_applies_feedback_from_error() {
-        let mut endpoints = HashMap::new();
-        endpoints.insert(HttpEndpoint::ExchangeInfo, "exchangeInfo".into());
         let rate_limits = rate_limits();
         let transport = HttpTransport::new(
             Arc::new(RejectingClient),
             Arc::new(Ok),
             Ok,
-            |_| HttpEndpoint::ExchangeInfo,
-            endpoints,
             rate_limits.clone(),
+            |_: &TestRes| RateLimitFeedback::default(),
             |_: &TestRes| Ok(RateLimitFeedback::default()),
         );
         assert!(rate_limits.weight.did_acquire(10).unwrap());

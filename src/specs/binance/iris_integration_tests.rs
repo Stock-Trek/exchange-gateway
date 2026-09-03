@@ -1,34 +1,28 @@
 use crate::{
     clock::Clock,
     connector::Connector,
-    credentials::api_key_credential::ApiKeyCredentials,
     error::{EGError, EGResult},
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
     specs::binance::websocket::connector,
     transports::websocket::WebsocketClientTrait,
-    urls::TradingMode,
 };
 use async_trait::async_trait;
-use exchange_types::binance::{
-    error::BinanceError,
-    exchange_info::{
-        BinanceExchangeInfoParams, BinanceExchangeInfoPermission, BinanceExchangeInfoSymbolStatus,
-        BinanceOrderType,
+use exchange_types::{
+    binance::{
+        exchange_info::{
+            BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+            BinanceExchangeInfoSymbolStatus,
+        },
+        time::BinanceTimeResult,
+        websocket::{
+            BinanceWebsocketMethodName, BinanceWebsocketRequest, BinanceWebsocketResponse,
+            BinanceWebsocketResponseResult, BinanceWebsocketSignedParams,
+            BinanceWebsocketUnsignedParams,
+        },
     },
-    spot::{
-        BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
-        BinanceSpotOrderParams, BinanceTimeInForce,
-    },
-    time::BinanceTimeResult,
-    websocket::{
-        BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
-        BinanceWebsocketUnsignedRequest,
-    },
+    urls::TradingMode,
 };
-use secrecy::SecretString;
 use std::{
-    future::Future,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -36,61 +30,21 @@ use std::{
     time::Duration,
 };
 
-fn logon_response(
-    id: String,
-    status: i32,
-    error: Option<BinanceError>,
-) -> BinanceWebsocketResponse {
-    BinanceWebsocketResponse {
-        error,
-        id,
-        rateLimits: vec![],
-        result: None,
-        status,
-    }
-}
-
-fn spot_order_params() -> BinanceSpotOrderParams {
-    BinanceSpotOrderParams {
-        apiKey: Some("my-api-key".into()),
-        icebergQty: None,
-        newClientOrderId: "abc".into(),
-        newOrderRespType: BinanceNewOrderResponseType::ACK,
-        pegPriceType: None,
-        pegOffsetValue: None,
-        pegOffsetType: None,
-        price: Some("100".parse().unwrap()),
-        quantity: Some("1".parse().unwrap()),
-        quoteOrderQty: None,
-        recvWindow: None,
-        selfTradePreventionMode: BinanceSelfTradeProtection::NONE,
-        side: BinanceSide::BUY,
-        stopPrice: None,
-        strategyId: None,
-        strategyType: None,
-        symbol: "BTCUSDT".into(),
-        timeInForce: Some(BinanceTimeInForce::GTC),
-        timestamp: 1700000000000,
-        trailingDelta: None,
-        r#type: BinanceOrderType::LIMIT,
-    }
-}
-
+/// A mock WebSocket client: connects by notifying its listener, answers
+/// every request with a matching-id success reply (answering `time` with
+/// the clock's server time), and can be asked to push unsolicited messages.
 #[derive(Clone)]
 struct MockWebsocketClient {
-    listener: Arc<dyn ListenerTrait<TMessage = BinanceWebsocketResponse>>,
+    listener: Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
     connected: Arc<AtomicBool>,
     sent: Arc<Mutex<Vec<BinanceWebsocketRequest>>>,
-    logon_gate: Option<LogonGate>,
-    logon_error: Option<BinanceError>,
     clock: Clock,
 }
 
-#[derive(Clone)]
-struct LogonGate {
-    block: Arc<AtomicBool>,
-    release: Arc<tokio::sync::Notify>,
-    fail: Arc<AtomicBool>,
+impl MockWebsocketClient {
+    async fn push(&self, response: BinanceWebsocketResponse) -> EGResult<()> {
+        self.listener.on_message(response).await
+    }
 }
 
 #[async_trait]
@@ -115,49 +69,25 @@ impl WebsocketClientTrait for MockWebsocketClient {
             .lock()
             .expect("mutex should not be poisoned")
             .push(message.clone());
-        match message.metadata.method {
-            BinanceWebsocketMethodName::Logon => {
-                if let Some(gate) = &self.logon_gate {
-                    if gate.fail.load(Ordering::SeqCst) {
-                        return Err(EGError::TimedOut);
-                    }
-                    if gate.block.load(Ordering::SeqCst) {
-                        gate.release.notified().await;
-                    }
-                }
-                let response = match &self.logon_error {
-                    Some(error) => logon_response(message.metadata.id, 401, Some(error.clone())),
-                    None => logon_response(message.metadata.id, 200, None),
-                };
-                self.listener.on_message(response).await?;
-            }
-            BinanceWebsocketMethodName::Time => {
-                let response = BinanceWebsocketResponse {
-                    error: None,
-                    id: message.metadata.id,
-                    rateLimits: vec![],
-                    result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
-                        serverTime: self.clock.now_millis(),
-                    })),
-                    status: 200,
-                };
-                self.listener.on_message(response).await?;
-            }
-            // Every user request (order, exchangeInfo, ...) is answered with
-            // a matching-id success reply, as the real exchange does, so the
-            // send-and-wait call resolves.
-            _ => {
-                let response = BinanceWebsocketResponse {
-                    error: None,
-                    id: message.metadata.id,
-                    rateLimits: vec![],
-                    result: None,
-                    status: 200,
-                };
-                self.listener.on_message(response).await?;
-            }
-        }
-        Ok(())
+        let response = match message.params.unsigned.method_name() {
+            BinanceWebsocketMethodName::Time => BinanceWebsocketResponse {
+                error: None,
+                id: message.id.clone(),
+                rateLimits: vec![],
+                result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
+                    serverTime: self.clock.now_millis(),
+                })),
+                status: 200,
+            },
+            _ => BinanceWebsocketResponse {
+                error: None,
+                id: message.id.clone(),
+                rateLimits: vec![],
+                result: None,
+                status: 200,
+            },
+        };
+        self.listener.on_message(response).await
     }
     async fn disconnect(&self) -> EGResult<()> {
         self.connected.store(false, Ordering::SeqCst);
@@ -165,19 +95,10 @@ impl WebsocketClientTrait for MockWebsocketClient {
     }
 }
 
-struct IgnoreListener;
-
-#[async_trait]
-impl ListenerTrait for IgnoreListener {
-    type TMessage = BinanceWebsocketResponse;
-
-    async fn on_message(&self, _message: BinanceWebsocketResponse) -> EGResult<()> {
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
+/// A listener that records lifecycle events and messages.
 struct RecordingListener {
+    connected: Arc<AtomicBool>,
+    disconnected: Arc<AtomicBool>,
     received: Arc<Mutex<Vec<BinanceWebsocketResponse>>>,
 }
 
@@ -185,6 +106,14 @@ struct RecordingListener {
 impl ListenerTrait for RecordingListener {
     type TMessage = BinanceWebsocketResponse;
 
+    async fn on_connected(&self) -> EGResult<()> {
+        self.connected.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn on_disconnected(&self) -> EGResult<()> {
+        self.disconnected.store(true, Ordering::SeqCst);
+        Ok(())
+    }
     async fn on_message(&self, message: BinanceWebsocketResponse) -> EGResult<()> {
         self.received
             .lock()
@@ -194,23 +123,12 @@ impl ListenerTrait for RecordingListener {
     }
 }
 
-fn mock_session_connector(
+fn mock_websocket_connector(
     client_handle: std::sync::mpsc::Sender<MockWebsocketClient>,
-    logon_gate: Option<LogonGate>,
-    logon_error: Option<BinanceError>,
-    logon_timeout: Duration,
     listener: impl ListenerTrait<TMessage = BinanceWebsocketResponse> + 'static,
     clock: Clock,
-) -> EGResult<impl Connector<BinanceWebsocketUnsignedRequest, BinanceWebsocketResponse>> {
-    let credentials = ApiKeyCredentials {
-        api_key: "api-key".into(),
-        secret: SecretString::from("secret"),
-    };
-    let to_unsigned_request = Ok;
-    let to_external_response = Ok;
+) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
     let clock_clone = clock.clone();
-    let logon_gate_clone = logon_gate.clone();
-    let logon_error_clone = logon_error.clone();
     let client_creator = Box::new(
         move |(_url, websocket_listener): (
             String,
@@ -220,516 +138,114 @@ fn mock_session_connector(
                 listener: websocket_listener,
                 connected: Arc::new(AtomicBool::new(false)),
                 sent: Arc::new(Mutex::new(Vec::new())),
-                logon_gate: logon_gate_clone,
-                logon_error: logon_error_clone,
                 clock: clock_clone,
             };
             let _ = client_handle.send(mock_client.clone());
             Ok(mock_client)
         },
     );
-    connector(
-        TradingMode::Paper,
-        to_unsigned_request,
-        to_external_response,
-        Some(credentials),
-        clock,
-        listener,
-        true,
-        logon_timeout,
-        client_creator,
-    )
+    connector(TradingMode::Paper, clock, listener, client_creator)
 }
 
-fn order_request() -> BinanceWebsocketUnsignedRequest {
-    BinanceWebsocketUnsignedRequest {
-        metadata: BinanceWebsocketMetadata {
-            id: "order-1".into(),
-            method: BinanceWebsocketMethodName::PlaceOrder,
+fn exchange_info_request() -> BinanceWebsocketRequest {
+    BinanceWebsocketRequest {
+        id: "exchange-info".into(),
+        params: BinanceWebsocketSignedParams {
+            unsigned: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
+                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+            }),
+            signature: None,
         },
-        params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(spot_order_params())),
     }
 }
 
-fn exchange_info_request() -> BinanceWebsocketUnsignedRequest {
-    BinanceWebsocketUnsignedRequest {
-        metadata: BinanceWebsocketMetadata {
-            id: "exchange-info".into(),
-            method: BinanceWebsocketMethodName::ExchangeInfo,
-        },
-        params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
-            permissions: vec![BinanceExchangeInfoPermission::SPOT],
-            symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
-        }),
+fn response(id: String) -> BinanceWebsocketResponse {
+    BinanceWebsocketResponse {
+        error: None,
+        id,
+        rateLimits: vec![],
+        result: None,
+        status: 200,
     }
-}
-
-fn logon_count(sent: &[BinanceWebsocketRequest]) -> usize {
-    sent.iter()
-        .filter(|message| matches!(message.metadata.method, BinanceWebsocketMethodName::Logon))
-        .count()
-}
-
-/// Runs `body` with the runtime clock paused so it can drive timers with
-/// `advance` instead of sleeping. The clock is resumed before returning.
-async fn with_paused_clock<T>(body: impl Future<Output = T>) -> T {
-    tokio::time::pause();
-    let result = body.await;
-    tokio::time::resume();
-    result
-}
-
-/// Advances the paused clock by `step` and yields so connector tasks can
-/// make progress.
-async fn tick(step: Duration) {
-    tokio::time::advance(step).await;
-    tokio::task::yield_now().await;
-}
-
-/// Polls `condition` until it holds, driving the runtime clock forward with
-/// `pause`/`advance` instead of sleeping.
-async fn wait_until(mut condition: impl FnMut() -> bool) -> Option<()> {
-    with_paused_clock(async {
-        for _ in 0..500 {
-            if condition() {
-                return Some(());
-            }
-            tick(Duration::from_millis(10)).await;
-        }
-        None
-    })
-    .await
 }
 
 #[tokio::test]
-async fn post_logon_requests_omit_api_key_and_signature() {
+async fn websocket_connector_send_returns_the_matching_response() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector = mock_session_connector(
-        client_tx,
-        None,
-        None,
-        Duration::from_secs(20),
-        IgnoreListener,
-        Clock::default(),
-    )
-    .unwrap();
+    let listener = RecordingListener {
+        connected: Arc::new(AtomicBool::new(false)),
+        disconnected: Arc::new(AtomicBool::new(false)),
+        received: Arc::new(Mutex::new(Vec::new())),
+    };
+    let connector = mock_websocket_connector(client_tx, listener, Clock::default()).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
-    connector.authenticate().await.expect("should succeed");
-    assert!(connector.is_authenticated().unwrap());
-    connector
-        .send(order_request(), true, Duration::from_secs(5))
+    let response = connector
+        .send(exchange_info_request(), Duration::from_secs(5))
         .await
         .expect("send should succeed");
+    // The mock answers with a matching-id reply, which the send returns
+    // directly: the caller observes the raw exchange response.
+    assert_eq!(response.id, "exchange-info");
+    assert_eq!(response.status, 200);
 
-    // After session.logon the connection is authenticated, so the order must
-    // omit both apiKey and signature: apiKey without signature is an
-    // undocumented combination and is rejected (-1022).
-    let sent = client.sent.lock().unwrap();
-    let order = sent
-        .iter()
-        .find(|message| {
-            matches!(
-                message.metadata.method,
-                BinanceWebsocketMethodName::PlaceOrder
-            )
-        })
-        .expect("the order should have been sent");
-    assert!(order.params.signature.is_none());
-    let BinanceWebsocketUnsignedParams::SpotOrderRequest(params) = &order.params.params else {
-        panic!("expected a spot order request");
-    };
-    assert!(
-        params.apiKey.is_none(),
-        "post-logon requests must omit apiKey"
-    );
+    // The matching response was consumed by the send waiter: the delegate
+    // listener sees no message for it.
+    assert!(client.sent.lock().unwrap().len() == 1);
 }
 
 #[tokio::test]
-async fn sends_during_a_drop_fail_fast_until_reconnect() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let connector = Arc::new(
-        mock_session_connector(
-            client_tx,
-            None,
-            None,
-            Duration::from_secs(20),
-            IgnoreListener,
-            Clock::default(),
-        )
-        .unwrap(),
-    );
-    let client = client_rx.recv().unwrap();
-
-    connector.connect().await.expect("connect should succeed");
-    connector
-        .authenticate()
-        .await
-        .expect("authentication should succeed");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-
-    // The connection drops. The transport reports the disconnect (as iris
-    // does when the socket closes, before it reconnects), bumping the
-    // connection epoch so the session is stale while the connection is
-    // down and re-authentication cannot be bypassed.
-    client
-        .disconnect()
-        .await
-        .expect("disconnect should succeed");
-    assert!(!connector.is_authenticated().unwrap());
-
-    // A signed send while the connection is down must fail fast with
-    // `NotAuthenticated`: authentication is user-invoked rather than
-    // automatic, so no re-authentication logon is attempted while the
-    // connection is down and the order is never queued under a dead
-    // session.
-    let error = tokio::time::timeout(
-        Duration::from_secs(1),
-        connector.send(order_request(), true, Duration::from_secs(5)),
-    )
-    .await
-    .expect("send while the connection is down should fail fast, not hang")
-    .expect_err("send must fail while the connection is down");
-    assert!(matches!(error, EGError::NotAuthenticated));
-    // Neither the logon nor the order was ever recorded: the fail-fast
-    // happens before any message reaches the transport.
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-    assert!(!client.sent.lock().unwrap().iter().any(|message| matches!(
-        message.metadata.method,
-        BinanceWebsocketMethodName::PlaceOrder
-    )));
-    assert!(!connector.is_authenticated().unwrap());
-
-    // Once the connection comes back, the user re-authenticates and the
-    // signed send goes out normally.
-    client.connect().await.expect("reconnect should succeed");
-    connector
-        .authenticate()
-        .await
-        .expect("authentication should succeed");
-    connector
-        .send(order_request(), true, Duration::from_secs(5))
-        .await
-        .expect("send should succeed once the connection returns");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
-    assert!(client.sent.lock().unwrap().iter().any(|message| matches!(
-        message.metadata.method,
-        BinanceWebsocketMethodName::PlaceOrder
-    )));
-}
-
-#[tokio::test]
-async fn logon_weight_counts_against_weight_rate_limit() {
-    let (client_tx, _client_rx) = std::sync::mpsc::channel();
-    let connector = mock_session_connector(
-        client_tx,
-        None,
-        None,
-        Duration::from_secs(20),
-        IgnoreListener,
-        Clock::default(),
-    )
-    .unwrap();
-
-    connector.connect().await.expect("connect should succeed");
-    // Authentication is user-invoked, not automatic: the logon it sends
-    // consumes 2 of the 6000 weight budget.
-    connector
-        .authenticate()
-        .await
-        .expect("authentication should succeed");
-
-    // exchangeInfo costs 20, so exactly 299 requests fit in the remaining
-    // 5998. If the logon weight were not counted, a 1500th request would
-    // still fit.
-    for _ in 0..299 {
-        connector
-            .send(exchange_info_request(), false, Duration::from_secs(5))
-            .await
-            .expect("send should succeed");
-    }
-    let result = connector
-        .send(exchange_info_request(), false, Duration::from_secs(5))
-        .await;
-    assert!(matches!(result, Err(EGError::RateLimited { .. })));
-}
-
-#[tokio::test]
-async fn rejected_logon_fails_authentication_and_does_not_leak_to_listener() {
-    let (client_tx, _client_rx) = std::sync::mpsc::channel();
-    let received = Arc::new(Mutex::new(Vec::new()));
-    let listener = RecordingListener {
-        received: received.clone(),
-    };
-    let connector = mock_session_connector(
-        client_tx,
-        None,
-        Some(BinanceError {
-            code: -2014,
-            msg: "API-key format invalid.".into(),
-        }),
-        Duration::from_secs(20),
-        listener,
-        Clock::default(),
-    )
-    .unwrap();
-
-    // Connect only establishes the transport; authentication is
-    // user-invoked, so the rejected logon surfaces from `authenticate` as
-    // the exchange's actual error (not EGError::TimedOut after the full
-    // 20 s logon timeout) and fails promptly.
-    connector.connect().await.expect("connect should succeed");
-    let error = tokio::time::timeout(Duration::from_secs(1), connector.authenticate())
-        .await
-        .expect("rejected logon should fail quickly, not time out")
-        .expect_err("authentication should fail");
-    match error {
-        EGError::ApiError { code, message } => {
-            assert_eq!(code, -2014);
-            assert_eq!(message, "API-key format invalid.");
-        }
-        other => panic!("expected ApiError, got: {other:?}"),
-    }
-    // The internal session.logon rejection must not be forwarded to the
-    // user's delegate listener.
-    assert!(
-        received.lock().unwrap().is_empty(),
-        "rejected logon must not leak to the delegate listener"
-    );
-}
-
-#[tokio::test]
-async fn concurrent_sends_wait_for_in_flight_authentication() {
-    let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let logon_gate = LogonGate {
-        block: Arc::new(AtomicBool::new(false)),
-        release: Arc::new(tokio::sync::Notify::new()),
-        fail: Arc::new(AtomicBool::new(false)),
-    };
-    let connector = Arc::new(
-        mock_session_connector(
-            client_tx,
-            Some(logon_gate.clone()),
-            None,
-            Duration::from_secs(20),
-            IgnoreListener,
-            Clock::default(),
-        )
-        .unwrap(),
-    );
-    let client = client_rx.recv().unwrap();
-
-    connector.connect().await.expect("connect should succeed");
-    connector
-        .authenticate()
-        .await
-        .expect("authentication should succeed");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-
-    // Simulate the connection dropping and the iris client reconnecting.
-    client.connected.store(false, Ordering::SeqCst);
-    client.connect().await.expect("reconnect should succeed");
-    assert!(!connector.is_authenticated().unwrap());
-
-    // Hold logon responses so the next re-authentication stays in flight.
-    logon_gate.block.store(true, Ordering::SeqCst);
-
-    // Authentication is user-invoked, so each concurrent signed send
-    // re-authenticates before sending. The first one starts the
-    // re-authentication logon and blocks on the held logon response; the
-    // others wait for the in-flight attempt instead of starting a second
-    // one.
-    let sends = (0..3)
-        .map(|_| {
-            let connector = connector.clone();
-            tokio::spawn(async move {
-                connector.authenticate().await?;
-                connector
-                    .send(order_request(), true, Duration::from_secs(5))
-                    .await
-            })
-        })
-        .collect::<Vec<_>>();
-    wait_until(|| logon_count(&client.sent.lock().unwrap()) == 2)
-        .await
-        .expect("re-authentication logon should be in flight");
-    assert_eq!(
-        logon_count(&client.sent.lock().unwrap()),
-        2,
-        "re-authentication logon should be in flight"
-    );
-    // Give the concurrent sends a chance to wrongly start a second
-    // authentication by driving the clock forward instead of sleeping.
-    with_paused_clock(async {
-        for _ in 0..10 {
-            tick(Duration::from_millis(10)).await;
-        }
-    })
-    .await;
-    assert_eq!(
-        logon_count(&client.sent.lock().unwrap()),
-        2,
-        "concurrent sends must not start a second authentication"
-    );
-
-    // Release the in-flight logon: all three sends should now complete.
-    logon_gate.block.store(false, Ordering::SeqCst);
-    logon_gate.release.notify_one();
-
-    for send in sends {
-        send.await
-            .expect("send task should not panic")
-            .expect("send should succeed");
-    }
-
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 2);
-    assert!(connector.is_authenticated().unwrap());
-    let order_count = client
-        .sent
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|message| {
-            matches!(
-                message.metadata.method,
-                BinanceWebsocketMethodName::PlaceOrder
-            )
-        })
-        .count();
-    assert_eq!(order_count, 3);
-}
-
-#[tokio::test]
-async fn logon_sent_while_reconnecting_fails_fast_and_leaves_nothing_pending() {
+async fn websocket_connector_forwards_unsolicited_messages_to_the_listener() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let received = Arc::new(Mutex::new(Vec::new()));
     let listener = RecordingListener {
+        connected: Arc::new(AtomicBool::new(false)),
+        disconnected: Arc::new(AtomicBool::new(false)),
         received: received.clone(),
     };
-    let connector = Arc::new(
-        mock_session_connector(
-            client_tx,
-            None,
-            None,
-            Duration::from_secs(20),
-            listener,
-            Clock::default(),
-        )
-        .unwrap(),
-    );
+    let connector = mock_websocket_connector(client_tx, listener, Clock::default()).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
-    connector
-        .authenticate()
-        .await
-        .expect("authentication should succeed");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-
-    // The connection drops and the session goes stale.
+    // A message with no matching send waiter is a push: it is forwarded to
+    // the user's listener.
     client
-        .disconnect()
+        .push(response("unsolicited".into()))
         .await
-        .expect("disconnect should succeed");
-    assert!(!connector.is_authenticated().unwrap());
-
-    // A signed send while the connection is down must fail fast with
-    // `NotAuthenticated`: authentication is user-invoked, so no logon is
-    // attempted for the dead connection and nothing is left queued to
-    // resolve (or confuse) a later authentication.
-    let error = tokio::time::timeout(
-        Duration::from_secs(1),
-        connector.send(order_request(), true, Duration::from_secs(5)),
-    )
-    .await
-    .expect("send while reconnecting should fail fast, not hang until its timeout")
-    .expect_err("the stale session must fail the send");
-    assert!(matches!(error, EGError::NotAuthenticated));
-    assert_eq!(logon_count(&client.sent.lock().unwrap()), 1);
-    assert!(!connector.is_authenticated().unwrap());
-
-    // The connection comes back and the session is stale again, so the
-    // user's next authentication sends a fresh logon with an id distinct
-    // from the initial one, and the signed send goes out normally.
-    client.connect().await.expect("reconnect should succeed");
-    let retried_send = {
-        let connector = connector.clone();
-        tokio::spawn(async move {
-            connector
-                .authenticate()
-                .await
-                .expect("authentication should succeed");
-            connector
-                .send(order_request(), true, Duration::from_secs(5))
-                .await
-                .expect("the retried send should succeed against its own logon")
-        })
-    };
-    wait_until(|| logon_count(&client.sent.lock().unwrap()) >= 2)
-        .await
-        .expect("the retried authentication should send its logon");
-    let (initial_logon_id, retried_logon_id) = {
-        let sent = client.sent.lock().unwrap();
-        let mut logons = sent
-            .iter()
-            .filter(|message| matches!(message.metadata.method, BinanceWebsocketMethodName::Logon));
-        (
-            logons.next().expect("initial logon").metadata.id.clone(),
-            logons.next().expect("retried logon").metadata.id.clone(),
-        )
-    };
-    assert_ne!(
-        initial_logon_id, retried_logon_id,
-        "each authentication attempt must use a fresh logon id"
-    );
-
-    retried_send.await.expect("send task should not panic");
-    assert!(connector.is_authenticated().unwrap());
-
-    // No logon response leaked to the user's listener: the failed send
-    // never attempted a logon for the dead connection, and the retried
-    // logon was consumed by its own waiter.
-    assert!(
-        received.lock().unwrap().is_empty(),
-        "logon responses must not leak to the delegate listener"
-    );
+        .expect("push should succeed");
+    let received = received.lock().unwrap();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].id, "unsolicited");
 }
 
 #[tokio::test]
-async fn sync_clock_syncs_the_server_clock() {
+async fn websocket_connector_sync_clock_syncs_the_server_clock() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
     let clock = Clock::default();
-    let connector = mock_session_connector(
-        client_tx,
-        None,
-        None,
-        Duration::from_secs(20),
-        IgnoreListener,
-        clock,
-    )
-    .unwrap();
+    let listener = RecordingListener {
+        connected: Arc::new(AtomicBool::new(false)),
+        disconnected: Arc::new(AtomicBool::new(false)),
+        received: Arc::new(Mutex::new(Vec::new())),
+    };
+    let connector = mock_websocket_connector(client_tx, listener, clock.clone()).unwrap();
     let client = client_rx.recv().unwrap();
 
-    // Connect establishes the transport only: clock syncing is
-    // user-invoked, so nothing is sent and the clock still needs a sync.
     connector.connect().await.expect("connect should succeed");
+    // Nothing is sent until sync_clock is invoked.
     assert!(client.sent.lock().unwrap().is_empty());
-
     connector
         .sync_clock()
         .await
         .expect("sync_clock should succeed");
 
-    // The sync clock message is the unsigned `time` request.
+    // The sync clock message is the unsigned `time` request, answered with
+    // the mock's view of server time.
     let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 1, "sync clock");
+    assert_eq!(sent.len(), 1);
     assert!(matches!(
-        sent[0].metadata.method,
+        sent[0].params.unsigned.method_name(),
         BinanceWebsocketMethodName::Time
     ));
     assert!(
@@ -739,47 +255,60 @@ async fn sync_clock_syncs_the_server_clock() {
 }
 
 #[tokio::test]
-async fn sync_clock_syncs_the_server_clock_from_a_fresh_time_request() {
+async fn websocket_connector_connection_lifecycle_reaches_the_listener() {
     let (client_tx, client_rx) = std::sync::mpsc::channel();
-    let clock = Clock::default();
-    let connector = mock_session_connector(
-        client_tx,
-        None,
-        None,
-        Duration::from_secs(20),
-        IgnoreListener,
-        clock,
-    )
-    .unwrap();
+    let connected = Arc::new(AtomicBool::new(false));
+    let disconnected = Arc::new(AtomicBool::new(false));
+    let listener = RecordingListener {
+        connected: connected.clone(),
+        disconnected: disconnected.clone(),
+        received: Arc::new(Mutex::new(Vec::new())),
+    };
+    let connector = mock_websocket_connector(client_tx, listener, Clock::default()).unwrap();
+    let _client = client_rx.recv().unwrap();
+
+    assert!(!connector.is_connected().unwrap());
+    connector.connect().await.expect("connect should succeed");
+    assert!(connector.is_connected().unwrap());
+    assert!(connected.load(Ordering::SeqCst));
+    connector
+        .disconnect()
+        .await
+        .expect("disconnect should succeed");
+    assert!(!connector.is_connected().unwrap());
+    assert!(disconnected.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn websocket_connector_send_fails_when_the_connection_is_down() {
+    let (client_tx, client_rx) = std::sync::mpsc::channel();
+    let listener = RecordingListener {
+        connected: Arc::new(AtomicBool::new(false)),
+        disconnected: Arc::new(AtomicBool::new(false)),
+        received: Arc::new(Mutex::new(Vec::new())),
+    };
+    let connector = mock_websocket_connector(client_tx, listener, Clock::default()).unwrap();
     let client = client_rx.recv().unwrap();
 
     connector.connect().await.expect("connect should succeed");
-    // Authentication is user-invoked, not automatic.
-    connector
-        .authenticate()
+    // Dropping the connection fails any pending waiters and surfaces the
+    // disconnect to the listener.
+    client
+        .disconnect()
         .await
-        .expect("authentication should succeed");
-    assert!(connector.is_authenticated().unwrap());
-    assert_eq!(client.sent.lock().unwrap().len(), 1, "logon");
+        .expect("disconnect should succeed");
 
-    connector
-        .sync_clock()
-        .await
-        .expect("sync_clock should succeed");
-    let sent = client.sent.lock().unwrap();
-    assert_eq!(sent.len(), 2, "logon + sync_clock");
-    // The sync is a fresh unsigned time request, matched by its own id
-    // rather than tied to the authentication logon.
-    let synchronization = &sent[1];
+    // A send on a dead connection fails fast with the transport error
+    // instead of hanging until its timeout.
+    let error = tokio::time::timeout(
+        Duration::from_secs(1),
+        connector.send(exchange_info_request(), Duration::from_secs(5)),
+    )
+    .await
+    .expect("send on a dead connection should fail fast, not hang")
+    .expect_err("send must fail while the connection is down");
     assert!(
-        matches!(
-            synchronization.metadata.method,
-            BinanceWebsocketMethodName::Time
-        ),
-        "sync_clock must send a time request"
-    );
-    assert!(
-        synchronization.params.signature.is_none(),
-        "the sync_clock request must be unsigned"
+        matches!(error, EGError::External(_) | EGError::NotConnected),
+        "unexpected error: {error:?}"
     );
 }

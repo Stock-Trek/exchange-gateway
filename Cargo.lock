@@ -526,15 +526,25 @@ dependencies = [
 
 [[package]]
 name = "exchange-types"
-version = "0.4.16"
+version = "0.6.12"
 source = "registry+ssh://git@ssh.shipyard.rs/stock-trek/crate-index.git"
-checksum = "65cb2e2ae017cf9d4fb8b975ff9dbfba6175c2f5d12dc8d7db3b243a5f6eade3"
+checksum = "bba491c9854f5a501b509547b5efd8f6be8f19eec4e1f51fd3643c3d751cc8a5"
 dependencies = [
+ "bs58",
+ "data-encoding",
+ "ed25519-compact",
+ "hmac",
+ "p256",
+ "p384",
  "query-params",
  "rust_decimal",
+ "secrecy",
  "serde",
+ "serde_json",
  "serde_with",
+ "sha2",
  "strum",
+ "thiserror",
 ]
 
 [[package]]

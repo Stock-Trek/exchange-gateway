@@ -123,7 +123,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
 mod tests {
     use super::*;
     use crate::{
-        auth_gate::AuthGate,
         error::EGResult,
         listeners::listener::ListenerTrait,
         rate_limit::{
@@ -209,7 +208,6 @@ mod tests {
             RecordingDelegate {
                 received: received.clone(),
             },
-            Arc::new(AuthGate::default()),
         ));
         let client = Arc::new(TimeoutClient {
             listener: listener.clone(),
