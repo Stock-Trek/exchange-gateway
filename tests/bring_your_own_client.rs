@@ -58,7 +58,6 @@ async fn binance_http_accepts_a_caller_provided_client() {
     let mock_requests = requests.clone();
     let connector = Connect::binance_http(
         TradingMode::Paper,
-        Clock::default(),
         Box::new(move |_url| {
             Ok(MockHttpClient {
                 requests: mock_requests,
@@ -157,7 +156,6 @@ async fn binance_websocket_accepts_a_caller_provided_client() {
     let connected = Arc::new(AtomicBool::new(false));
     let connector = Connect::binance_websocket(
         TradingMode::Paper,
-        Clock::default(),
         NoopListener,
         Box::new(
             move |(url, websocket_listener): (
