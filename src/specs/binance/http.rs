@@ -1,5 +1,5 @@
 use crate::{
-    clock::{Clock, Synchronization},
+    clock::Synchronization,
     connector::Connector,
     connector_impl::ConnectorImpl,
     error::{EGError, EGResult},
@@ -31,7 +31,6 @@ use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector(
     trading_mode: TradingMode,
-    clock: Clock,
     client_creator: BoxTryCreateOnce<
         String,
         impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
@@ -50,7 +49,6 @@ pub(crate) fn connector(
     );
     Ok(ConnectorImpl::new(
         rate_limits,
-        clock,
         synchronization(Duration::from_secs(20)),
         request_weight,
         order_count,
@@ -153,6 +151,7 @@ mod test {
 
     use async_trait::async_trait;
 
+    use crate::clock::Clock;
     use crate::rate_limit::{
         rate_limit_config::RateLimitConfig, rate_limit_type::RateLimitType,
         rate_limiter::RateLimiter, rate_limits::RateLimits,
@@ -679,7 +678,6 @@ mod test {
         );
         Ok(ConnectorImpl::new(
             rate_limits,
-            Clock::default(),
             synchronization(Duration::from_secs(20)),
             request_weight,
             order_count,

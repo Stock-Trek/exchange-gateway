@@ -69,7 +69,6 @@ mod binance {
     pub(crate) async fn main() -> EGResult<()> {
         let connector = Connect::binance_websocket_iris(
             TradingMode::Paper,
-            Clock::default(),
             PrintListener,
             iris::Config::default(),
         )?;

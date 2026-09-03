@@ -32,7 +32,7 @@ mod binance {
     use std::time::Duration;
 
     pub(crate) async fn main() -> EGResult<()> {
-        let connector = Connect::binance_http_reqwest(TradingMode::Paper, Clock::default())?;
+        let connector = Connect::binance_http_reqwest(TradingMode::Paper)?;
         connector.connect().await?;
         let response = connector
             .send(

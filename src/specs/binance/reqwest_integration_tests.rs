@@ -59,19 +59,19 @@ impl HttpClientTrait for MockHttpClient {
     }
 }
 
-/// Builds an HTTP connector backed by the mock client. The mock reports the
-/// given clock as the server clock on `time` responses, as the production
-/// exchange does.
+/// Builds an HTTP connector backed by the mock client. The mock reports
+/// the given clock as the server clock on `time` responses, as the
+/// production exchange does.
 fn mock_http_connector(
     client_handle: std::sync::mpsc::Sender<MockHttpClient>,
-    clock: Clock,
+    server_clock: Clock,
 ) -> EGResult<impl Connector<BinanceHttpRequest, BinanceHttpResponse>> {
-    let mock_clock = clock.clone();
-    let mock_client = MockHttpClient { clock: mock_clock };
+    let mock_client = MockHttpClient {
+        clock: server_clock,
+    };
     let _ = client_handle.send(mock_client.clone());
     connector(
         TradingMode::Paper,
-        clock,
         Box::new(move |_url| Ok(mock_client.clone())),
     )
 }
@@ -86,30 +86,32 @@ fn time_request() -> BinanceHttpRequest {
 #[tokio::test]
 async fn http_connector_sync_clock_syncs_the_server_clock() {
     let (client_tx, _client_rx) = std::sync::mpsc::channel();
-    let clock = Clock::default();
-    let connector = mock_http_connector(client_tx, clock).unwrap();
+    let server_clock = Clock::default();
+    server_clock
+        .sync(server_clock.now_millis() + 10_000, Duration::ZERO)
+        .expect("Cannot sync the server clock");
+    let connector = mock_http_connector(client_tx, server_clock).unwrap();
 
-    // Connect establishes the transport only: clock syncing is
-    // user-invoked, so the clock is untouched until sync_clock is called.
     connector.connect().await.expect("connect should succeed");
 
-    // Sync clock issues a fresh unsigned time request and adopts the
-    // server clock (the mock reports the clock's view of server time).
+    let local = connector.server_time_millis().expect("No local time");
     connector
         .sync_clock()
         .await
         .expect("sync_clock should succeed");
+    let server_time = connector.server_time_millis().expect("No server time");
+    assert!(server_time >= local + 10_000, "server_time: {server_time}");
+    assert!(
+        server_time < local + 10_000 + 60_000,
+        "server_time: {server_time}"
+    );
 }
 
 #[tokio::test]
 async fn http_connector_send_returns_the_exchange_response() {
     let (client_tx, _client_rx) = std::sync::mpsc::channel();
-    let clock = Clock::default();
-    let connector = mock_http_connector(client_tx, clock.clone()).unwrap();
+    let connector = mock_http_connector(client_tx, Clock::default()).unwrap();
 
-    // A time request round-trips through the factory-wired connector: the
-    // mock answers with the clock's server time and the response is parsed
-    // back into a BinanceHttpResponse.
     let response = connector
         .send(time_request(), Duration::from_secs(5))
         .await
@@ -119,7 +121,8 @@ async fn http_connector_send_returns_the_exchange_response() {
     else {
         panic!("expected a time response");
     };
-    assert!(result.serverTime >= clock.now_millis() - 1000);
+    let now = connector.server_time_millis().expect("No time");
+    assert!(result.serverTime >= now - 1000);
 }
 
 /// A client rejecting every request with a server-side 429.
@@ -147,12 +150,7 @@ impl HttpClientTrait for RejectingClient {
 
 #[tokio::test]
 async fn http_connector_send_surfaces_a_rate_limited_rejection() {
-    let connector = connector(
-        TradingMode::Paper,
-        Clock::default(),
-        Box::new(|_url| Ok(RejectingClient)),
-    )
-    .unwrap();
+    let connector = connector(TradingMode::Paper, Box::new(|_url| Ok(RejectingClient))).unwrap();
     let result = connector.send(time_request(), Duration::from_secs(5)).await;
     assert!(matches!(result, Err(EGError::RateLimited(..))));
 }
