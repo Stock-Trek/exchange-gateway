@@ -11,6 +11,8 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+const MAX_PENDING_HANDLERS: usize = 1024;
+
 #[derive(Clone)]
 pub struct WebsocketListener<TransportRes, EGRes> {
     converter: ArcTryConvertValue<TransportRes, EGRes>,
@@ -61,6 +63,9 @@ where
         });
         {
             let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
+            if guard.len() >= MAX_PENDING_HANDLERS {
+                guard.retain(|existing| !existing.is_abandoned());
+            }
             guard.push(handler);
         }
         Ok(WaiterForResponse { state })
@@ -202,6 +207,10 @@ struct ResponseHandler<EGRes> {
 }
 
 impl<EGRes> ResponseHandler<EGRes> {
+    fn is_abandoned(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.abandoned)
+    }
+
     fn handle(self: Arc<Self>, response: EGRes, feedback: &RateLimitFeedback) -> EGResult<bool> {
         let is_handled = (self.filter)(&response);
         if is_handled {
@@ -550,6 +559,23 @@ mod tests {
             *received.lock().unwrap(),
             vec![TestMessage { id: 1, used: 60 }]
         );
+    }
+
+    #[tokio::test]
+    async fn stale_handlers_are_evicted_when_the_cap_is_reached() {
+        let limits = rate_limits();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let delegate = RecordingListener {
+            received: received.clone(),
+        };
+        let listener = listener(delegate, limits.clone(), feedback);
+        for _ in 0..=MAX_PENDING_HANDLERS {
+            let waiter = listener
+                .waiter_for_filtered_response(Arc::new(|message: &TestMessage| message.id == 7))
+                .unwrap();
+            drop(waiter);
+        }
+        assert!(listener.handlers.lock().unwrap().len() <= MAX_PENDING_HANDLERS);
     }
 
     #[tokio::test]
