@@ -8,23 +8,23 @@ use crate::{
         feedback::{RateLimitFeedback, RateLimitUsage},
         rate_limit_type::RateLimitType,
     },
-    specs::binance::common::{exchange_urls, rate_limit_usage, rate_limits},
+    specs::binance::common::{rate_limit_usage, rate_limits},
     transports::{
         http::{HttpClientTrait, HttpRequest, HttpResponse, HttpTransport},
         transport::Transport,
     },
-    urls::{ExchangeTransportType, TradingMode},
 };
 use exchange_types::{
     binance::{
         http::{
-            BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
-            BinanceHttpUnsignedRequest,
+            BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponsePayload,
+            BinanceHttpResponseResult, BinanceHttpUnsignedRequest,
         },
         time::BinanceTimeParams,
+        urls::BinanceUrls,
     },
-    http::IntoHttpRequest,
     rate_limited::RateLimited,
+    urls::{Protocol, TradingMode, Urls},
 };
 use std::{sync::Arc, time::Duration};
 
@@ -36,15 +36,15 @@ pub(crate) fn connector(
         impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
     >,
 ) -> EGResult<impl Connector<BinanceHttpRequest, BinanceHttpResponse>> {
-    let url = exchange_urls().url(ExchangeTransportType::Http, trading_mode);
-    let client = Arc::new(client_creator(url)?);
+    let url = BinanceUrls.url(Protocol::Http, trading_mode);
+    let client = Arc::new(client_creator(url.to_string())?);
     let rate_limits = rate_limits();
     let transport = HttpTransport::new(
         client,
         Arc::new(to_request),
         from_response,
         rate_limits.clone(),
-        http_header_feedback,
+        |_: &HttpResponse| RateLimitFeedback::default(),
         response_feedback,
     );
     Ok(ConnectorImpl::new(
@@ -63,36 +63,20 @@ fn to_filter(_request: &BinanceHttpRequest) -> ArcPredicate<BinanceHttpResponse>
 }
 
 fn to_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
-    // `IntoHttpRequest` turns the exchange request into the transport
-    // request: the origin-form request target (endpoint and query
-    // parameters), the X-MBX-APIKEY header and the body are all derived
-    // from the request and its signature, so the transport needs nothing
-    // from the exchange request itself.
-    Ok(request.into_http_request())
+    Ok(request.into())
 }
 
 fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
-    if (200..300).contains(&response.status) {
-        let result: BinanceHttpResponse = serde_json::from_slice(&response.body)
-            .map_err(|error| EGError::External(Box::new(error)))?;
-        match result {
-            BinanceHttpResponse::Success(response) => Ok(BinanceHttpResponse::Success(response)),
-            BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
-                code: error.code,
-                message: error.msg,
-            }),
-        }
-    } else {
-        Err(EGError::HttpError {
-            status: response.status,
-            body: response.body,
-        })
-    }
+    BinanceHttpResponse::try_from(response).map_err(|error| EGError::External(Box::new(error)))
 }
 
-fn http_header_feedback(response: &HttpResponse) -> RateLimitFeedback {
-    let mut feedback = RateLimitFeedback::default();
-    if let Some(used) = parse_header(&response.headers, "x-mbx-used-weight-1m") {
+fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
+    let mut feedback = RateLimitFeedback {
+        is_throttled: matches!(response.status, 429 | 418),
+        retry_after: response.headers.retry_after.map(Duration::from_secs),
+        ..Default::default()
+    };
+    if let Some(used) = response.headers.used_weight_1m {
         feedback.usage.push(RateLimitUsage {
             rate_limit_type: RateLimitType::RequestWeight,
             interval_nanos: Duration::from_secs(60).as_nanos(),
@@ -100,30 +84,30 @@ fn http_header_feedback(response: &HttpResponse) -> RateLimitFeedback {
             limit: None,
         });
     }
-    if let Some(used) = parse_header(&response.headers, "x-mbx-order-count-10s") {
-        feedback.usage.push(RateLimitUsage {
-            rate_limit_type: RateLimitType::Orders,
-            interval_nanos: Duration::from_secs(10).as_nanos(),
-            used: Some(used),
-            limit: None,
-        });
+    for (used, interval) in [
+        (response.headers.order_count_10s, Duration::from_secs(10)),
+        (
+            response.headers.order_count_1d,
+            Duration::from_secs(24 * 60 * 60),
+        ),
+    ] {
+        if let Some(used) = used {
+            feedback.usage.push(RateLimitUsage {
+                rate_limit_type: RateLimitType::Orders,
+                interval_nanos: interval.as_nanos(),
+                used: Some(used),
+                limit: None,
+            });
+        }
     }
-    if let Some(used) = parse_header(&response.headers, "x-mbx-order-count-1d") {
-        feedback.usage.push(RateLimitUsage {
-            rate_limit_type: RateLimitType::Orders,
-            interval_nanos: Duration::from_secs(24 * 60 * 60).as_nanos(),
-            used: Some(used),
-            limit: None,
-        });
+    if let BinanceHttpResponsePayload::Success(BinanceHttpResponseResult::ExchangeInfo(info)) =
+        &response.payload
+    {
+        feedback
+            .usage
+            .extend(info.rateLimits.iter().filter_map(rate_limit_usage));
     }
-    feedback
-}
-
-fn parse_header(headers: &[(String, String)], name: &str) -> Option<u32> {
-    headers
-        .iter()
-        .find(|(header_name, _)| header_name == name)
-        .and_then(|(_, value)| value.trim().parse().ok())
+    Ok(feedback)
 }
 
 fn synchronization(timeout: Duration) -> Synchronization<BinanceHttpRequest, BinanceHttpResponse> {
@@ -132,11 +116,11 @@ fn synchronization(timeout: Duration) -> Synchronization<BinanceHttpRequest, Bin
         signature: None,
     };
     let to_server_time = |response: &BinanceHttpResponse| -> EGResult<i64> {
-        match response {
-            BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) => {
+        match &response.payload {
+            BinanceHttpResponsePayload::Success(BinanceHttpResponseResult::Time(result)) => {
                 Ok(result.serverTime)
             }
-            BinanceHttpResponse::Failure(error) => Err(EGError::ApiError {
+            BinanceHttpResponsePayload::Failure(error) => Err(EGError::ApiError {
                 code: error.code,
                 message: error.msg.clone(),
             }),
@@ -148,16 +132,6 @@ fn synchronization(timeout: Duration) -> Synchronization<BinanceHttpRequest, Bin
         timeout,
         to_server_time,
     }
-}
-
-fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedback> {
-    let mut feedback = RateLimitFeedback::default();
-    if let BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(info)) = response {
-        feedback
-            .usage
-            .extend(info.rateLimits.iter().filter_map(rate_limit_usage));
-    }
-    Ok(feedback)
 }
 
 fn request_weight(request: &BinanceHttpRequest) -> u32 {
@@ -192,6 +166,7 @@ mod test {
                 BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
                 BinanceExchangeInfoResult, BinanceExchangeInfoSymbolStatus, BinanceOrderType,
             },
+            http::BinanceHttpResponseHeaders,
             rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
             signature::BinanceSignature,
             spot::{
@@ -202,6 +177,14 @@ mod test {
         },
         http::HttpMethod,
     };
+
+    fn success_response(result: BinanceHttpResponseResult) -> BinanceHttpResponse {
+        BinanceHttpResponse {
+            status: 200,
+            headers: BinanceHttpResponseHeaders::default(),
+            payload: BinanceHttpResponsePayload::Success(result),
+        }
+    }
 
     fn spot_order_params() -> BinanceSpotOrderParams {
         BinanceSpotOrderParams {
@@ -399,17 +382,21 @@ mod test {
     }
 
     #[test]
-    fn header_feedback_parses_binance_usage_headers() {
-        let response = HttpResponse {
+    fn response_feedback_reports_binance_usage_headers() {
+        let response = BinanceHttpResponse {
             status: 200,
-            body: vec![],
-            headers: vec![
-                ("x-mbx-used-weight-1m".into(), "1200".into()),
-                ("x-mbx-order-count-10s".into(), "3".into()),
-                ("x-mbx-order-count-1d".into(), "12".into()),
-            ],
+            headers: BinanceHttpResponseHeaders {
+                used_weight_1m: Some(1200),
+                order_count_10s: Some(3),
+                order_count_1d: Some(12),
+                ..Default::default()
+            },
+            payload: BinanceHttpResponsePayload::Failure(BinanceError {
+                code: 0,
+                msg: String::new(),
+            }),
         };
-        let feedback = http_header_feedback(&response);
+        let feedback = response_feedback(&response).unwrap();
         assert_eq!(feedback.usage.len(), 3);
         assert_eq!(
             feedback.usage[0].rate_limit_type,
@@ -434,13 +421,29 @@ mod test {
     }
 
     #[test]
-    fn header_feedback_ignores_missing_headers() {
-        let response = HttpResponse {
-            status: 200,
-            body: vec![],
-            headers: vec![],
+    fn response_feedback_ignores_missing_headers() {
+        let response = success_response(BinanceHttpResponseResult::Time(BinanceTimeResult {
+            serverTime: 1700000000000,
+        }));
+        assert!(response_feedback(&response).unwrap().usage.is_empty());
+    }
+
+    #[test]
+    fn response_feedback_interprets_rate_limited_statuses() {
+        let response = BinanceHttpResponse {
+            status: 429,
+            headers: BinanceHttpResponseHeaders {
+                retry_after: Some(30),
+                ..Default::default()
+            },
+            payload: BinanceHttpResponsePayload::Failure(BinanceError {
+                code: 429,
+                msg: "Too many requests".into(),
+            }),
         };
-        assert!(http_header_feedback(&response).usage.is_empty());
+        let feedback = response_feedback(&response).unwrap();
+        assert!(feedback.is_throttled);
+        assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
     }
 
     #[test]
@@ -449,7 +452,7 @@ mod test {
         // definitions but never a usage count (only WebSocket API responses
         // include `count`), so the feedback must adopt the limits without
         // reporting any usage: locally-consumed capacity stays untouched.
-        let response = BinanceHttpResponse::Success(BinanceHttpResponseResult::ExchangeInfo(
+        let response = success_response(BinanceHttpResponseResult::ExchangeInfo(
             exchange_info_result(vec![
                 rate_limit(
                     BinanceRateLimitType::REQUEST_WEIGHT,
@@ -522,18 +525,20 @@ mod test {
     }
 
     #[test]
-    fn from_http_response_parses_non_2xx_as_error() {
+    fn from_http_response_parses_any_body_as_a_binance_response() {
         let response = HttpResponse {
             status: 400,
             body: br#"{"code":-2014,"msg":"API-key format invalid."}"#.to_vec(),
             headers: vec![],
         };
-        let parsed = from_response(response);
-        match parsed {
-            Err(EGError::HttpError { status, body: _ }) => {
-                assert_eq!(status, 400);
+        let parsed = from_response(response).expect("400 should parse as a failure payload");
+        assert_eq!(parsed.status, 400);
+        match parsed.payload {
+            BinanceHttpResponsePayload::Failure(error) => {
+                assert_eq!(error.code, -2014);
+                assert_eq!(error.msg, "API-key format invalid.");
             }
-            other => panic!("expected Error, got: {other:?}"),
+            other => panic!("expected Failure, got: {other:?}"),
         }
     }
 
@@ -546,9 +551,10 @@ mod test {
         };
         let parsed = from_response(response).expect("201 should parse as a result");
         assert!(matches!(
-            parsed,
-            BinanceHttpResponse::Success(BinanceHttpResponseResult::AssetLimits(ref filters))
-                if filters.is_empty()
+            parsed.payload,
+            BinanceHttpResponsePayload::Success(BinanceHttpResponseResult::AssetLimits(
+                ref filters
+            )) if filters.is_empty()
         ));
     }
 
@@ -561,16 +567,15 @@ mod test {
             message.unsigned,
             BinanceHttpUnsignedRequest::Time(..)
         ));
-        assert!((to_filter(&message))(&BinanceHttpResponse::Success(
+        assert!((to_filter(&message))(&success_response(
             BinanceHttpResponseResult::Time(BinanceTimeResult {
                 serverTime: 1700000000000
             })
         )));
         let local = clock.now_millis();
-        let response =
-            BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(BinanceTimeResult {
-                serverTime: local + 10_000,
-            }));
+        let response = success_response(BinanceHttpResponseResult::Time(BinanceTimeResult {
+            serverTime: local + 10_000,
+        }));
         let server_time =
             (synchronization.to_server_time)(&response).expect("No server time from response");
         clock
@@ -586,10 +591,14 @@ mod test {
     #[test]
     fn sync_clock_surfaces_the_time_error() {
         let synchronization = synchronization(Duration::from_secs(20));
-        let response = BinanceHttpResponse::Failure(BinanceError {
-            code: -1021,
-            msg: "Timestamp for this request is outside of the recvWindow.".into(),
-        });
+        let response = BinanceHttpResponse {
+            status: 200,
+            headers: BinanceHttpResponseHeaders::default(),
+            payload: BinanceHttpResponsePayload::Failure(BinanceError {
+                code: -1021,
+                msg: "Timestamp for this request is outside of the recvWindow.".into(),
+            }),
+        };
         let result = (synchronization.to_server_time)(&response);
         assert!(result.is_err(), "expected ApiError");
         let Err(EGError::ApiError { code, message }) = result else {

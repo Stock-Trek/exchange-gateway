@@ -4,16 +4,21 @@ use crate::{
     error::EGResult,
     functions::BoxTryCreateOnce,
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
-    specs::binance::{http::connector as binance_http_connector, websocket::connector},
+    specs::binance::{
+        http::connector as binance_http_connector,
+        websocket::connector as binance_websocket_connector,
+    },
     transports::{
         http::{HttpClientTrait, HttpRequest, HttpResponse},
         websocket::WebsocketClientTrait,
     },
-    urls::TradingMode,
 };
-use exchange_types::binance::{
-    http::{BinanceHttpRequest, BinanceHttpResponse},
-    websocket::{BinanceWebsocketRequest, BinanceWebsocketResponse},
+use exchange_types::{
+    binance::{
+        http::{BinanceHttpRequest, BinanceHttpResponse},
+        websocket::{BinanceWebsocketRequest, BinanceWebsocketResponse},
+    },
+    urls::TradingMode,
 };
 use std::sync::Arc;
 
@@ -71,7 +76,7 @@ impl Connect {
                 Ok(client)
             },
         );
-        connector(trading_mode, clock, listener, client_creator)
+        binance_websocket_connector(trading_mode, clock, listener, client_creator)
     }
 
     pub fn binance_websocket(
@@ -89,6 +94,6 @@ impl Connect {
             > + 'static,
         >,
     ) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
-        connector(trading_mode, clock, listener, client_creator)
+        binance_websocket_connector(trading_mode, clock, listener, client_creator)
     }
 }

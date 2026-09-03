@@ -26,16 +26,18 @@ async fn main() -> exchange_gateway::error::EGResult<()> {
 #[cfg(feature = "iris")]
 mod binance {
     use exchange_gateway::prelude::*;
-    use exchange_gateway::urls::TradingMode;
-    use exchange_types::binance::{
-        exchange_info::{
-            BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
-            BinanceExchangeInfoSymbolStatus,
+    use exchange_types::{
+        binance::{
+            exchange_info::{
+                BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+                BinanceExchangeInfoSymbolStatus,
+            },
+            websocket::{
+                BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
+                BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
+            },
         },
-        websocket::{
-            BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
-            BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
-        },
+        urls::TradingMode,
     };
     use std::time::Duration;
 

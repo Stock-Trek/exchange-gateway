@@ -5,19 +5,22 @@ use crate::{
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
     specs::binance::websocket::connector,
     transports::websocket::WebsocketClientTrait,
-    urls::TradingMode,
 };
 use async_trait::async_trait;
-use exchange_types::binance::{
-    exchange_info::{
-        BinanceExchangeInfoParams, BinanceExchangeInfoPermission, BinanceExchangeInfoSymbolStatus,
+use exchange_types::{
+    binance::{
+        exchange_info::{
+            BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+            BinanceExchangeInfoSymbolStatus,
+        },
+        time::BinanceTimeResult,
+        websocket::{
+            BinanceWebsocketMethodName, BinanceWebsocketRequest, BinanceWebsocketResponse,
+            BinanceWebsocketResponseResult, BinanceWebsocketSignedParams,
+            BinanceWebsocketUnsignedParams,
+        },
     },
-    time::BinanceTimeResult,
-    websocket::{
-        BinanceWebsocketMethodName, BinanceWebsocketRequest, BinanceWebsocketResponse,
-        BinanceWebsocketResponseResult, BinanceWebsocketSignedParams,
-        BinanceWebsocketUnsignedParams,
-    },
+    urls::TradingMode,
 };
 use std::{
     sync::{

@@ -16,7 +16,6 @@ pub mod rate_limit;
 pub mod sign;
 mod specs;
 mod transports;
-pub mod urls;
 
 pub mod prelude {
     pub use crate::{
@@ -28,6 +27,6 @@ pub mod prelude {
         error::{EGError, EGResult},
         functions::ArcTryConvertValue,
         listeners::listener::ListenerTrait,
-        urls::TradingMode,
     };
+    pub use exchange_types::urls::TradingMode;
 }

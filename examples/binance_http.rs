@@ -19,13 +19,15 @@ async fn main() -> exchange_gateway::error::EGResult<()> {
 #[cfg(feature = "reqwest")]
 mod binance {
     use exchange_gateway::prelude::*;
-    use exchange_gateway::urls::TradingMode;
-    use exchange_types::binance::{
-        exchange_info::{
-            BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
-            BinanceExchangeInfoSymbolStatus,
+    use exchange_types::{
+        binance::{
+            exchange_info::{
+                BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+                BinanceExchangeInfoSymbolStatus,
+            },
+            http::{BinanceHttpRequest, BinanceHttpUnsignedRequest},
         },
-        http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpUnsignedRequest},
+        urls::TradingMode,
     };
     use std::time::Duration;
 
@@ -44,14 +46,7 @@ mod binance {
                 Duration::from_secs(10),
             )
             .await?;
-        match response {
-            BinanceHttpResponse::Success(result) => {
-                println!("exchangeInfo: {result:?}");
-            }
-            BinanceHttpResponse::Failure(error) => {
-                println!("exchangeInfo failed: {error:?}");
-            }
-        }
+        println!("exchangeInfo: {:?}", response.payload);
         connector.disconnect().await?;
         Ok(())
     }

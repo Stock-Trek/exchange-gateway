@@ -1,29 +1,12 @@
-use crate::{
-    rate_limit::{
-        feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
-        rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
-    },
-    urls::{ExchangeTransportUrls, ExchangeUrls},
+use crate::rate_limit::{
+    feedback::RateLimitUsage, rate_limit_config::RateLimitConfig, rate_limit_type::RateLimitType,
+    rate_limiter::RateLimiter, rate_limits::RateLimits,
 };
 use exchange_types::binance::rate_limits::{
     BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType,
 };
 use std::time::Duration;
 use uuid::Uuid;
-
-pub(crate) fn exchange_urls() -> ExchangeUrls {
-    ExchangeUrls::new(
-        "BINANCE",
-        ExchangeTransportUrls::new(
-            "https://api.binance.com/api/v3",
-            "https://testnet.binance.vision/api/v3",
-        ),
-        ExchangeTransportUrls::new(
-            "wss://ws-api.binance.com:443/ws-api/v3",
-            "wss://ws-api.testnet.binance.vision:443/ws-api/v3",
-        ),
-    )
-}
 
 pub(crate) fn rate_limits() -> RateLimits {
     RateLimits {

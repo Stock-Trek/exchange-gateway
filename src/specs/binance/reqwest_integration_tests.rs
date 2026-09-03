@@ -4,15 +4,17 @@ use crate::{
     error::{EGError, EGResult},
     specs::binance::http::connector,
     transports::http::{HttpClientTrait, HttpRequest, HttpResponse},
-    urls::TradingMode,
 };
 use async_trait::async_trait;
-use exchange_types::binance::{
-    http::{
-        BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
-        BinanceHttpUnsignedRequest,
+use exchange_types::{
+    binance::{
+        http::{
+            BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponsePayload,
+            BinanceHttpResponseResult, BinanceHttpUnsignedRequest,
+        },
+        time::{BinanceTimeParams, BinanceTimeResult},
     },
-    time::{BinanceTimeParams, BinanceTimeResult},
+    urls::TradingMode,
 };
 use std::time::Duration;
 
@@ -112,7 +114,9 @@ async fn http_connector_send_returns_the_exchange_response() {
         .send(time_request(), Duration::from_secs(5))
         .await
         .expect("send should succeed");
-    let BinanceHttpResponse::Success(BinanceHttpResponseResult::Time(result)) = response else {
+    let BinanceHttpResponsePayload::Success(BinanceHttpResponseResult::Time(result)) =
+        response.payload
+    else {
         panic!("expected a time response");
     };
     assert!(result.serverTime >= clock.now_millis() - 1000);
