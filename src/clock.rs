@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, TryConvertRef},
+    functions::TryConvertRef,
 };
 use std::{
     sync::{
@@ -16,10 +16,10 @@ pub struct Clock {
     last_sync: Mutex<Option<Instant>>,
 }
 
-pub(crate) struct Synchronization<EGUnsignedReq, EGRes> {
-    pub create_time_request: fn() -> (EGUnsignedReq, ArcPredicate<EGRes>),
+pub(crate) struct Synchronization<Request, Response> {
+    pub create_time_request: fn() -> Request,
     pub timeout: Duration,
-    pub to_server_time: TryConvertRef<EGRes, i64>,
+    pub to_server_time: TryConvertRef<Response, i64>,
 }
 
 impl Default for Clock {
@@ -83,10 +83,10 @@ impl Clock {
     }
 }
 
-impl<EGUnsignedReq, EGRes> std::fmt::Debug for Synchronization<EGUnsignedReq, EGRes> {
+impl<Request, Response> std::fmt::Debug for Synchronization<Request, Response> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Synchronization")
-            .field("create_request", &"<function>")
+            .field("create_time_request", &"<function>")
             .field("timeout", &self.timeout)
             .field("to_server_time", &"<function>")
             .finish()

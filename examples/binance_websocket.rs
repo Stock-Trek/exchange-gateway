@@ -32,34 +32,14 @@ mod binance {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
             BinanceExchangeInfoSymbolStatus,
         },
+        signed::BinanceSignedParams,
         websocket::{
-            BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketResponse,
-            BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
-            BinanceWebsocketUnsignedRequest,
+            BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
+            BinanceWebsocketResponse, BinanceWebsocketResponseResult,
+            BinanceWebsocketUnsignedParams,
         },
     };
     use std::time::Duration;
-
-    #[derive(Debug, Clone)]
-    struct MyRequest {
-        exchange_info: bool,
-    }
-
-    #[derive(Debug, Clone)]
-    struct MyResponse {
-        raw: Vec<u8>,
-    }
-
-    #[derive(Debug)]
-    struct ExampleError(String);
-
-    impl std::fmt::Display for ExampleError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.0)
-        }
-    }
-
-    impl std::error::Error for ExampleError {}
 
     /// Observes connection lifecycle and any messages the exchange pushes
     /// without a matching `send` waiter (the `send` response itself is
@@ -68,7 +48,7 @@ mod binance {
 
     #[async_trait::async_trait]
     impl ListenerTrait for PrintListener {
-        type TMessage = MyResponse;
+        type TMessage = BinanceWebsocketResponse;
 
         async fn on_connected(&self) -> EGResult<()> {
             println!("websocket connected");
@@ -80,63 +60,46 @@ mod binance {
             Ok(())
         }
 
-        async fn on_message(&self, message: MyResponse) -> EGResult<()> {
-            println!("pushed message: {} bytes", message.raw.len());
+        async fn on_message(&self, message: BinanceWebsocketResponse) -> EGResult<()> {
+            println!("pushed message: {:?}", message.result);
             Ok(())
-        }
-    }
-
-    fn to_unsigned_request(request: MyRequest) -> EGResult<BinanceWebsocketUnsignedRequest> {
-        if request.exchange_info {
-            Ok(BinanceWebsocketUnsignedRequest {
-                metadata: BinanceWebsocketMetadata {
-                    id: "exchange-info".into(),
-                    method: BinanceWebsocketMethodName::ExchangeInfo,
-                },
-                params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
-                    permissions: vec![BinanceExchangeInfoPermission::SPOT],
-                    symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
-                }),
-            })
-        } else {
-            Err(EGError::UnknownEndpoint)
-        }
-    }
-
-    fn to_external_response(response: BinanceWebsocketResponse) -> EGResult<MyResponse> {
-        match response.result {
-            Some(BinanceWebsocketResponseResult::ExchangeInfo(info)) => {
-                let raw = serde_json::to_vec(&info)
-                    .map_err(|e| EGError::External(Box::new(ExampleError(e.to_string()))))?;
-                Ok(MyResponse { raw })
-            }
-            _ => Err(EGError::UnknownEndpoint),
         }
     }
 
     pub(crate) async fn main() -> EGResult<()> {
         let connector = Connect::binance_websocket_iris(
             TradingMode::Paper,
-            to_unsigned_request,
-            to_external_response,
-            PrintListener,
-            None,
             Clock::default(),
-            false,
-            Duration::from_secs(20),
+            PrintListener,
             iris::Config::default(),
         )?;
         connector.connect().await?;
         let response = connector
             .send(
-                MyRequest {
-                    exchange_info: true,
+                BinanceWebsocketRequest {
+                    metadata: BinanceWebsocketMetadata {
+                        id: "exchange-info".into(),
+                        method: BinanceWebsocketMethodName::ExchangeInfo,
+                    },
+                    params: BinanceSignedParams {
+                        params: BinanceWebsocketUnsignedParams::ExchangeInfo(
+                            BinanceExchangeInfoParams {
+                                permissions: vec![BinanceExchangeInfoPermission::SPOT],
+                                symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
+                            },
+                        ),
+                        signature: None,
+                    },
                 },
-                false,
                 Duration::from_secs(10),
             )
             .await?;
-        println!("exchangeInfo: {} bytes", response.raw.len());
+        match response.result {
+            Some(BinanceWebsocketResponseResult::ExchangeInfo(info)) => {
+                println!("exchangeInfo: {info:?}");
+            }
+            _ => println!("exchangeInfo response: {:?}", response),
+        }
         connector.disconnect().await?;
         Ok(())
     }

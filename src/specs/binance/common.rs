@@ -1,21 +1,15 @@
 use crate::{
-    error::EGResult,
     rate_limit::{
         feedback::RateLimitUsage, rate_limit_config::RateLimitConfig,
         rate_limit_type::RateLimitType, rate_limiter::RateLimiter, rate_limits::RateLimits,
     },
-    sign::encrypt::{data_signer::DataSigner, signing_algorithm::SigningAlgorithm},
     urls::{ExchangeTransportUrls, ExchangeUrls},
 };
 use exchange_types::binance::rate_limits::{
     BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType,
 };
-use rust_decimal::Decimal;
-use secrecy::SecretString;
 use std::time::Duration;
 use uuid::Uuid;
-
-const DEFAULT_RECV_WINDOW_MILLIS: u64 = 5000;
 
 pub(crate) fn exchange_urls() -> ExchangeUrls {
     ExchangeUrls::new(
@@ -29,21 +23,6 @@ pub(crate) fn exchange_urls() -> ExchangeUrls {
             "wss://ws-api.testnet.binance.vision:443/ws-api/v3",
         ),
     )
-}
-
-pub(crate) fn sync_timestamp_fields(
-    timestamp: &mut i64,
-    recv_window: &mut Option<Decimal>,
-    server_time_millis: i64,
-) {
-    *timestamp = server_time_millis;
-    if recv_window.is_none() {
-        *recv_window = Some(Decimal::from(DEFAULT_RECV_WINDOW_MILLIS));
-    }
-}
-
-pub(crate) fn data_signer(secret: &SecretString) -> EGResult<DataSigner> {
-    SigningAlgorithm::HmacSha256.signer(secret)
 }
 
 pub(crate) fn rate_limits() -> RateLimits {
