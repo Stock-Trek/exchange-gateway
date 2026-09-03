@@ -16,6 +16,7 @@ pub mod rate_limit;
 pub mod sign;
 mod specs;
 mod transports;
+mod urls;
 
 pub mod prelude {
     pub use crate::{

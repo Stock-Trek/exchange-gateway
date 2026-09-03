@@ -13,6 +13,7 @@ use crate::{
         http::{HttpClientTrait, HttpRequest, HttpResponse, HttpTransport},
         transport::Transport,
     },
+    urls::url,
 };
 use exchange_types::{
     binance::{
@@ -24,7 +25,7 @@ use exchange_types::{
         urls::BinanceUrls,
     },
     rate_limited::RateLimited,
-    urls::{Protocol, TradingMode, Urls},
+    urls::{Protocol, TradingMode},
 };
 use std::{sync::Arc, time::Duration};
 
@@ -36,8 +37,8 @@ pub(crate) fn connector(
         impl HttpClientTrait<TransportReq = HttpRequest, TransportRes = HttpResponse> + 'static,
     >,
 ) -> EGResult<impl Connector<BinanceHttpRequest, BinanceHttpResponse>> {
-    let url = BinanceUrls.url(Protocol::Http, trading_mode);
-    let client = Arc::new(client_creator(url.to_string())?);
+    let url = url(&BinanceUrls, Protocol::Http, trading_mode);
+    let client = Arc::new(client_creator(url)?);
     let rate_limits = rate_limits();
     let transport = HttpTransport::new(
         client,

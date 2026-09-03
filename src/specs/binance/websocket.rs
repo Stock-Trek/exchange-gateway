@@ -11,6 +11,7 @@ use crate::{
         transport::Transport,
         websocket::{WebsocketClientTrait, WebsocketTransport},
     },
+    urls::url,
 };
 use exchange_types::{
     binance::{
@@ -22,7 +23,7 @@ use exchange_types::{
         },
     },
     rate_limited::RateLimited,
-    urls::{Protocol, TradingMode, Urls},
+    urls::{Protocol, TradingMode},
 };
 use std::{sync::Arc, time::Duration};
 
@@ -41,7 +42,7 @@ pub(crate) fn connector(
         > + 'static,
     >,
 ) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
-    let url = BinanceUrls.url(Protocol::Websocket, trading_mode);
+    let url = url(&BinanceUrls, Protocol::Websocket, trading_mode);
     let rate_limits = rate_limits();
     let websocket_listener = Arc::new(WebsocketListener::new(
         Arc::new(from_response),
@@ -49,10 +50,7 @@ pub(crate) fn connector(
         rate_limits.clone(),
         listener,
     ));
-    let client = Arc::new(client_creator((
-        url.to_string(),
-        websocket_listener.clone(),
-    ))?);
+    let client = Arc::new(client_creator((url, websocket_listener.clone()))?);
     let transport = WebsocketTransport::new(
         client,
         to_request,
