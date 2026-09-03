@@ -454,6 +454,10 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           echo "${{ env.SHIPYARD_KNOWN_HOST }}" >> ~/.ssh/known_hosts
           ssh -T git@ssh.shipyard.rs
+      - name: Configure git identity
+        run: |
+          git config --global user.email "agent@stock-trek.com"
+          git config --global user.name "Stock-Trek Agent"
       - name: Address issue
         id: address-issue
         if: steps.save-response-type.outputs.response-type == 'CAN_ADDRESS_FULLY'
@@ -515,13 +519,30 @@ jobs:
       - name: Commit and push code changes
         if: (steps.save-response-type.outputs.response-type == 'CAN_ADDRESS_FULLY') && (steps.check-for-code-changes.outputs.has-changes == 'true')
         run: |
-          git config --global user.email "agent@stock-trek.com"
-          git config --global user.name "Stock-Trek Agent"
+          # The agent may have switched branches or rebased while addressing the
+          # issue; make sure the changes are committed on (and pushed to) the
+          # issue branch rather than whatever branch we are on now.
+          ISSUE_BRANCH="${{ needs.triage.outputs.issue-branch }}"
+          if [ "$(git rev-parse --abbrev-ref HEAD)" != "${ISSUE_BRANCH}" ]; then
+            if git rev-parse --verify --quiet "refs/heads/${ISSUE_BRANCH}" >/dev/null 2>&1; then
+              git checkout "${ISSUE_BRANCH}"
+            else
+              git checkout -b "${ISSUE_BRANCH}" --track "origin/${ISSUE_BRANCH}"
+            fi
+          fi
           git add .
           if ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
             git commit -m "Commit changes made by pi"
           fi
-          git push
+          # A plain push can be rejected as non-fast-forward when the remote
+          # branch has moved since we last fetched it (e.g. a previous run
+          # pushed to it, or the agent rebased the branch onto a newer base).
+          # The branch is only ever used by this issue, so force push it.
+          # Fetch first so --force-with-lease allows overwriting the remote
+          # state we know about, while still guarding against a change that
+          # appears between the fetch and the push.
+          git fetch origin "${ISSUE_BRANCH}" 2>/dev/null || true
+          git push --force-with-lease origin "HEAD:${ISSUE_BRANCH}"
       - name: Reply if no code changes made
         if: (steps.save-response-type.outputs.response-type == 'CAN_ADDRESS_FULLY') && (steps.check-for-code-changes.outputs.has-changes == 'false')
         env:
