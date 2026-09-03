@@ -31,12 +31,12 @@ pub trait HttpClientTrait: Send + Sync {
 /// target, i.e. the endpoint and any query parameters together (e.g.
 /// `"order?symbol=BTCUSDT&signature=..."`), so the endpoint, headers and
 /// body all live on the transport request.
-pub(crate) type HttpRequest = exchange_types::http::HttpRequest;
+pub type HttpRequest = exchange_types::http::HttpRequest;
 
 /// The HTTP response shape transports exchange. It is
 /// `exchange_types::http::HttpResponse`, which `TryFrom<HttpResponse> for
 /// BinanceHttpResponse` consumes to parse the exchange response.
-pub(crate) type HttpResponse = exchange_types::http::HttpResponse;
+pub type HttpResponse = exchange_types::http::HttpResponse;
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,

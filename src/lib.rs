@@ -7,8 +7,12 @@ pub mod functions;
 pub mod listeners;
 pub mod rate_limit;
 mod specs;
-mod transports;
+pub mod transports;
 mod urls;
+
+pub use async_trait::async_trait;
+#[cfg(feature = "iris")]
+pub use iris;
 
 pub mod prelude {
     pub use crate::{

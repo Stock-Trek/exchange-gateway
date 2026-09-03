@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-pub(crate) struct IrisWebsocketClient<TransportReq, TransportRes>
+pub struct IrisWebsocketClient<TransportReq, TransportRes>
 where
     TransportReq: Serialize + Send + 'static,
     TransportRes: DeserializeOwned + Send + 'static,
@@ -27,7 +27,7 @@ where
     TransportReq: Serialize + Send + 'static,
     TransportRes: DeserializeOwned + Send + 'static,
 {
-    pub(crate) fn with_config(
+    pub fn with_config(
         url: &str,
         config: IrisConfig,
         listener: Arc<dyn ListenerTrait<TMessage = TransportRes>>,

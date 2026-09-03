@@ -8,16 +8,16 @@ use exchange_types::http::HttpMethod;
 use std::time::Duration;
 
 #[derive(Clone)]
-pub(crate) struct ReqwestHttpClient {
+pub struct ReqwestHttpClient {
     client: reqwest::Client,
     base_url: String,
 }
 
 impl ReqwestHttpClient {
-    pub(crate) fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str) -> Self {
         Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
     }
-    pub(crate) fn with_client(base_url: &str, client: reqwest::Client) -> Self {
+    pub fn with_client(base_url: &str, client: reqwest::Client) -> Self {
         Self {
             client,
             base_url: base_url.into(),
