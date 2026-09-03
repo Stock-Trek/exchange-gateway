@@ -65,10 +65,13 @@ impl HttpClientTrait for ReqwestHttpClient {
         if let Some(body) = message.body {
             request = request.body(body);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let response = request.send().await.map_err(|error| {
+            if error.is_connect() {
+                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+            } else {
+                EGError::External(Box::new(error))
+            }
+        })?;
         let status = response.status();
         let headers = response
             .headers()
@@ -254,6 +257,42 @@ mod tests {
         assert!(feedback.is_throttled);
         assert_eq!(feedback.retry_after, Some(Duration::from_secs(30)));
         assert!(feedback.usage.is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_message_maps_connect_failure_to_not_sent() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("should bind to ephemeral port");
+        let addr = listener.local_addr().expect("should have local address");
+        drop(listener);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("should build a reqwest client");
+        let client = ReqwestHttpClient::with_client(&format!("http://{addr}"), client);
+        let error = client
+            .send_message(
+                HttpRequest {
+                    method: HttpMethod::GET,
+                    query: None,
+                    headers: vec![],
+                    body: None,
+                },
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("a refused connection should fail");
+        match error {
+            EGError::NotSent(inner) => match *inner {
+                EGError::External(error) => assert!(
+                    error
+                        .downcast_ref::<reqwest::Error>()
+                        .is_some_and(|error| error.is_connect()),
+                    "expected a reqwest connect error, got: {error}"
+                ),
+                other => panic!("expected External, got: {other:?}"),
+            },
+            other => panic!("expected NotSent, got: {other:?}"),
+        }
     }
 
     fn spawn_mock_server_with_response(
