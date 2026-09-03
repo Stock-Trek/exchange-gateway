@@ -10,22 +10,22 @@ use crate::{
     },
     specs::binance::common::{exchange_urls, rate_limit_usage, rate_limits},
     transports::{
-        http::{HttpClientTrait, HttpTransport},
-        reqwest::{HttpRequest, HttpResponse},
+        http::{HttpClientTrait, HttpRequest, HttpResponse, HttpTransport},
         transport::Transport,
     },
     urls::{ExchangeTransportType, TradingMode},
 };
-use exchange_types::binance::{
-    exchange_info::BinanceExchangeInfoParams,
-    http::{
-        BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
-        BinanceHttpUnsignedRequest,
+use exchange_types::{
+    binance::{
+        http::{
+            BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
+            BinanceHttpUnsignedRequest,
+        },
+        time::BinanceTimeParams,
     },
-    signed::BinanceSignedParams,
-    time::BinanceTimeParams,
+    http::IntoHttpRequest,
+    rate_limited::RateLimited,
 };
-use reqwest::Method;
 use std::{sync::Arc, time::Duration};
 
 pub(crate) fn connector(
@@ -43,7 +43,6 @@ pub(crate) fn connector(
         client,
         Arc::new(to_request),
         from_response,
-        request_endpoint,
         rate_limits.clone(),
         http_header_feedback,
         response_feedback,
@@ -64,82 +63,12 @@ fn to_filter(_request: &BinanceHttpRequest) -> ArcPredicate<BinanceHttpResponse>
 }
 
 fn to_request(request: BinanceHttpRequest) -> EGResult<HttpRequest> {
-    let BinanceSignedParams { params, signature } = request;
-    let mut headers = Vec::new();
-    let mut set_api_key_header = |request_api_key: Option<String>| {
-        if let Some(api_key) = request_api_key {
-            headers.push(("X-MBX-APIKEY".into(), api_key));
-        }
-    };
-    let (method, query) = match params {
-        BinanceHttpUnsignedRequest::ExchangeInfo(params) => {
-            (Method::GET, Some(exchange_info_query(&params)))
-        }
-        BinanceHttpUnsignedRequest::AssetLimits(params) => (
-            Method::GET,
-            Some(signed_query(params.query_params(true), signature)),
-        ),
-        BinanceHttpUnsignedRequest::SpotOrderRequest(params) => {
-            let mut params = *params;
-            set_api_key_header(params.apiKey.take());
-            (
-                Method::POST,
-                Some(signed_query(params.query_params(true), signature)),
-            )
-        }
-        BinanceHttpUnsignedRequest::AmendOrderRequest(mut params) => {
-            set_api_key_header(params.apiKey.take());
-            (
-                Method::POST,
-                Some(signed_query(params.query_params(true), signature)),
-            )
-        }
-        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(mut params) => {
-            set_api_key_header(params.apiKey.take());
-            (
-                Method::DELETE,
-                Some(signed_query(params.query_params(true), signature)),
-            )
-        }
-        BinanceHttpUnsignedRequest::CancelOrderRequest(mut params) => {
-            set_api_key_header(params.apiKey.take());
-            (
-                Method::DELETE,
-                Some(signed_query(params.query_params(true), signature)),
-            )
-        }
-        BinanceHttpUnsignedRequest::Time(..) => (Method::GET, None),
-    };
-    Ok(HttpRequest {
-        method,
-        query,
-        headers,
-        body: None,
-    })
-}
-
-fn signed_query(query: String, signature: Option<String>) -> String {
-    match signature {
-        Some(signature) => format!("{query}&signature={signature}"),
-        None => query,
-    }
-}
-
-fn exchange_info_query(params: &BinanceExchangeInfoParams) -> String {
-    let mut pairs = Vec::new();
-    if !params.permissions.is_empty() {
-        pairs.push(format!(
-            "permissions={}",
-            params
-                .permissions
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(",")
-        ));
-    }
-    pairs.push(format!("symbolStatus={}", params.symbolStatus));
-    pairs.join("&")
+    // `IntoHttpRequest` turns the exchange request into the transport
+    // request: the origin-form request target (endpoint and query
+    // parameters), the X-MBX-APIKEY header and the body are all derived
+    // from the request and its signature, so the transport needs nothing
+    // from the exchange request itself.
+    Ok(request.into_http_request())
 }
 
 fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
@@ -158,18 +87,6 @@ fn from_response(response: HttpResponse) -> EGResult<BinanceHttpResponse> {
             status: response.status,
             body: response.body,
         })
-    }
-}
-
-fn request_endpoint(request: &BinanceHttpRequest) -> String {
-    match request.params {
-        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => "order/amend/keepPriority".into(),
-        BinanceHttpUnsignedRequest::AssetLimits(..) => "myFilters".into(),
-        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => "openOrders".into(),
-        BinanceHttpUnsignedRequest::CancelOrderRequest(..) => "order".into(),
-        BinanceHttpUnsignedRequest::ExchangeInfo(..) => "exchangeInfo".into(),
-        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => "order".into(),
-        BinanceHttpUnsignedRequest::Time(..) => "time".into(),
     }
 }
 
@@ -211,7 +128,7 @@ fn parse_header(headers: &[(String, String)], name: &str) -> Option<u32> {
 
 fn synchronization(timeout: Duration) -> Synchronization<BinanceHttpRequest, BinanceHttpResponse> {
     let create_time_request = || BinanceHttpRequest {
-        params: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
+        unsigned: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
         signature: None,
     };
     let to_server_time = |response: &BinanceHttpResponse| -> EGResult<i64> {
@@ -244,22 +161,14 @@ fn response_feedback(response: &BinanceHttpResponse) -> EGResult<RateLimitFeedba
 }
 
 fn request_weight(request: &BinanceHttpRequest) -> u32 {
-    match request.params {
-        BinanceHttpUnsignedRequest::AmendOrderRequest(..) => 4,
-        BinanceHttpUnsignedRequest::AssetLimits(..) => 40,
-        BinanceHttpUnsignedRequest::CancelAllOrdersRequest(..) => 1,
-        BinanceHttpUnsignedRequest::CancelOrderRequest(..) => 1,
-        BinanceHttpUnsignedRequest::ExchangeInfo(..) => 20,
-        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => 1,
-        BinanceHttpUnsignedRequest::Time(..) => 1,
-    }
+    // Binance's documented request weights live on the unsigned request
+    // type in exchange-types, so the gateway has no binance-specific
+    // rate-limit knowledge of its own.
+    request.unsigned.weight()
 }
 
 fn order_count(request: &BinanceHttpRequest) -> u32 {
-    match request.params {
-        BinanceHttpUnsignedRequest::SpotOrderRequest(..) => 1,
-        _ => 0,
-    }
+    request.unsigned.order_count()
 }
 
 #[cfg(test)]
@@ -275,24 +184,27 @@ mod test {
     };
 
     use super::*;
-    use exchange_types::binance::{
-        asset_limits::BinanceAssetLimitsParams,
-        error::BinanceError,
-        exchange_info::{
-            BinanceExchangeInfoPermission, BinanceExchangeInfoResult,
-            BinanceExchangeInfoSymbolStatus, BinanceOrderType,
+    use exchange_types::{
+        binance::{
+            asset_limits::BinanceAssetLimitsParams,
+            error::BinanceError,
+            exchange_info::{
+                BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
+                BinanceExchangeInfoResult, BinanceExchangeInfoSymbolStatus, BinanceOrderType,
+            },
+            rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
+            signature::BinanceSignature,
+            spot::{
+                BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
+                BinanceSpotOrderParams, BinanceTimeInForce,
+            },
+            time::BinanceTimeResult,
         },
-        rate_limits::{BinanceRateLimit, BinanceRateLimitInterval, BinanceRateLimitType},
-        spot::{
-            BinanceNewOrderResponseType, BinanceSelfTradeProtection, BinanceSide,
-            BinanceSpotOrderParams, BinanceTimeInForce,
-        },
-        time::BinanceTimeResult,
+        http::HttpMethod,
     };
 
     fn spot_order_params() -> BinanceSpotOrderParams {
         BinanceSpotOrderParams {
-            apiKey: Some("my-api-key".into()),
             icebergQty: None,
             newClientOrderId: "abc".into(),
             newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -313,6 +225,12 @@ mod test {
             timestamp: 1700000000000,
             trailingDelta: None,
             r#type: BinanceOrderType::LIMIT,
+        }
+    }
+    fn signature() -> BinanceSignature {
+        BinanceSignature {
+            apiKey: "my-api-key".into(),
+            signature: "signature".into(),
         }
     }
     fn rate_limit(
@@ -341,13 +259,15 @@ mod test {
     }
 
     #[test]
-    fn spot_order_request_carries_the_params_api_key_header() {
+    fn spot_order_request_carries_the_signature_api_key_header() {
+        // The X-MBX-APIKEY header comes from the request's signature, which
+        // carries the api key (the params themselves carry none).
         let request = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
-            signature: Some("signature".into()),
+            unsigned: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
+            signature: Some(signature()),
         };
         let request = to_request(request).unwrap();
-        assert_eq!(request.method, Method::POST);
+        assert!(matches!(request.method, HttpMethod::POST));
         assert!(
             request
                 .headers
@@ -355,29 +275,18 @@ mod test {
             "headers: {:?}",
             request.headers
         );
-        assert!(
-            !request.query.as_deref().unwrap().contains("apiKey"),
-            "query: {:?}",
-            request.query
-        );
-        assert!(
-            request
-                .query
-                .as_deref()
-                .unwrap()
-                .ends_with("&signature=signature"),
-            "query: {:?}",
-            request.query
-        );
+        let query = request.query.as_deref().expect("a query");
+        assert!(query.starts_with("order?"), "query: {query}");
+        assert!(query.ends_with("&signature=signature"), "query: {query}");
     }
 
     #[test]
-    fn spot_order_request_without_params_api_key_omits_the_header() {
-        let mut params = spot_order_params();
-        params.apiKey = None;
+    fn unsigned_request_omits_the_api_key_header() {
+        // Requests without a signature carry no api key: no header and no
+        // `signature` query parameter are added.
         let request = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(params)),
-            signature: Some("signature".into()),
+            unsigned: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
+            signature: None,
         };
         let request = to_request(request).unwrap();
         assert!(
@@ -388,106 +297,105 @@ mod test {
             "headers: {:?}",
             request.headers
         );
+        let query = request.query.as_deref().expect("a query");
+        assert!(!query.contains("apiKey"), "query: {query}");
+        assert!(!query.contains("signature"), "query: {query}");
     }
 
     #[test]
-    fn asset_limits_request_omits_the_api_key_header() {
-        // `/api/v3/myFilters` is a USER_DATA endpoint whose params carry no
-        // `apiKey` field: the caller supplies the X-MBX-APIKEY header by
-        // placing a key on the params types that support it.
+    fn asset_limits_request_carries_the_signature_api_key_header() {
+        // `/api/v3/myFilters` is a USER_DATA endpoint: like any signed
+        // request it carries the X-MBX-APIKEY header from the signature and
+        // the signature query parameter on the endpoint's origin form.
         let request = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            unsigned: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
                 recvWindow: None,
                 symbol: "BNBUSDT".into(),
                 timestamp: 1700000000000,
             }),
-            signature: Some("signature".into()),
+            signature: Some(signature()),
         };
         let request = to_request(request).unwrap();
-        assert_eq!(request.method, Method::GET);
+        assert!(matches!(request.method, HttpMethod::GET));
         assert!(
-            !request
+            request
                 .headers
-                .iter()
-                .any(|(name, _)| name == "X-MBX-APIKEY"),
+                .contains(&("X-MBX-APIKEY".into(), "my-api-key".into())),
             "headers: {:?}",
             request.headers
         );
         assert_eq!(
             request.query.as_deref(),
-            Some("symbol=BNBUSDT&timestamp=1700000000000&signature=signature")
+            Some("myFilters?symbol=BNBUSDT&timestamp=1700000000000&signature=signature")
         );
     }
 
     #[test]
     fn exchange_info_query_is_forwarded() {
         let request = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            unsigned: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
                 permissions: vec![BinanceExchangeInfoPermission::SPOT],
                 symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
             }),
             signature: None,
         };
         let request = to_request(request).unwrap();
-        assert_eq!(request.method, Method::GET);
+        assert!(matches!(request.method, HttpMethod::GET));
         assert_eq!(
             request.query.as_deref(),
-            Some("permissions=SPOT&symbolStatus=TRADING")
+            Some("exchangeInfo?permissions=SPOT&symbolStatus=TRADING")
         );
     }
 
     #[test]
     fn exchange_info_omits_empty_permissions() {
         let request = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            unsigned: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
                 permissions: vec![],
                 symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
             }),
             signature: None,
         };
         let request = to_request(request).unwrap();
-        assert_eq!(request.query.as_deref(), Some("symbolStatus=TRADING"));
+        assert_eq!(
+            request.query.as_deref(),
+            Some("exchangeInfo?symbolStatus=TRADING")
+        );
     }
 
     #[test]
     fn time_request_is_unsigned_and_routed_to_the_time_endpoint() {
         let request = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
+            unsigned: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
             signature: None,
         };
-        assert_eq!(request_endpoint(&request), "time");
         let transport_request = to_request(request).unwrap();
-        assert_eq!(transport_request.method, Method::GET);
-        assert_eq!(transport_request.query, None);
+        assert!(matches!(transport_request.method, HttpMethod::GET));
+        assert!(transport_request.headers.is_empty());
+        assert_eq!(transport_request.query.as_deref(), Some("time?"));
     }
 
     #[test]
-    fn request_endpoints_match_binance_paths() {
-        assert_eq!(
-            request_endpoint(&BinanceHttpRequest {
-                params: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
-                signature: None,
-            }),
-            "order"
-        );
-        assert_eq!(
-            request_endpoint(&BinanceHttpRequest {
-                params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+    fn amend_order_request_is_a_put_to_the_cancel_replace_endpoint() {
+        let request = BinanceHttpRequest {
+            unsigned: BinanceHttpUnsignedRequest::AmendOrderRequest(
+                exchange_types::binance::amend::BinanceAmendOrderParams {
+                    newClientOrderId: Some("abc".into()),
+                    newQty: "1".parse().unwrap(),
+                    orderId: Some(123),
+                    origClientOrderId: None,
                     recvWindow: None,
-                    symbol: "BNBUSDT".into(),
-                    timestamp: 0,
-                }),
-                signature: None,
-            }),
-            "myFilters"
-        );
-        assert_eq!(
-            request_endpoint(&BinanceHttpRequest {
-                params: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
-                signature: None,
-            }),
-            "time"
-        );
+                    symbol: "BTCUSDT".into(),
+                    timestamp: 1700000000000,
+                },
+            ),
+            signature: Some(signature()),
+        };
+        let request = to_request(request).unwrap();
+        assert!(matches!(request.method, HttpMethod::PUT));
+        let query = request.query.as_deref().expect("a query");
+        assert!(query.starts_with("order/cancelReplace?"), "query: {query}");
+        assert!(query.ends_with("&signature=signature"), "query: {query}");
     }
 
     #[test]
@@ -583,7 +491,7 @@ mod test {
     #[test]
     fn request_weights_match_binance_docs() {
         let exchange_info = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+            unsigned: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
                 permissions: vec![BinanceExchangeInfoPermission::SPOT],
                 symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
             }),
@@ -591,7 +499,7 @@ mod test {
         };
         assert_eq!(request_weight(&exchange_info), 20);
         let asset_limits = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
+            unsigned: BinanceHttpUnsignedRequest::AssetLimits(BinanceAssetLimitsParams {
                 recvWindow: None,
                 symbol: "BNBUSDT".into(),
                 timestamp: 0,
@@ -600,13 +508,13 @@ mod test {
         };
         assert_eq!(request_weight(&asset_limits), 40);
         let order = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
+            unsigned: BinanceHttpUnsignedRequest::SpotOrderRequest(Box::new(spot_order_params())),
             signature: None,
         };
         assert_eq!(request_weight(&order), 1);
         assert_eq!(order_count(&order), 1);
         let time = BinanceHttpRequest {
-            params: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
+            unsigned: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
             signature: None,
         };
         assert_eq!(request_weight(&time), 1);
@@ -650,7 +558,7 @@ mod test {
         let synchronization = synchronization(Duration::from_secs(20));
         let message = (synchronization.create_time_request)();
         assert!(matches!(
-            message.params,
+            message.unsigned,
             BinanceHttpUnsignedRequest::Time(..)
         ));
         assert!((to_filter(&message))(&BinanceHttpResponse::Success(
@@ -717,7 +625,6 @@ mod test {
 
         async fn send_message(
             &self,
-            _endpoint: &str,
             message: Self::TransportReq,
             _timeout: Duration,
         ) -> EGResult<Self::TransportRes> {
@@ -756,7 +663,6 @@ mod test {
             client,
             Arc::new(to_request),
             from_response,
-            request_endpoint,
             rate_limits.clone(),
             |_: &HttpResponse| RateLimitFeedback::default(),
             response_feedback,

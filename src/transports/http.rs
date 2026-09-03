@@ -20,17 +20,29 @@ pub trait HttpClientTrait: Send + Sync {
 
     async fn send_message(
         &self,
-        endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes>;
+}
+
+/// The HTTP request shape transports exchange. It mirrors
+/// `exchange_types::http::HttpRequest`, which `IntoHttpRequest` produces:
+/// `query` carries the origin-form request target, i.e. the endpoint and any
+/// query parameters together (e.g. `"order?symbol=BTCUSDT&signature=..."`),
+/// so the endpoint, headers and body all live on the transport request.
+pub(crate) type HttpRequest = exchange_types::http::HttpRequest;
+
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+    pub headers: Vec<(String, String)>,
 }
 
 pub(crate) struct HttpTransport<EGReq, TransportReq, TransportRes, EGRes> {
     client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
     convert_request: ArcTryConvertValue<EGReq, TransportReq>,
     convert_response: TryConvertValue<TransportRes, EGRes>,
-    to_endpoint: fn(&EGReq) -> String,
     rate_limits: RateLimits,
     header_feedback: Arc<dyn Fn(&TransportRes) -> RateLimitFeedback + Send + Sync>,
     feedback: ArcTryConvertRef<EGRes, RateLimitFeedback>,
@@ -87,7 +99,6 @@ where
         client: Arc<dyn HttpClientTrait<TransportReq = TransportReq, TransportRes = TransportRes>>,
         convert_request: ArcTryConvertValue<EGReq, TransportReq>,
         convert_response: TryConvertValue<TransportRes, EGRes>,
-        to_endpoint: fn(&EGReq) -> String,
         rate_limits: RateLimits,
         header_feedback: impl Fn(&TransportRes) -> RateLimitFeedback + Send + Sync + 'static,
         feedback: impl Fn(&EGRes) -> EGResult<RateLimitFeedback> + Send + Sync + 'static,
@@ -96,7 +107,6 @@ where
             client,
             convert_request,
             convert_response,
-            to_endpoint,
             rate_limits,
             header_feedback: Arc::new(header_feedback),
             feedback: Arc::new(feedback),
@@ -104,13 +114,8 @@ where
         }
     }
     async fn to_converted_response(&self, request: EGReq, timeout: Duration) -> EGResult<EGRes> {
-        let endpoint = (self.to_endpoint)(&request);
         let request_dto = self.try_convert_request(request)?;
-        let response_dto = match self
-            .client
-            .send_message(&endpoint, request_dto, timeout)
-            .await
-        {
+        let response_dto = match self.client.send_message(request_dto, timeout).await {
             Ok(response_dto) => response_dto,
             Err(error) => {
                 let _ = self.rate_limits.apply_feedback_from_error(&error);
@@ -155,7 +160,6 @@ impl<EGReq, TransportReq, TransportRes, EGRes> std::fmt::Debug
             .field("client", &"<HttpClientTrait>")
             .field("convert_request", &"<function>")
             .field("convert_response", &"<function>")
-            .field("to_endpoint", &"<function>")
             .field("rate_limits", &self.rate_limits)
             .field("header_feedback", &"<function>")
             .field("feedback", &"<function>")
@@ -195,12 +199,7 @@ mod tests {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
 
-        async fn send_message(
-            &self,
-            _endpoint: &str,
-            message: TestReq,
-            _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        async fn send_message(&self, message: TestReq, _timeout: Duration) -> EGResult<TestRes> {
             Ok(TestRes {
                 id: message.id,
                 used: 42,
@@ -217,12 +216,7 @@ mod tests {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
 
-        async fn send_message(
-            &self,
-            _endpoint: &str,
-            message: TestReq,
-            _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        async fn send_message(&self, message: TestReq, _timeout: Duration) -> EGResult<TestRes> {
             Ok(TestRes {
                 id: message.id,
                 used: 60,
@@ -239,12 +233,7 @@ mod tests {
         type TransportReq = TestReq;
         type TransportRes = TestRes;
 
-        async fn send_message(
-            &self,
-            _endpoint: &str,
-            _message: TestReq,
-            _timeout: Duration,
-        ) -> EGResult<TestRes> {
+        async fn send_message(&self, _message: TestReq, _timeout: Duration) -> EGResult<TestRes> {
             Err(EGError::RateLimited(RateLimitFeedback {
                 is_throttled: true,
                 retry_after: Some(Duration::from_secs(30)),
@@ -278,7 +267,6 @@ mod tests {
             Arc::new(UsageClient),
             Arc::new(Ok),
             Ok,
-            |_| "exchangeInfo".into(),
             rate_limits.clone(),
             header_feedback,
             |_: &TestRes| Ok(RateLimitFeedback::default()),
@@ -307,7 +295,6 @@ mod tests {
             Arc::new(ThrottledClient),
             Arc::new(Ok),
             Ok,
-            |_| "exchangeInfo".into(),
             rate_limits.clone(),
             |_: &TestRes| RateLimitFeedback {
                 retry_after: Some(Duration::from_secs(30)),
@@ -388,7 +375,6 @@ mod tests {
                     message: "Invalid API-key.".into(),
                 })
             },
-            |_| "exchangeInfo".into(),
             rate_limits.clone(),
             header_feedback,
             |_: &TestRes| Ok(RateLimitFeedback::default()),
@@ -417,7 +403,6 @@ mod tests {
             Arc::new(RejectingClient),
             Arc::new(Ok),
             Ok,
-            |_| "exchangeInfo".into(),
             rate_limits.clone(),
             |_: &TestRes| RateLimitFeedback::default(),
             |_: &TestRes| Ok(RateLimitFeedback::default()),

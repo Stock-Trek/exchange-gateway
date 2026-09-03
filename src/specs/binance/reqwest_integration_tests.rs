@@ -3,15 +3,15 @@ use crate::{
     connector::Connector,
     error::{EGError, EGResult},
     specs::binance::http::connector,
-    transports::{
-        http::HttpClientTrait,
-        reqwest::{HttpRequest, HttpResponse},
-    },
+    transports::http::{HttpClientTrait, HttpRequest, HttpResponse},
     urls::TradingMode,
 };
 use async_trait::async_trait;
 use exchange_types::binance::{
-    http::{BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult},
+    http::{
+        BinanceHttpRequest, BinanceHttpResponse, BinanceHttpResponseResult,
+        BinanceHttpUnsignedRequest,
+    },
     time::{BinanceTimeParams, BinanceTimeResult},
 };
 use std::time::Duration;
@@ -28,16 +28,21 @@ impl HttpClientTrait for MockHttpClient {
 
     async fn send_message(
         &self,
-        endpoint: &str,
-        _message: Self::TransportReq,
+        message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        if endpoint == "time" {
+        // The origin-form request target starts with the endpoint, so a
+        // `time` request is detected by its prefix.
+        if message
+            .query
+            .as_deref()
+            .is_some_and(|query| query.starts_with("time"))
+        {
             // Answer with the clock's view of server time, as the real
             // exchange would.
-            let body = serde_json::to_vec(&BinanceHttpResponseResult::Time(BinanceTimeResult {
+            let body = serde_json::to_vec(&BinanceTimeResult {
                 serverTime: self.clock.now_millis(),
-            }))
+            })
             .expect("serializing a time response should not fail");
             return Ok(HttpResponse {
                 status: 200,
@@ -71,9 +76,7 @@ fn mock_http_connector(
 
 fn time_request() -> BinanceHttpRequest {
     BinanceHttpRequest {
-        params: exchange_types::binance::http::BinanceHttpUnsignedRequest::Time(
-            BinanceTimeParams {},
-        ),
+        unsigned: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
         signature: None,
     }
 }
@@ -125,7 +128,6 @@ impl HttpClientTrait for RejectingClient {
 
     async fn send_message(
         &self,
-        _endpoint: &str,
         _message: Self::TransportReq,
         _timeout: Duration,
     ) -> EGResult<Self::TransportRes> {

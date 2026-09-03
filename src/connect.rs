@@ -1,32 +1,27 @@
-use crate::{clock::Clock, connector::Connector, error::EGResult, urls::TradingMode};
+use crate::{
+    clock::Clock,
+    connector::Connector,
+    error::EGResult,
+    functions::BoxTryCreateOnce,
+    listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
+    specs::binance::{http::connector as binance_http_connector, websocket::connector},
+    transports::{
+        http::{HttpClientTrait, HttpRequest, HttpResponse},
+        websocket::WebsocketClientTrait,
+    },
+    urls::TradingMode,
+};
+use exchange_types::binance::{
+    http::{BinanceHttpRequest, BinanceHttpResponse},
+    websocket::{BinanceWebsocketRequest, BinanceWebsocketResponse},
+};
 use std::sync::Arc;
 
 #[cfg(feature = "iris")]
-use {
-    crate::{
-        listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
-        specs::binance::websocket::connector as binance_websocket_connector,
-        transports::iris::IrisWebsocketClient,
-    },
-    exchange_types::binance::websocket::{BinanceWebsocketRequest, BinanceWebsocketResponse},
-    iris::Config as IrisConfig,
-};
+use {crate::transports::iris::IrisWebsocketClient, iris::Config as IrisConfig};
 
 #[cfg(feature = "reqwest")]
-use {
-    crate::{
-        functions::BoxTryCreateOnce,
-        specs::binance::http::connector as binance_http_connector,
-        transports::{
-            http::HttpClientTrait,
-            reqwest::{HttpRequest, HttpResponse, ReqwestHttpClient},
-        },
-    },
-    exchange_types::binance::http::{BinanceHttpRequest, BinanceHttpResponse},
-};
-
-#[cfg(feature = "iris")]
-use crate::transports::websocket::WebsocketClientTrait;
+use crate::transports::reqwest::ReqwestHttpClient;
 
 #[derive(Debug, Clone)]
 pub struct Connect;
@@ -43,7 +38,7 @@ impl Connect {
             Box::new(|url| Ok(ReqwestHttpClient::new(&url))),
         )
     }
-    #[cfg(feature = "reqwest")]
+
     pub fn binance_http(
         trading_mode: TradingMode,
         clock: Clock,
@@ -76,9 +71,9 @@ impl Connect {
                 Ok(client)
             },
         );
-        binance_websocket_connector(trading_mode, clock, listener, client_creator)
+        connector(trading_mode, clock, listener, client_creator)
     }
-    #[cfg(feature = "iris")]
+
     pub fn binance_websocket(
         trading_mode: TradingMode,
         clock: Clock,
@@ -94,6 +89,6 @@ impl Connect {
             > + 'static,
         >,
     ) -> EGResult<impl Connector<BinanceWebsocketRequest, BinanceWebsocketResponse>> {
-        binance_websocket_connector(trading_mode, clock, listener, client_creator)
+        connector(trading_mode, clock, listener, client_creator)
     }
 }

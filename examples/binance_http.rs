@@ -35,7 +35,7 @@ mod binance {
         let response = connector
             .send(
                 BinanceHttpRequest {
-                    params: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
+                    unsigned: BinanceHttpUnsignedRequest::ExchangeInfo(BinanceExchangeInfoParams {
                         permissions: vec![BinanceExchangeInfoPermission::SPOT],
                         symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
                     }),

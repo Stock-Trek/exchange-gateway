@@ -13,13 +13,15 @@ use crate::{
     },
     urls::{ExchangeTransportType, TradingMode},
 };
-use exchange_types::binance::{
-    signed::BinanceSignedParams,
-    time::BinanceTimeParams,
-    websocket::{
-        BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
+use exchange_types::{
+    binance::{
+        time::BinanceTimeParams,
+        websocket::{
+            BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
+            BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
+        },
     },
+    rate_limited::RateLimited,
 };
 use std::{sync::Arc, time::Duration};
 
@@ -65,7 +67,7 @@ pub(crate) fn connector(
 }
 
 fn to_filter(request: &BinanceWebsocketRequest) -> ArcPredicate<BinanceWebsocketResponse> {
-    let request_id = request.metadata.id.clone();
+    let request_id = request.id.clone();
     Arc::new(move |response: &BinanceWebsocketResponse| response.id == request_id)
 }
 
@@ -97,12 +99,9 @@ fn synchronization(
     timeout: Duration,
 ) -> Synchronization<BinanceWebsocketRequest, BinanceWebsocketResponse> {
     let create_time_request = || BinanceWebsocketRequest {
-        metadata: BinanceWebsocketMetadata {
-            id: id(),
-            method: BinanceWebsocketMethodName::Time,
-        },
-        params: BinanceSignedParams {
-            params: BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {}),
+        id: id(),
+        params: BinanceWebsocketSignedParams {
+            unsigned: BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {}),
             signature: None,
         },
     };
@@ -129,23 +128,14 @@ fn response_feedback(response: &BinanceWebsocketResponse) -> EGResult<RateLimitF
 }
 
 fn request_weight(request: &BinanceWebsocketRequest) -> u32 {
-    match &request.params.params {
-        BinanceWebsocketUnsignedParams::AmendOrderRequest(..) => 4,
-        BinanceWebsocketUnsignedParams::AssetLimits(..) => 40,
-        BinanceWebsocketUnsignedParams::CancelAllOrdersRequest(..) => 1,
-        BinanceWebsocketUnsignedParams::CancelOrderRequest(..) => 1,
-        BinanceWebsocketUnsignedParams::ExchangeInfo(..) => 20,
-        BinanceWebsocketUnsignedParams::Logon(..) => 2,
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(..) => 1,
-        BinanceWebsocketUnsignedParams::Time(..) => 1,
-    }
+    // Binance's documented request weights live on the unsigned params in
+    // exchange-types, so the gateway has no binance-specific rate-limit
+    // knowledge of its own.
+    request.params.unsigned.weight()
 }
 
 fn order_count(request: &BinanceWebsocketRequest) -> u32 {
-    match &request.params.params {
-        BinanceWebsocketUnsignedParams::SpotOrderRequest(..) => 1,
-        _ => 0,
-    }
+    request.params.unsigned.order_count()
 }
 
 #[cfg(test)]
@@ -170,14 +160,10 @@ mod test {
 
     fn spot_order_request() -> BinanceWebsocketRequest {
         BinanceWebsocketRequest {
-            metadata: BinanceWebsocketMetadata {
-                id: "1".into(),
-                method: BinanceWebsocketMethodName::PlaceOrder,
-            },
-            params: BinanceSignedParams {
-                params: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(
+            id: "1".into(),
+            params: BinanceWebsocketSignedParams {
+                unsigned: BinanceWebsocketUnsignedParams::SpotOrderRequest(Box::new(
                     BinanceSpotOrderParams {
-                        apiKey: Some("my-api-key".into()),
                         icebergQty: None,
                         newClientOrderId: "abc".into(),
                         newOrderRespType: BinanceNewOrderResponseType::ACK,
@@ -224,7 +210,7 @@ mod test {
     fn filter_matches_the_request_id_only() {
         let request = spot_order_request();
         let filter = to_filter(&request);
-        let id = request.metadata.id.clone();
+        let id = request.id.clone();
         let response = BinanceWebsocketResponse {
             error: None,
             id: id.clone(),
@@ -247,10 +233,10 @@ mod test {
     fn to_request_and_from_response_are_identity() {
         let request = spot_order_request();
         let round_tripped = to_request(request.clone()).unwrap();
-        assert_eq!(round_tripped.metadata.id, request.metadata.id);
+        assert_eq!(round_tripped.id, request.id);
         let response = BinanceWebsocketResponse {
             error: None,
-            id: request.metadata.id,
+            id: request.id,
             rateLimits: vec![],
             result: None,
             status: 200,
@@ -307,13 +293,9 @@ mod test {
     #[test]
     fn request_weights_match_binance_docs() {
         let logon = BinanceWebsocketRequest {
-            metadata: BinanceWebsocketMetadata {
-                id: "1".into(),
-                method: BinanceWebsocketMethodName::Logon,
-            },
-            params: BinanceSignedParams {
-                params: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams {
-                    apiKey: "k".into(),
+            id: "1".into(),
+            params: BinanceWebsocketSignedParams {
+                unsigned: BinanceWebsocketUnsignedParams::Logon(BinanceLogonParams {
                     timestamp: 0,
                 }),
                 signature: None,
@@ -321,12 +303,9 @@ mod test {
         };
         assert_eq!(request_weight(&logon), 2);
         let exchange_info = BinanceWebsocketRequest {
-            metadata: BinanceWebsocketMetadata {
-                id: "2".into(),
-                method: BinanceWebsocketMethodName::ExchangeInfo,
-            },
-            params: BinanceSignedParams {
-                params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
+            id: "2".into(),
+            params: BinanceWebsocketSignedParams {
+                unsigned: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
                     permissions: vec![BinanceExchangeInfoPermission::SPOT],
                     symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
                 }),
@@ -336,12 +315,9 @@ mod test {
         assert_eq!(request_weight(&exchange_info), 20);
         assert_eq!(order_count(&exchange_info), 0);
         let time = BinanceWebsocketRequest {
-            metadata: BinanceWebsocketMetadata {
-                id: "3".into(),
-                method: BinanceWebsocketMethodName::Time,
-            },
-            params: BinanceSignedParams {
-                params: BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {}),
+            id: "3".into(),
+            params: BinanceWebsocketSignedParams {
+                unsigned: BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {}),
                 signature: None,
             },
         };
@@ -357,7 +333,7 @@ mod test {
         let synchronization = synchronization(Duration::from_secs(20));
         let message = (synchronization.create_time_request)();
         assert!(matches!(
-            message.params.params,
+            message.params.unsigned,
             BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {})
         ));
         // The time request carries no payload to sign.
@@ -365,7 +341,7 @@ mod test {
         let local = clock.now_millis();
         let response = BinanceWebsocketResponse {
             error: None,
-            id: message.metadata.id.clone(),
+            id: message.id.clone(),
             rateLimits: vec![],
             result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
                 serverTime: local + 10_000,

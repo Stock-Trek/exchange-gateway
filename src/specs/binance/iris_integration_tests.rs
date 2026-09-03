@@ -12,11 +12,11 @@ use exchange_types::binance::{
     exchange_info::{
         BinanceExchangeInfoParams, BinanceExchangeInfoPermission, BinanceExchangeInfoSymbolStatus,
     },
-    signed::BinanceSignedParams,
     time::BinanceTimeResult,
     websocket::{
-        BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-        BinanceWebsocketResponse, BinanceWebsocketResponseResult, BinanceWebsocketUnsignedParams,
+        BinanceWebsocketMethodName, BinanceWebsocketRequest, BinanceWebsocketResponse,
+        BinanceWebsocketResponseResult, BinanceWebsocketSignedParams,
+        BinanceWebsocketUnsignedParams,
     },
 };
 use std::{
@@ -66,10 +66,10 @@ impl WebsocketClientTrait for MockWebsocketClient {
             .lock()
             .expect("mutex should not be poisoned")
             .push(message.clone());
-        let response = match message.metadata.method {
+        let response = match message.params.unsigned.method_name() {
             BinanceWebsocketMethodName::Time => BinanceWebsocketResponse {
                 error: None,
-                id: message.metadata.id,
+                id: message.id.clone(),
                 rateLimits: vec![],
                 result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
                     serverTime: self.clock.now_millis(),
@@ -78,7 +78,7 @@ impl WebsocketClientTrait for MockWebsocketClient {
             },
             _ => BinanceWebsocketResponse {
                 error: None,
-                id: message.metadata.id,
+                id: message.id.clone(),
                 rateLimits: vec![],
                 result: None,
                 status: 200,
@@ -146,12 +146,9 @@ fn mock_websocket_connector(
 
 fn exchange_info_request() -> BinanceWebsocketRequest {
     BinanceWebsocketRequest {
-        metadata: BinanceWebsocketMetadata {
-            id: "exchange-info".into(),
-            method: BinanceWebsocketMethodName::ExchangeInfo,
-        },
-        params: BinanceSignedParams {
-            params: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
+        id: "exchange-info".into(),
+        params: BinanceWebsocketSignedParams {
+            unsigned: BinanceWebsocketUnsignedParams::ExchangeInfo(BinanceExchangeInfoParams {
                 permissions: vec![BinanceExchangeInfoPermission::SPOT],
                 symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,
             }),
@@ -245,7 +242,7 @@ async fn websocket_connector_sync_clock_syncs_the_server_clock() {
     let sent = client.sent.lock().unwrap();
     assert_eq!(sent.len(), 1);
     assert!(matches!(
-        sent[0].metadata.method,
+        sent[0].params.unsigned.method_name(),
         BinanceWebsocketMethodName::Time
     ));
     assert!(

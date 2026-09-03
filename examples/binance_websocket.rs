@@ -32,11 +32,9 @@ mod binance {
             BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
             BinanceExchangeInfoSymbolStatus,
         },
-        signed::BinanceSignedParams,
         websocket::{
-            BinanceWebsocketMetadata, BinanceWebsocketMethodName, BinanceWebsocketRequest,
-            BinanceWebsocketResponse, BinanceWebsocketResponseResult,
-            BinanceWebsocketUnsignedParams,
+            BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
+            BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
         },
     };
     use std::time::Duration;
@@ -77,12 +75,9 @@ mod binance {
         let response = connector
             .send(
                 BinanceWebsocketRequest {
-                    metadata: BinanceWebsocketMetadata {
-                        id: "exchange-info".into(),
-                        method: BinanceWebsocketMethodName::ExchangeInfo,
-                    },
-                    params: BinanceSignedParams {
-                        params: BinanceWebsocketUnsignedParams::ExchangeInfo(
+                    id: "exchange-info".into(),
+                    params: BinanceWebsocketSignedParams {
+                        unsigned: BinanceWebsocketUnsignedParams::ExchangeInfo(
                             BinanceExchangeInfoParams {
                                 permissions: vec![BinanceExchangeInfoPermission::SPOT],
                                 symbolStatus: BinanceExchangeInfoSymbolStatus::TRADING,

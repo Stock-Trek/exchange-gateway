@@ -1,25 +1,11 @@
 use crate::{
     error::{EGError, EGResult},
     rate_limit::feedback::RateLimitFeedback,
-    transports::http::HttpClientTrait,
+    transports::http::{HttpClientTrait, HttpRequest, HttpResponse},
 };
 use async_trait::async_trait;
+use exchange_types::http::HttpMethod;
 use std::time::Duration;
-
-#[derive(Debug, Clone)]
-pub struct HttpRequest {
-    pub(crate) method: reqwest::Method,
-    pub(crate) query: Option<String>,
-    pub(crate) headers: Vec<(String, String)>,
-    pub(crate) body: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct HttpResponse {
-    pub status: u16,
-    pub body: Vec<u8>,
-    pub headers: Vec<(String, String)>,
-}
 
 #[derive(Clone)]
 pub(crate) struct ReqwestHttpClient {
@@ -37,13 +23,24 @@ impl ReqwestHttpClient {
             base_url: base_url.into(),
         }
     }
-    fn build_url(&self, endpoint: &str, query: Option<&str>) -> String {
-        let mut url = format!("{}/{}", self.base_url, endpoint.trim_start_matches('/'));
-        if let Some(query) = query.filter(|query| !query.is_empty()) {
-            url.push('?');
-            url.push_str(query);
+    fn build_url(&self, query: Option<&str>) -> String {
+        match query {
+            // `query` carries the origin-form request target: the endpoint
+            // and any query parameters together (e.g. `"order?symbol=..."`).
+            Some(query) if !query.is_empty() => {
+                format!("{}/{}", self.base_url, query.trim_start_matches('/'))
+            }
+            _ => self.base_url.clone(),
         }
-        url
+    }
+    fn method(method: HttpMethod) -> reqwest::Method {
+        match method {
+            HttpMethod::GET => reqwest::Method::GET,
+            HttpMethod::DELETE => reqwest::Method::DELETE,
+            HttpMethod::PATCH => reqwest::Method::PATCH,
+            HttpMethod::POST => reqwest::Method::POST,
+            HttpMethod::PUT => reqwest::Method::PUT,
+        }
     }
 }
 
@@ -54,12 +51,14 @@ impl HttpClientTrait for ReqwestHttpClient {
 
     async fn send_message(
         &self,
-        endpoint: &str,
         message: Self::TransportReq,
         timeout: Duration,
     ) -> EGResult<Self::TransportRes> {
-        let url = self.build_url(endpoint, message.query.as_deref());
-        let mut request = self.client.request(message.method, &url).timeout(timeout);
+        let url = self.build_url(message.query.as_deref());
+        let mut request = self
+            .client
+            .request(Self::method(message.method), &url)
+            .timeout(timeout);
         for (name, value) in &message.headers {
             request = request.header(name, value);
         }
@@ -149,10 +148,9 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let response = client
             .send_message(
-                "order",
                 HttpRequest {
-                    method: reqwest::Method::POST,
-                    query: Some("symbol=BTCUSDT".into()),
+                    method: HttpMethod::POST,
+                    query: Some("order?symbol=BTCUSDT".into()),
                     headers: vec![("X-Test".into(), "abc".into())],
                     body: Some(b"hello".to_vec()),
                 },
@@ -180,10 +178,9 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let error = client
             .send_message(
-                "order",
                 HttpRequest {
-                    method: reqwest::Method::POST,
-                    query: None,
+                    method: HttpMethod::POST,
+                    query: Some("order".into()),
                     headers: vec![],
                     body: None,
                 },
@@ -212,10 +209,9 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let error = client
             .send_message(
-                "order",
                 HttpRequest {
-                    method: reqwest::Method::POST,
-                    query: None,
+                    method: HttpMethod::POST,
+                    query: Some("order".into()),
                     headers: vec![],
                     body: None,
                 },
@@ -241,10 +237,9 @@ mod tests {
         let client = ReqwestHttpClient::new(&base_url);
         let error = client
             .send_message(
-                "order",
                 HttpRequest {
-                    method: reqwest::Method::POST,
-                    query: None,
+                    method: HttpMethod::POST,
+                    query: Some("order".into()),
                     headers: vec![],
                     body: None,
                 },

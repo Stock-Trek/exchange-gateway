@@ -10,7 +10,7 @@ async-trait = "0.1.89"
 bs58 = "0.5.1"
 data-encoding = "2.11.0"
 ed25519-compact = "2.3.0"
-exchange-types = { version = "0.4.16", registry = "shipyard" }
+exchange-types = { version = "0.6.10", registry = "shipyard" }
 futures-timer = "3.0"
 hmac = "0.12"
 iris = { version = "1.0.1", registry = "shipyard", optional = true }
@@ -32,6 +32,7 @@ iris = ["dep:iris", "dep:serde_json", "dep:serde", "exchange-types/serde"]
 reqwest = ["dep:reqwest", "dep:serde_json", "dep:serde", "exchange-types/serde"]
 serde = [
     "dep:serde",
+    "dep:serde_json",
     "exchange-types/serde",
     "secrecy/serde",
 ]
