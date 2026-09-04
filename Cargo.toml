@@ -27,8 +27,8 @@ uuid = { version = "1.23.3", features = ["v4"] }
 
 [features]
 default = []
-iris = ["dep:iris", "dep:serde_json", "dep:serde", "exchange-types/serde"]
-reqwest = ["dep:reqwest", "dep:serde_json", "dep:serde", "exchange-types/serde"]
+iris = ["dep:iris", "dep:serde_json", "exchange-types/serde"]
+reqwest = ["dep:reqwest", "dep:serde_json", "exchange-types/serde"]
 
 [dev-dependencies]
 ctor = "0.2"
