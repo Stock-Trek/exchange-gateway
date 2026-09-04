@@ -18,8 +18,8 @@ p256 = "0.13"
 p384 = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 rust_decimal = "1.42"
-serde = { version = "1.0.228", features = ["derive"], optional = true }
-serde_json = { version = "1.0.150", optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
 sha2 = "0.10"
 strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.18"
@@ -27,8 +27,8 @@ uuid = { version = "1.23.3", features = ["v4"] }
 
 [features]
 default = []
-iris = ["dep:iris", "dep:serde_json", "exchange-types/serde"]
-reqwest = ["dep:reqwest", "dep:serde_json", "exchange-types/serde"]
+iris = ["dep:iris"]
+reqwest = ["dep:reqwest"]
 
 [dev-dependencies]
 ctor = "0.2"
