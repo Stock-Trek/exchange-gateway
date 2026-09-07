@@ -6,7 +6,7 @@ use crate::{
     },
     clock::Clock,
     error::{EGError, EGResult},
-    functions::BoxTryCreateOnce,
+    functions::{ArcTryConvertValue, BoxTryCreateOnce},
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
     rate_limit::rate_limits::RateLimits,
     server_time_response::ServerTimeResponse,
@@ -64,30 +64,29 @@ impl<Client> Connector<Client> {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
         Self::try_new_http(trading_mode, urls, rate_limits, signer, client_creator)
     }
-    pub fn try_new_websocket<C>(
+    pub fn try_new_websocket<C, TransportRes>(
         trading_mode: TradingMode,
         urls: &impl Urls,
         rate_limits: RateLimits,
         signer: Signer,
+        converter: ArcTryConvertValue<TransportRes, serde_json::Value>,
         listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
         client_creator: BoxTryCreateOnce<
-            (String, Arc<WebsocketListener<String, serde_json::Value>>),
+            (
+                String,
+                Arc<WebsocketListener<TransportRes, serde_json::Value>>,
+            ),
             C,
         >,
-    ) -> EGResult<Connector<(C, Arc<WebsocketListener<String, serde_json::Value>>)>>
+    ) -> EGResult<Connector<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)>>
     where
         C: WebsocketClient,
     {
-        let websocket_listener = Arc::new(WebsocketListener::new(
-            Arc::new(|response: String| {
-                serde_json::to_value(response).map_err(|e| EGError::External(Box::new(e)))
-            }),
-            listener,
-        ));
+        let websocket_listener = Arc::new(WebsocketListener::new(converter, listener));
         let url = urls.url(Protocol::Websocket, trading_mode);
         let client = client_creator((url.into(), websocket_listener.clone()))?;
         Ok(
-            Connector::<(C, Arc<WebsocketListener<String, serde_json::Value>>)> {
+            Connector::<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)> {
                 rate_limits,
                 clock: Clock::new(),
                 signer,
@@ -106,24 +105,30 @@ impl<Client> Connector<Client> {
     ) -> EGResult<
         Connector<(
             IrisWebsocketClient,
-            Arc<WebsocketListener<String, serde_json::Value>>,
+            Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
         )>,
     > {
         let client_creator: BoxTryCreateOnce<
-            (String, Arc<WebsocketListener<String, serde_json::Value>>),
+            (
+                String,
+                Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
+            ),
             IrisWebsocketClient,
         > = Box::new(move |(url, websocket_listener)| {
             Ok(IrisWebsocketClient::with_config(
                 &url,
                 iris_config,
-                websocket_listener as Arc<dyn ListenerTrait<TMessage = serde_json::Value>>,
+                websocket_listener,
             ))
         });
+        let converter: ArcTryConvertValue<serde_json::Value, serde_json::Value> =
+            Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> { Ok(value) });
         Self::try_new_websocket(
             trading_mode,
             urls,
             rate_limits,
             signer,
+            converter,
             listener,
             client_creator,
         )
@@ -224,7 +229,7 @@ where
     }
 }
 
-impl<Client> Connector<(Client, WebsocketListener<String, serde_json::Value>)>
+impl<Client, TransportRes> Connector<(Client, WebsocketListener<TransportRes, serde_json::Value>)>
 where
     Client: WebsocketClient,
 {

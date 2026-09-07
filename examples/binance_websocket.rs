@@ -33,7 +33,7 @@ mod binance {
                 BinanceExchangeInfoSymbolStatus,
             },
             websocket::{
-                BinanceResponse, BinanceResponseResult, BinanceRequest,
+                BinanceRequest, BinanceResponse, BinanceResponseResult,
                 BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
             },
         },

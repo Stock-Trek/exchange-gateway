@@ -25,7 +25,7 @@ mod binance {
                 BinanceExchangeInfoParams, BinanceExchangeInfoPermission,
                 BinanceExchangeInfoSymbolStatus,
             },
-            http::{BinanceRequest, BinanceHttpUnsignedRequest},
+            http::{BinanceHttpUnsignedRequest, BinanceRequest},
         },
         urls::TradingMode,
     };
