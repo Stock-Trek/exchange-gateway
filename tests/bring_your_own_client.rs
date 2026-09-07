@@ -1,20 +1,20 @@
 use exchange_gateway::{
     async_trait,
+    clients::http::{HttpClientTrait, HttpRequest, HttpResponse},
+    clients::websocket::WebsocketClientTrait,
     listeners::websocket_listener::WebsocketListener,
     prelude::*,
-    transports::http::{HttpClientTrait, HttpRequest, HttpResponse},
-    transports::websocket::WebsocketClientTrait,
 };
 use exchange_types::{
     binance::{
         http::{
-            BinanceHttpRequest, BinanceHttpResponsePayload, BinanceHttpResponseResult,
-            BinanceHttpUnsignedRequest,
+            BinanceHttpUnsignedRequest, BinanceRequest, BinanceResponsePayload,
+            BinanceResponseResult,
         },
         time::{BinanceTimeParams, BinanceTimeResult},
         websocket::{
-            BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
-            BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
+            BinanceRequest, BinanceResponse, BinanceResponseResult, BinanceWebsocketSignedParams,
+            BinanceWebsocketUnsignedParams,
         },
     },
     http::HttpMethod,
@@ -70,7 +70,7 @@ async fn binance_http_accepts_a_caller_provided_client() {
     assert!(matches!(connector.is_connected(), Ok(true)));
     let response = connector
         .send(
-            BinanceHttpRequest {
+            BinanceRequest {
                 unsigned: BinanceHttpUnsignedRequest::Time(BinanceTimeParams {}),
                 signature: None,
             },
@@ -83,11 +83,11 @@ async fn binance_http_accepts_a_caller_provided_client() {
         .await
         .expect("disconnect should succeed");
     let payload = match response.payload {
-        BinanceHttpResponsePayload::Success(result) => result,
+        BinanceResponsePayload::Success(result) => result,
         failure => panic!("expected a success payload, got: {failure:?}"),
     };
     let time = match payload {
-        BinanceHttpResponseResult::Time(time) => time,
+        BinanceResponseResult::Time(time) => time,
         other => panic!("expected a time result, got: {other:?}"),
     };
     assert_eq!(time.serverTime, 1_700_000_000_000);
@@ -101,22 +101,22 @@ struct NoopListener;
 
 #[async_trait]
 impl ListenerTrait for NoopListener {
-    type TMessage = BinanceWebsocketResponse;
+    type TMessage = BinanceResponse;
 
-    async fn on_message(&self, _message: BinanceWebsocketResponse) -> EGResult<()> {
+    async fn on_message(&self, _message: BinanceResponse) -> EGResult<()> {
         Ok(())
     }
 }
 
 struct MockWebsocketClient {
     connected: Arc<AtomicBool>,
-    listener: Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+    listener: Arc<WebsocketListener<BinanceResponse, BinanceResponse>>,
 }
 
 #[async_trait]
 impl WebsocketClientTrait for MockWebsocketClient {
-    type TransportReq = BinanceWebsocketRequest;
-    type TransportRes = BinanceWebsocketResponse;
+    type TransportReq = BinanceRequest;
+    type TransportRes = BinanceResponse;
 
     async fn connect(&self) -> EGResult<()> {
         self.connected.store(true, Ordering::SeqCst);
@@ -127,17 +127,13 @@ impl WebsocketClientTrait for MockWebsocketClient {
         self.connected.load(Ordering::SeqCst)
     }
 
-    async fn send_message(
-        &self,
-        message: BinanceWebsocketRequest,
-        _timeout: Duration,
-    ) -> EGResult<()> {
+    async fn send_message(&self, message: BinanceRequest, _timeout: Duration) -> EGResult<()> {
         self.listener
-            .on_message(BinanceWebsocketResponse {
+            .on_message(BinanceResponse {
                 error: None,
                 id: message.id.clone(),
                 rateLimits: vec![],
-                result: Some(BinanceWebsocketResponseResult::Time(BinanceTimeResult {
+                result: Some(BinanceResponseResult::Time(BinanceTimeResult {
                     serverTime: 1_700_000_000_000,
                 })),
                 status: 200,
@@ -160,7 +156,7 @@ async fn binance_websocket_accepts_a_caller_provided_client() {
         Box::new(
             move |(url, websocket_listener): (
                 String,
-                Arc<WebsocketListener<BinanceWebsocketResponse, BinanceWebsocketResponse>>,
+                Arc<WebsocketListener<BinanceResponse, BinanceResponse>>,
             )| {
                 assert!(!url.is_empty());
                 Ok(MockWebsocketClient {
@@ -175,7 +171,7 @@ async fn binance_websocket_accepts_a_caller_provided_client() {
     assert!(matches!(connector.is_connected(), Ok(true)));
     let response = connector
         .send(
-            BinanceWebsocketRequest {
+            BinanceRequest {
                 id: "time".into(),
                 params: BinanceWebsocketSignedParams {
                     unsigned: BinanceWebsocketUnsignedParams::Time(BinanceTimeParams {}),
@@ -191,7 +187,7 @@ async fn binance_websocket_accepts_a_caller_provided_client() {
         .await
         .expect("disconnect should succeed");
     match response.result {
-        Some(BinanceWebsocketResponseResult::Time(time)) => {
+        Some(BinanceResponseResult::Time(time)) => {
             assert_eq!(time.serverTime, 1_700_000_000_000);
         }
         other => panic!("expected a time result, got: {other:?}"),

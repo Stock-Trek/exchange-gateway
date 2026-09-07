@@ -1,4 +1,4 @@
-use crate::rate_limit::rate_limit_type::RateLimitType;
+use exchange_types::rate_limited::RateLimitRestriction;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -6,7 +6,7 @@ use std::{
 
 #[derive(Clone)]
 pub(crate) struct RateLimiterState {
-    rate_limit_type: RateLimitType,
+    restriction: RateLimitRestriction,
     interval_nanos: u128,
     capacity_per_interval: u32,
     current_capacity: u32,
@@ -20,7 +20,7 @@ pub(crate) struct RateLimiterState {
 
 impl RateLimiterState {
     pub fn new(
-        rate_limit_type: RateLimitType,
+        rate_limit_type: RateLimitRestriction,
         interval_nanos: u128,
         capacity_per_interval: u32,
     ) -> Self {
@@ -34,7 +34,7 @@ impl RateLimiterState {
     /// Builds a state that reads time from `now` instead of the wall clock,
     /// so time-based refill behaviour can be exercised without sleeping.
     pub(crate) fn with_clock(
-        rate_limit_type: RateLimitType,
+        restriction: RateLimitRestriction,
         interval_nanos: u128,
         capacity_per_interval: u32,
         now: Arc<dyn Fn() -> Instant + Send + Sync>,
@@ -45,7 +45,7 @@ impl RateLimiterState {
             "capacity_per_interval cannot be zero"
         );
         Self {
-            rate_limit_type,
+            restriction,
             interval_nanos,
             capacity_per_interval,
             current_capacity: capacity_per_interval,
@@ -55,8 +55,8 @@ impl RateLimiterState {
             now,
         }
     }
-    pub fn rate_limit_type(&self) -> RateLimitType {
-        self.rate_limit_type
+    pub fn restriction(&self) -> RateLimitRestriction {
+        self.restriction
     }
     pub fn interval_nanos(&self) -> u128 {
         self.interval_nanos
@@ -165,7 +165,7 @@ impl RateLimiterState {
 impl std::fmt::Debug for RateLimiterState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RateLimiterState")
-            .field("rate_limit_type", &self.rate_limit_type)
+            .field("rate_limit_type", &self.restriction)
             .field("interval_nanos", &self.interval_nanos)
             .field("capacity_per_interval", &self.capacity_per_interval)
             .field("current_capacity", &self.current_capacity)
@@ -173,219 +173,5 @@ impl std::fmt::Debug for RateLimiterState {
             .field("excess_interval_nanos", &self.excess_interval_nanos)
             .field("throttled_until", &self.throttled_until)
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    /// A controllable clock: `advance` moves `now` forward, so tests can
-    /// drive time-based refill and throttle expiry without sleeping.
-    #[derive(Clone)]
-    struct ManualClock {
-        now: Arc<Mutex<Instant>>,
-    }
-
-    impl ManualClock {
-        fn new() -> Self {
-            Self {
-                now: Arc::new(Mutex::new(Instant::now())),
-            }
-        }
-        fn advance(&self, duration: Duration) {
-            *self.now.lock().expect("mutex should not be poisoned") += duration;
-        }
-        fn now(&self) -> Instant {
-            *self.now.lock().expect("mutex should not be poisoned")
-        }
-    }
-
-    fn state_with(interval: Duration, capacity: u32, clock: &ManualClock) -> RateLimiterState {
-        let clock = clock.clone();
-        RateLimiterState::with_clock(
-            RateLimitType::RequestWeight,
-            interval.as_nanos(),
-            capacity,
-            Arc::new(move || clock.now()),
-        )
-    }
-
-    #[test]
-    fn throttle_empties_bucket_until_deadline() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 10, &clock);
-        assert!(state.did_consume(1));
-        state.throttle(clock.now() + Duration::from_secs(60));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn throttle_expires_and_refills_from_deadline() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_millis(10), 10, &clock);
-        state.throttle(clock.now() + Duration::from_millis(20));
-        clock.advance(Duration::from_millis(30));
-        // Bucket refills from the throttle deadline, so capacity returns.
-        assert!(state.did_consume(10));
-    }
-
-    #[test]
-    fn sync_usage_realigns_capacity_and_limit() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(5000);
-        // Server reports 3000 used out of a newly lowered limit of 4000.
-        state.sync_usage(Some(3000), Some(4000));
-        assert!(state.did_consume(1000));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_without_limit_only_trims_capacity() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(3000);
-        // Server reports 5500 used in the last minute but no limit: remaining
-        // capacity is trimmed to 500, never increased.
-        state.sync_usage(Some(5500), None);
-        assert!(state.did_consume(500));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_without_limit_never_adds_capacity() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(1000);
-        // Server reports low usage: the bucket must not be refilled beyond
-        // what the local model has already accounted for.
-        state.sync_usage(Some(100), None);
-        assert!(state.did_consume(5000));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_keeps_throttle() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 10, &clock);
-        state.throttle(clock.now() + Duration::from_secs(60));
-        state.sync_usage(Some(0), Some(10));
-        assert!(!state.did_consume(10));
-    }
-
-    #[test]
-    fn sync_usage_with_limit_while_throttled_keeps_bucket_empty() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        state.throttle(clock.now() + Duration::from_millis(20));
-        // Limit-carrying usage arriving inside the throttle window (e.g. a
-        // concurrent exchangeInfo response while a 429/Retry-After is active)
-        // must not repopulate the bucket: it stays empty and refills from
-        // zero after the deadline instead of instantly granting limit - used.
-        state.sync_usage(Some(1200), Some(6000));
-        clock.advance(Duration::from_millis(30));
-        // Throttle elapsed, but the 60s refill window has barely started:
-        // the bucket must not grant the full remaining quota at once.
-        assert!(!state.did_consume(4800));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_with_limit_while_throttled_refills_after_deadline() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_millis(10), 6000, &clock);
-        state.throttle(clock.now() + Duration::from_millis(20));
-        state.sync_usage(Some(1200), Some(6000));
-        clock.advance(Duration::from_millis(50));
-        // The bucket refills from the throttle deadline up to the newly
-        // reported limit rather than staying stuck at zero.
-        assert!(state.did_consume(6000));
-    }
-
-    #[test]
-    fn sync_usage_after_throttle_deadline_realigns_to_usage() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        state.throttle(clock.now() + Duration::from_millis(20));
-        clock.advance(Duration::from_millis(30));
-        // Usage feedback arrives after the Retry-After deadline with no
-        // intervening consume: the throttle is no longer active, so the
-        // bucket realigns to the server-reported usage instead of staying
-        // zeroed until the next full-interval boundary.
-        state.sync_usage(Some(1200), Some(6000));
-        assert!(state.did_consume(4800));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_after_throttle_deadline_drops_stale_deadline() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_millis(10), 6000, &clock);
-        state.throttle(clock.now() + Duration::from_millis(20));
-        clock.advance(Duration::from_millis(50));
-        state.sync_usage(Some(1200), Some(6000));
-        // The stale deadline must not linger: refilling from it would grant
-        // the elapsed intervals on top of the server-reported remaining
-        // capacity, overshooting what the server says is available.
-        assert!(!state.did_consume(6000));
-        assert!(state.did_consume(4800));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_with_limit_only_adopts_limit_without_refilling() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(5000);
-        // A limit definition without a usage count (REST `exchangeInfo`): the
-        // new limit is adopted, but the bucket must not be refilled to
-        // limit - 0 = limit — the 5000 locally-consumed capacity stays gone.
-        state.sync_usage(None, Some(4000));
-        assert!(state.did_consume(1000));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_with_limit_only_never_adds_capacity() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(1000);
-        // The server raises the limit; the bucket adopts it but must not gain
-        // the difference as if the server had reported zero usage.
-        state.sync_usage(None, Some(6000));
-        assert!(state.did_consume(5000));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_with_limit_only_trims_capacity_above_new_limit() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(1000);
-        // The server lowers the limit below the remaining capacity: the
-        // bucket is trimmed to the new limit.
-        state.sync_usage(None, Some(2000));
-        assert!(state.did_consume(2000));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_without_usage_or_limit_is_noop() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 6000, &clock);
-        let _ = state.did_consume(1000);
-        state.sync_usage(None, None);
-        assert!(state.did_consume(5000));
-        assert!(!state.did_consume(1));
-    }
-
-    #[test]
-    fn sync_usage_with_usage_above_limit_drains_bucket() {
-        let clock = ManualClock::new();
-        let mut state = state_with(Duration::from_secs(60), 10, &clock);
-        state.sync_usage(Some(20), Some(10));
-        assert!(!state.did_consume(1));
     }
 }

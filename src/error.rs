@@ -1,5 +1,3 @@
-use crate::rate_limit::feedback::RateLimitFeedback;
-
 pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
@@ -22,7 +20,7 @@ pub enum EGError {
     #[error("The request was not sent: {0}")]
     NotSent(Box<EGError>),
     #[error("Rate limit exceeded")]
-    RateLimited(RateLimitFeedback),
+    RateLimited,
     #[error("Request timed out waiting for a response")]
     TimedOut,
 }

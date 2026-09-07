@@ -33,7 +33,7 @@ mod binance {
                 BinanceExchangeInfoSymbolStatus,
             },
             websocket::{
-                BinanceWebsocketRequest, BinanceWebsocketResponse, BinanceWebsocketResponseResult,
+                BinanceResponse, BinanceResponseResult, BinanceRequest,
                 BinanceWebsocketSignedParams, BinanceWebsocketUnsignedParams,
             },
         },
@@ -48,7 +48,7 @@ mod binance {
 
     #[async_trait::async_trait]
     impl ListenerTrait for PrintListener {
-        type TMessage = BinanceWebsocketResponse;
+        type TMessage = BinanceResponse;
 
         async fn on_connected(&self) -> EGResult<()> {
             println!("websocket connected");
@@ -60,7 +60,7 @@ mod binance {
             Ok(())
         }
 
-        async fn on_message(&self, message: BinanceWebsocketResponse) -> EGResult<()> {
+        async fn on_message(&self, message: BinanceResponse) -> EGResult<()> {
             println!("pushed message: {:?}", message.result);
             Ok(())
         }
@@ -75,7 +75,7 @@ mod binance {
         connector.connect().await?;
         let response = connector
             .send(
-                BinanceWebsocketRequest {
+                BinanceRequest {
                     id: "exchange-info".into(),
                     params: BinanceWebsocketSignedParams {
                         unsigned: BinanceWebsocketUnsignedParams::ExchangeInfo(
@@ -91,7 +91,7 @@ mod binance {
             )
             .await?;
         match response.result {
-            Some(BinanceWebsocketResponseResult::ExchangeInfo(info)) => {
+            Some(BinanceResponseResult::ExchangeInfo(info)) => {
                 println!("exchangeInfo: {info:?}");
             }
             _ => println!("exchangeInfo response: {:?}", response),

@@ -1,7 +1,4 @@
-use crate::{
-    error::{EGError, EGResult},
-    functions::TryConvertRef,
-};
+use crate::error::{EGError, EGResult};
 use std::{
     sync::{
         Mutex,
@@ -14,12 +11,6 @@ use std::{
 pub struct Clock {
     offset_millis: AtomicI64,
     last_sync: Mutex<Option<Instant>>,
-}
-
-pub(crate) struct Synchronization<Request, Response> {
-    pub create_time_request: fn() -> Request,
-    pub timeout: Duration,
-    pub to_server_time: TryConvertRef<Response, i64>,
 }
 
 impl Default for Clock {
@@ -80,16 +71,6 @@ impl Clock {
             .duration_since(UNIX_EPOCH)
             .expect("SystemTime is before UNIX_EPOCH");
         system_time.as_millis() as i64
-    }
-}
-
-impl<Request, Response> std::fmt::Debug for Synchronization<Request, Response> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Synchronization")
-            .field("create_time_request", &"<function>")
-            .field("timeout", &self.timeout)
-            .field("to_server_time", &"<function>")
-            .finish()
     }
 }
 

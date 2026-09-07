@@ -1,13 +1,11 @@
+pub mod clients;
 pub mod clock;
-pub mod connect;
 pub mod connector;
-pub(crate) mod connector_impl;
 pub mod error;
 pub mod functions;
 pub mod listeners;
 pub mod rate_limit;
-mod specs;
-pub mod transports;
+pub mod server_time_response;
 mod urls;
 
 pub use async_trait::async_trait;
@@ -17,7 +15,6 @@ pub use iris;
 pub mod prelude {
     pub use crate::{
         clock::Clock,
-        connect::Connect,
         connector::Connector,
         error::{EGError, EGResult},
         listeners::listener::ListenerTrait,

@@ -1,8 +1,9 @@
-use crate::rate_limit::{rate_limit_type::RateLimitType, rate_limiter_state::RateLimiterState};
+use crate::rate_limit::rate_limiter_state::RateLimiterState;
+use exchange_types::rate_limited::RateLimitRestriction;
 
 #[derive(Debug, Clone)]
 pub(crate) struct RateLimitConfig {
-    pub rate_limit_type: RateLimitType,
+    pub rate_limit_type: RateLimitRestriction,
     pub interval_nanos: u128,
     pub capacity_per_interval: u32,
 }

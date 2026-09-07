@@ -1,0 +1,98 @@
+use crate::{
+    clients::client::HttpClient,
+    error::{EGError, EGResult},
+};
+use async_trait::async_trait;
+use exchange_types::http::{HttpMethod, HttpRequest, HttpResponse};
+use std::time::Duration;
+
+#[derive(Clone)]
+pub struct ReqwestHttpClient {
+    client: reqwest::Client,
+    base_url: String,
+}
+
+impl ReqwestHttpClient {
+    pub fn new(base_url: &str) -> Self {
+        Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
+    }
+    pub fn with_client(base_url: &str, client: reqwest::Client) -> Self {
+        Self {
+            client,
+            base_url: base_url.into(),
+        }
+    }
+    fn build_url(&self, query: Option<&str>) -> String {
+        match query {
+            // `query` carries the origin-form request target: the endpoint
+            // and any query parameters together (e.g. `"order?symbol=..."`).
+            Some(query) if !query.is_empty() => {
+                format!("{}/{}", self.base_url, query.trim_start_matches('/'))
+            }
+            _ => self.base_url.clone(),
+        }
+    }
+    fn method(method: HttpMethod) -> reqwest::Method {
+        match method {
+            HttpMethod::GET => reqwest::Method::GET,
+            HttpMethod::DELETE => reqwest::Method::DELETE,
+            HttpMethod::PATCH => reqwest::Method::PATCH,
+            HttpMethod::POST => reqwest::Method::POST,
+            HttpMethod::PUT => reqwest::Method::PUT,
+        }
+    }
+}
+
+#[async_trait]
+impl HttpClient for ReqwestHttpClient {
+    async fn send(&self, request: HttpRequest, timeout: Duration) -> EGResult<HttpResponse> {
+        let url = self.build_url(request.query.as_deref());
+        let mut request_builder = self
+            .client
+            .request(Self::method(request.method), &url)
+            .timeout(timeout);
+        for (name, value) in &request.headers {
+            request_builder = request_builder.header(name, value);
+        }
+        if let Some(body) = request.body {
+            request_builder = request_builder.body(body);
+        }
+        let response = request_builder.send().await.map_err(|error| {
+            if error.is_connect() {
+                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+            } else {
+                EGError::External(Box::new(error))
+            }
+        })?;
+        let status = response.status();
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_ascii_lowercase(),
+                    value.to_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| EGError::External(Box::new(e)))?
+            .to_vec();
+        Ok(HttpResponse {
+            status: status.as_u16(),
+            headers,
+            body,
+        })
+    }
+}
+
+impl std::fmt::Debug for ReqwestHttpClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReqwestHttpClient")
+            .field("client", &"<reqwest::Client>")
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
