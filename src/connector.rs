@@ -6,13 +6,18 @@ use crate::{
     },
     clock::Clock,
     error::{EGError, EGResult},
-    functions::BoxTryCreateOnce,
+    functions::{ArcTryConvertValue, BoxTryCreateOnce},
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
-    rate_limit::rate_limits::RateLimits,
+    rate_limit::{
+        rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
+        rate_limiters::RateLimiters,
+    },
     server_time_response::ServerTimeResponse,
+    urls::url,
 };
 use exchange_types::{
-    rate_limited::RateLimitRestriction,
+    new_types::UsageCount,
+    rate_limited::{RateLimit, RateLimitRestriction, RateLimits},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETResponse, ETWebsocketResponse},
     signer::Signer,
@@ -21,13 +26,14 @@ use exchange_types::{
 };
 use iris::Config as IrisConfig;
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
 
 pub struct Connector<Client> {
-    rate_limits: RateLimits,
+    rate_limiters: RateLimiters,
     clock: Clock,
     signer: Signer,
     client: Arc<Client>,
@@ -37,19 +43,18 @@ impl<Client> Connector<Client> {
     pub fn try_new_http<C>(
         trading_mode: TradingMode,
         urls: &impl Urls,
-        rate_limits: RateLimits,
+        rate_limits: impl RateLimits,
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, C>,
     ) -> EGResult<Connector<C>>
     where
         C: HttpClient,
     {
-        let clock = Clock::default();
-        let url = urls.url(Protocol::Http, trading_mode);
-        let client = Arc::new(client_creator(url.into())?);
+        let url = url(urls, Protocol::Http, trading_mode);
+        let client = Arc::new(client_creator(url)?);
         Ok(Connector::<C> {
-            rate_limits,
-            clock,
+            rate_limiters: Self::rate_limiters(rate_limits),
+            clock: Clock::default(),
             signer,
             client,
         })
@@ -58,72 +63,79 @@ impl<Client> Connector<Client> {
     pub fn try_new_http_reqwest(
         trading_mode: TradingMode,
         urls: &impl Urls,
-        rate_limits: RateLimits,
+        rate_limits: impl RateLimits,
         signer: Signer,
     ) -> EGResult<Connector<ReqwestHttpClient>> {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
         Self::try_new_http(trading_mode, urls, rate_limits, signer, client_creator)
     }
-    pub fn try_new_websocket<C>(
+    #[allow(clippy::type_complexity)]
+    pub fn try_new_websocket<C, TransportRes>(
         trading_mode: TradingMode,
         urls: &impl Urls,
-        rate_limits: RateLimits,
+        rate_limits: impl RateLimits,
         signer: Signer,
+        converter: ArcTryConvertValue<TransportRes, serde_json::Value>,
         listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
         client_creator: BoxTryCreateOnce<
-            (String, Arc<WebsocketListener<String, serde_json::Value>>),
+            (
+                String,
+                Arc<WebsocketListener<TransportRes, serde_json::Value>>,
+            ),
             C,
         >,
-    ) -> EGResult<Connector<(C, Arc<WebsocketListener<String, serde_json::Value>>)>>
+    ) -> EGResult<Connector<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)>>
     where
         C: WebsocketClient,
     {
-        let websocket_listener = Arc::new(WebsocketListener::new(
-            Arc::new(|response: String| {
-                serde_json::to_value(response).map_err(|e| EGError::External(Box::new(e)))
-            }),
-            listener,
-        ));
-        let url = urls.url(Protocol::Websocket, trading_mode);
-        let client = client_creator((url.into(), websocket_listener.clone()))?;
+        let websocket_listener = Arc::new(WebsocketListener::new(converter, listener));
+        let url = url(urls, Protocol::Websocket, trading_mode);
+        let client = client_creator((url, websocket_listener.clone()))?;
         Ok(
-            Connector::<(C, Arc<WebsocketListener<String, serde_json::Value>>)> {
-                rate_limits,
+            Connector::<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)> {
+                rate_limiters: Self::rate_limiters(rate_limits),
                 clock: Clock::new(),
                 signer,
                 client: Arc::new((client, websocket_listener)),
             },
         )
     }
+    #[allow(clippy::type_complexity)]
     #[cfg(feature = "iris")]
     pub fn try_new_websocket_iris(
         trading_mode: TradingMode,
         urls: &impl Urls,
-        rate_limits: RateLimits,
+        rate_limits: impl RateLimits,
         signer: Signer,
         listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
         iris_config: IrisConfig,
     ) -> EGResult<
         Connector<(
             IrisWebsocketClient,
-            Arc<WebsocketListener<String, serde_json::Value>>,
+            Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
         )>,
     > {
         let client_creator: BoxTryCreateOnce<
-            (String, Arc<WebsocketListener<String, serde_json::Value>>),
+            (
+                String,
+                Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
+            ),
             IrisWebsocketClient,
         > = Box::new(move |(url, websocket_listener)| {
             Ok(IrisWebsocketClient::with_config(
                 &url,
                 iris_config,
-                websocket_listener as Arc<dyn ListenerTrait<TMessage = serde_json::Value>>,
+                websocket_listener,
             ))
         });
+        let converter: ArcTryConvertValue<serde_json::Value, serde_json::Value> =
+            Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> { Ok(value) });
         Self::try_new_websocket(
             trading_mode,
             urls,
             rate_limits,
             signer,
+            converter,
             listener,
             client_creator,
         )
@@ -131,22 +143,40 @@ impl<Client> Connector<Client> {
     pub fn server_time_millis(&self) -> EGResult<i64> {
         Ok(self.clock.now_millis())
     }
+    fn rate_limiters(rate_limits: impl RateLimits) -> RateLimiters {
+        let default_capacity = rate_limits.default_capacity();
+        let mut limiter_states = HashMap::new();
+        for (rate_limit, capacity) in default_capacity {
+            let RateLimit {
+                restriction,
+                interval_nanos,
+            } = rate_limit;
+            let states = limiter_states.entry(restriction).or_insert_with(Vec::new);
+            let state = RateLimiterState::new(interval_nanos, capacity);
+            states.push(state);
+        }
+        let limiters = limiter_states
+            .iter()
+            .map(|(restriction, states)| (*restriction, RateLimiter::new(states)))
+            .collect::<HashMap<RateLimitRestriction, RateLimiter>>();
+        RateLimiters::new(limiters)
+    }
     fn validate_rate_limits<Request>(
         &self,
         request: &Request,
-    ) -> EGResult<Vec<(RateLimitRestriction, u32)>>
+    ) -> EGResult<Vec<(RateLimitRestriction, UsageCount)>>
     where
         Request: ETRequest,
     {
         let mut acquired = Vec::new();
         for restriction in RateLimitRestriction::iter() {
             let cost = request.rate_limit_usage(restriction);
-            if cost > 0 {
-                if self.rate_limits.did_acquire(restriction, cost)? {
+            if cost > UsageCount::ZERO {
+                if self.rate_limiters.did_acquire(restriction, cost)? {
                     acquired.push((restriction, cost));
                 } else {
                     for (restriction, cost) in acquired {
-                        self.rate_limits.refund(restriction, cost);
+                        let _ = self.rate_limiters.refund(restriction, cost);
                     }
                     return Err(EGError::RateLimited);
                 }
@@ -154,18 +184,22 @@ impl<Client> Connector<Client> {
         }
         Ok(acquired)
     }
-    fn on_error<T>(&self, error: EGError, costs: Vec<(RateLimitRestriction, u32)>) -> EGResult<T> {
+    fn on_error<T>(
+        &self,
+        error: EGError,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
+    ) -> EGResult<T> {
         if matches!(&error, EGError::RateLimited | EGError::NotSent(..)) {
             for (restriction, cost) in costs {
-                self.rate_limits.refund(restriction, cost);
+                let _ = self.rate_limiters.refund(restriction, cost);
             }
         }
         Err(error)
     }
     fn validate_retry_after(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(retry_after_seconds) = response.retry_after() {
-            let retry_after = Duration::from_secs(retry_after_seconds);
-            self.rate_limits.retry_after(retry_after);
+            let retry_after = Duration::from_secs(retry_after_seconds.0);
+            let _ = self.rate_limiters.retry_after(retry_after);
             Err(EGError::RateLimited)
         } else {
             Ok(())
@@ -224,7 +258,7 @@ where
     }
 }
 
-impl<Client> Connector<(Client, WebsocketListener<String, serde_json::Value>)>
+impl<Client, TransportRes> Connector<(Client, WebsocketListener<TransportRes, serde_json::Value>)>
 where
     Client: WebsocketClient,
 {
@@ -284,7 +318,7 @@ where
     async fn send_wait<Request, Response>(
         &self,
         message: String,
-        costs: Vec<(RateLimitRestriction, u32)>,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
         timeout: Duration,
         response_matcher: Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>,
     ) -> EGResult<Request::Response>
@@ -311,7 +345,7 @@ where
 impl<Client> std::fmt::Debug for Connector<Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectorImpl")
-            .field("rate_limits", &self.rate_limits)
+            .field("rate_limits", &self.rate_limiters)
             .field("clock", &self.clock)
             .field("client", &"<client>")
             .finish()

@@ -1,8 +1,11 @@
 use crate::{
     error::{EGError, EGResult},
-    rate_limit::{rate_limit_config::RateLimitConfig, rate_limiter_state::RateLimiterState},
+    rate_limit::rate_limiter_state::RateLimiterState,
 };
-use exchange_types::rate_limited::{RateLimit, RateUsage};
+use exchange_types::{
+    new_types::{Nanoseconds, UsageCount},
+    rate_limited::RateUsage,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -10,19 +13,17 @@ use std::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct RateLimiter {
+pub struct RateLimiter {
     rate_limiters: Arc<Mutex<Vec<RateLimiterState>>>,
 }
 
 impl RateLimiter {
-    pub fn new(rate_limits: Vec<RateLimitConfig>) -> Self {
+    pub fn new(states: &[RateLimiterState]) -> Self {
         Self {
-            rate_limiters: Arc::new(Mutex::new(
-                rate_limits.iter().map(|rl| rl.to_state()).collect(),
-            )),
+            rate_limiters: Arc::new(Mutex::new(states.to_vec())),
         }
     }
-    pub fn did_acquire(&self, cost: u32) -> EGResult<bool> {
+    pub fn did_acquire(&self, cost: UsageCount) -> EGResult<bool> {
         let mut limiters_guard = self
             .rate_limiters
             .lock()
@@ -38,7 +39,7 @@ impl RateLimiter {
         }
         Ok(true)
     }
-    pub fn refund(&self, cost: u32) -> EGResult<()> {
+    pub fn refund(&self, cost: UsageCount) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
             .lock()
@@ -48,16 +49,14 @@ impl RateLimiter {
         }
         Ok(())
     }
-    pub fn set_usage(&self, usage: &HashMap<RateLimit, RateUsage>) -> EGResult<()> {
+    pub fn set_usage(&self, interval_usage: &HashMap<Nanoseconds, RateUsage>) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
-        for (rate_limit, rate_limit_usage) in usage {
+        for (interval_nanos, rate_limit_usage) in interval_usage {
             for limiter in limiters_guard.iter_mut() {
-                if limiter.restriction() == rate_limit.restriction
-                    && limiter.interval_nanos() == rate_limit.interval_nanos as u128
-                {
+                if limiter.interval_nanos() == *interval_nanos {
                     limiter.sync_usage(rate_limit_usage.used, rate_limit_usage.limit);
                 }
             }
