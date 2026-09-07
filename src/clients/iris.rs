@@ -5,7 +5,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_timer::Delay;
-use iris::{Client as IrisClient, Config as IrisConfig, Listener as IrisListener};
+use iris::{Client as IrisClient, Config as IrisConfig, ConnectionError, Listener as IrisListener};
 use std::{
     future::{Future, poll_fn},
     sync::Arc,
@@ -37,13 +37,21 @@ impl IrisWebsocketClient {
         let mut send = Box::pin(self.client.send(message));
         let mut delay = Box::pin(delay);
         poll_fn(move |cx| match send.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(result.map_err(|e| EGError::External(Box::new(e)))),
+            Poll::Ready(result) => Poll::Ready(result.map_err(Self::map_send_error)),
             Poll::Pending => match delay.as_mut().poll(cx) {
                 Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
                 Poll::Pending => Poll::Pending,
             },
         })
         .await
+    }
+    fn map_send_error(error: ConnectionError) -> EGError {
+        match error {
+            ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => {
+                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+            }
+            error => EGError::External(Box::new(error)),
+        }
     }
 }
 
