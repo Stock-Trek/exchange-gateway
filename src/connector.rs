@@ -16,6 +16,7 @@ use crate::{
     urls::url,
 };
 use exchange_types::{
+    http::HttpResponse,
     new_types::UsageCount,
     rate_limited::{RateLimit, RateLimitRestriction, RateLimits},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
@@ -233,6 +234,7 @@ where
             Err(error) => return self.on_error(error, costs),
         };
         let round_trip_time = start.elapsed();
+        let response = self.validate_http_status(response)?;
         let response = SyncResponse::try_from_http(response).map_err(|_| EGError::BadResponse)?;
         self.validate_retry_after(&response)?;
         let server_time = response.server_time() as i64;
@@ -255,9 +257,30 @@ where
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
+        let response = self.validate_http_status(response)?;
         let response = Response::try_from_http(response).map_err(|_| EGError::BadResponse)?;
         self.validate_retry_after(&response)?;
         Ok(response)
+    }
+    fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
+        if (200..300).contains(&response.status) {
+            return Ok(response);
+        }
+        if let Some(retry_after_seconds) = response
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("Retry-After"))
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+        {
+            let _ = self
+                .rate_limiters
+                .retry_after(Duration::from_secs(retry_after_seconds));
+            return Err(EGError::RateLimited);
+        }
+        Err(EGError::HttpError {
+            status: response.status,
+            body: response.body,
+        })
     }
 }
 
