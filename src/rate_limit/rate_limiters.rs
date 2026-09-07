@@ -22,7 +22,7 @@ impl RateLimiters {
         if let Some(limiter) = self.limiters.get(&restriction) {
             limiter.did_acquire(cost)
         } else {
-            Ok(false)
+            Ok(true)
         }
     }
     pub fn refund(&self, restriction: RateLimitRestriction, cost: UsageCount) -> EGResult<()> {
