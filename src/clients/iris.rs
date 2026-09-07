@@ -2,6 +2,7 @@ use crate::{
     clients::client::WebsocketClient,
     error::{EGError, EGResult},
     listeners::listener::ListenerTrait,
+    panic_guard::PanicUtils,
 };
 use async_trait::async_trait;
 use futures_timer::Delay;
@@ -90,22 +91,33 @@ struct IrisListenerAdapter {
     delegate: Arc<dyn ListenerTrait<TMessage = serde_json::Value>>,
 }
 
+impl IrisListenerAdapter {
+    async fn run_guarded<F>(&self, future: F)
+    where
+        F: Future<Output = EGResult<()>>,
+    {
+        let result = match PanicUtils::catch_panic_async(future).await {
+            Ok(result) => result,
+            Err(payload) => Err(EGError::CallbackPanicked(PanicUtils::panic_message(
+                payload.as_ref(),
+            ))),
+        };
+        if let Err(error) = result {
+            let _ = PanicUtils::catch_panic_async(self.delegate.on_error(error)).await;
+        }
+    }
+}
+
 #[async_trait]
 impl IrisListener<serde_json::Value> for IrisListenerAdapter {
     async fn on_connected(&self) {
-        if let Err(error) = self.delegate.on_connected().await {
-            let _ = self.delegate.on_error(error).await;
-        }
+        self.run_guarded(self.delegate.on_connected()).await;
     }
     async fn on_disconnected(&self) {
-        if let Err(error) = self.delegate.on_disconnected().await {
-            let _ = self.delegate.on_error(error).await;
-        }
+        self.run_guarded(self.delegate.on_disconnected()).await;
     }
     async fn on_message(&self, message: serde_json::Value) {
-        if let Err(error) = self.delegate.on_message(message).await {
-            let _ = self.delegate.on_error(error).await;
-        }
+        self.run_guarded(self.delegate.on_message(message)).await;
     }
 }
 

@@ -4,6 +4,7 @@ pub mod connector;
 pub mod error;
 pub mod functions;
 pub mod listeners;
+mod panic_guard;
 pub mod rate_limit;
 pub mod server_time_response;
 mod urls;
