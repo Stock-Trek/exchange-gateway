@@ -342,33 +342,22 @@ where
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
-        // Await the matching response only for the remainder of the timeout so
-        // the whole send-and-wait is bounded like an HTTP send instead of
-        // hanging indefinitely (and holding rate-limit tokens) when the
-        // exchange never replies with a matching id.
         let remaining = timeout.saturating_sub(start.elapsed());
-        let response_value = wait_for_response(waiter, remaining).await?;
+        let mut waiter = Box::pin(waiter);
+        let mut delay = Box::pin(Delay::new(remaining));
+        let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(result),
+            Poll::Pending => match delay.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Pending => Poll::Pending,
+            },
+        })
+        .await?;
         let response = Response::try_from_websocket(response_value)
             .map_err(|e| EGError::External(Box::new(e)))?;
         self.validate_retry_after(&response)?;
         Ok(response)
     }
-}
-
-async fn wait_for_response<F, T>(waiter: F, timeout: Duration) -> EGResult<T>
-where
-    F: Future<Output = EGResult<T>> + Send,
-{
-    let mut waiter = Box::pin(waiter);
-    let mut delay = Box::pin(Delay::new(timeout));
-    poll_fn(move |cx| match waiter.as_mut().poll(cx) {
-        Poll::Ready(result) => Poll::Ready(result),
-        Poll::Pending => match delay.as_mut().poll(cx) {
-            Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
-            Poll::Pending => Poll::Pending,
-        },
-    })
-    .await
 }
 
 impl<Client> std::fmt::Debug for Connector<Client> {
