@@ -24,10 +24,13 @@ use exchange_types::{
     urls::{Protocol, TradingMode, Urls},
     websocket_id::ETWebsocketId,
 };
+use futures_timer::Delay;
 use iris::Config as IrisConfig;
 use std::{
     collections::HashMap,
+    future::{Future, poll_fn},
     sync::Arc,
+    task::Poll,
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
@@ -258,7 +261,11 @@ where
     }
 }
 
-impl<Client, TransportRes> Connector<(Client, WebsocketListener<TransportRes, serde_json::Value>)>
+impl<Client, TransportRes>
+    Connector<(
+        Client,
+        Arc<WebsocketListener<TransportRes, serde_json::Value>>,
+    )>
 where
     Client: WebsocketClient,
 {
@@ -330,16 +337,38 @@ where
             .client
             .1
             .waiter_for_filtered_response(response_matcher)?;
+        let start = Instant::now();
         match self.client.0.send(message, timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
-        let response_value = waiter.await?;
+        // Await the matching response only for the remainder of the timeout so
+        // the whole send-and-wait is bounded like an HTTP send instead of
+        // hanging indefinitely (and holding rate-limit tokens) when the
+        // exchange never replies with a matching id.
+        let remaining = timeout.saturating_sub(start.elapsed());
+        let response_value = wait_for_response(waiter, remaining).await?;
         let response = Response::try_from_websocket(response_value)
             .map_err(|e| EGError::External(Box::new(e)))?;
         self.validate_retry_after(&response)?;
         Ok(response)
     }
+}
+
+async fn wait_for_response<F, T>(waiter: F, timeout: Duration) -> EGResult<T>
+where
+    F: Future<Output = EGResult<T>> + Send,
+{
+    let mut waiter = Box::pin(waiter);
+    let mut delay = Box::pin(Delay::new(timeout));
+    poll_fn(move |cx| match waiter.as_mut().poll(cx) {
+        Poll::Ready(result) => Poll::Ready(result),
+        Poll::Pending => match delay.as_mut().poll(cx) {
+            Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+            Poll::Pending => Poll::Pending,
+        },
+    })
+    .await
 }
 
 impl<Client> std::fmt::Debug for Connector<Client> {
@@ -349,5 +378,171 @@ impl<Client> std::fmt::Debug for Connector<Client> {
             .field("clock", &self.clock)
             .field("client", &"<client>")
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use exchange_types::{
+        encode::ByteEncoder,
+        encrypt::Encryptor,
+        error::{ETError, ETResult},
+        new_types::{Seconds, UsageCount},
+        rate_limited::{RateLimit, RateLimitRestriction, RateLimits, RateUsage},
+        request::{ETRequest, ETWebsocketRequest, WebsocketResponseMatcher},
+        response::{ETResponse, ETWebsocketResponse},
+        signer::Signer,
+        urls::{Protocol, TradingMode, Urls},
+        websocket_id::ETWebsocketId,
+    };
+    use serde::Serialize;
+
+    struct TestUrls;
+    impl Urls for TestUrls {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+        fn url(&self, _protocol: Protocol, _trading_mode: TradingMode) -> &str {
+            "wss://example.test"
+        }
+    }
+
+    struct TestRateLimits;
+    impl RateLimits for TestRateLimits {
+        fn default_capacity(&self) -> HashMap<RateLimit, UsageCount> {
+            HashMap::new()
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockWebsocketClient;
+
+    #[async_trait]
+    impl WebsocketClient for MockWebsocketClient {
+        async fn connect(&self) -> EGResult<()> {
+            Ok(())
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        async fn send(&self, _message: String, _timeout: Duration) -> EGResult<()> {
+            Ok(())
+        }
+        async fn disconnect(&self) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    struct NoOpListener;
+    #[async_trait]
+    impl ListenerTrait for NoOpListener {
+        type TMessage = serde_json::Value;
+        async fn on_message(&self, _message: serde_json::Value) -> EGResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Serialize)]
+    struct TestRequest;
+
+    impl ETRequest for TestRequest {
+        fn rate_limit_usage(&self, _restriction: RateLimitRestriction) -> UsageCount {
+            UsageCount::ZERO
+        }
+        fn is_signed(&self) -> bool {
+            false
+        }
+        fn set_api_key(&mut self, _api_key: Option<String>) {}
+        fn query_params(&self, _percent_encode: bool) -> String {
+            String::new()
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestResponse;
+
+    impl ETResponse for TestResponse {
+        fn rate_limit_usage(&self) -> Option<&HashMap<RateLimit, RateUsage>> {
+            None
+        }
+        fn retry_after(&self) -> Option<Seconds> {
+            None
+        }
+    }
+
+    impl ETWebsocketRequest for TestRequest {
+        type Response = TestResponse;
+
+        fn method_name(&self) -> &'static str {
+            "test.method"
+        }
+        fn try_into_websocket(
+            self,
+            _signer: &Signer,
+            id: ETWebsocketId,
+        ) -> ETResult<(String, WebsocketResponseMatcher)> {
+            let matcher_id = id.clone();
+            let matcher: WebsocketResponseMatcher = Arc::new(move |value: &serde_json::Value| {
+                value.get("id").is_some_and(|id_value| match &matcher_id {
+                    ETWebsocketId::Int(expected) => id_value.as_i64() == Some(*expected),
+                    ETWebsocketId::Str(expected) => id_value.as_str() == Some(expected),
+                    _ => false,
+                })
+            });
+            let id_json = serde_json::to_string(&id).map_err(ETError::SerializeRequest)?;
+            let message = format!(r#"{{"id":{id_json},"method":"test.method"}}"#);
+            Ok((message, matcher))
+        }
+    }
+
+    impl ETWebsocketResponse for TestResponse {
+        fn try_from_websocket(_response: serde_json::Value) -> ETResult<Self> {
+            Ok(TestResponse)
+        }
+    }
+
+    fn test_signer() -> Signer {
+        let secret_key = ed25519_compact::SecretKey::new([7u8; 64]);
+        Signer::new(
+            "test-api-key".to_string(),
+            Encryptor::Ed25519(secret_key),
+            ByteEncoder::HexLower,
+        )
+    }
+
+    type TestConnector = Connector<(
+        MockWebsocketClient,
+        Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
+    )>;
+
+    fn test_connector() -> TestConnector {
+        let converter: ArcTryConvertValue<serde_json::Value, serde_json::Value> =
+            Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> { Ok(value) });
+        TestConnector::try_new_websocket::<MockWebsocketClient, serde_json::Value>(
+            TradingMode::Real,
+            &TestUrls,
+            TestRateLimits,
+            test_signer(),
+            converter,
+            NoOpListener,
+            Box::new(|(_url, _listener)| Ok(MockWebsocketClient)),
+        )
+        .expect("test connector should be constructible")
+    }
+
+    #[tokio::test]
+    async fn send_times_out_when_the_exchange_never_responds() {
+        let connector = test_connector();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            connector.send(TestRequest, Duration::from_millis(100)),
+        )
+        .await;
+        assert!(
+            matches!(result, Ok(Err(EGError::TimedOut))),
+            "expected send to time out waiting for a response, got {result:?}"
+        );
     }
 }
