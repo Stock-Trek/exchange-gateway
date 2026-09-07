@@ -2,6 +2,7 @@ use crate::{
     error::{EGError, EGResult},
     functions::{ArcPredicate, ArcTryConvertValue},
     listeners::listener::ListenerTrait,
+    panic_guard::{catch_panic, panic_message},
 };
 use async_trait::async_trait;
 use std::{
@@ -72,9 +73,14 @@ where
         self.delegate.on_error(error).await
     }
     async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        let response = match (self.converter)(message) {
-            Ok(response) => response,
-            Err(error) => {
+        let response = match catch_panic(|| (self.converter)(message)) {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                self.delegate.on_error(error).await?;
+                return Ok(());
+            }
+            Err(payload) => {
+                let error = EGError::CallbackPanicked(panic_message(payload.as_ref()));
                 self.delegate.on_error(error).await?;
                 return Ok(());
             }
@@ -190,7 +196,25 @@ impl<EGRes> ResponseHandler<EGRes> {
     }
 
     fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool> {
-        let is_handled = (self.filter)(&response);
+        let is_handled = match catch_panic(|| (self.filter)(&response)) {
+            Ok(is_handled) => is_handled,
+            Err(payload) => {
+                // The user's response matcher panicked. Fail the waiter that
+                // owns it instead of unwinding while the handlers lock is held
+                // (which would poison the mutex and break every subsequent
+                // message). Claiming the response makes `remove_handler` drop
+                // the broken handler so it is not invoked again.
+                let error = EGError::CallbackPanicked(panic_message(payload.as_ref()));
+                let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
+                if !state.abandoned {
+                    state.connection_lost = Some(error);
+                    if let Some(waker) = state.waker.take() {
+                        waker.wake();
+                    }
+                }
+                return Ok(true);
+            }
+        };
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
             if !state.abandoned {

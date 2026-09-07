@@ -6,6 +6,8 @@ pub enum EGError {
     ApiError { code: i64, message: String },
     #[error("Received unrecognised response")]
     BadResponse,
+    #[error("A user callback panicked: {0}")]
+    CallbackPanicked(String),
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error(
