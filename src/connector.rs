@@ -24,10 +24,13 @@ use exchange_types::{
     urls::{Protocol, TradingMode, Urls},
     websocket_id::ETWebsocketId,
 };
+use futures_timer::Delay;
 use iris::Config as IrisConfig;
 use std::{
     collections::HashMap,
+    future::{Future, poll_fn},
     sync::Arc,
+    task::Poll,
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
@@ -258,7 +261,11 @@ where
     }
 }
 
-impl<Client, TransportRes> Connector<(Client, WebsocketListener<TransportRes, serde_json::Value>)>
+impl<Client, TransportRes>
+    Connector<(
+        Client,
+        Arc<WebsocketListener<TransportRes, serde_json::Value>>,
+    )>
 where
     Client: WebsocketClient,
 {
@@ -330,11 +337,22 @@ where
             .client
             .1
             .waiter_for_filtered_response(response_matcher)?;
+        let start = Instant::now();
         match self.client.0.send(message, timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
-        let response_value = waiter.await?;
+        let remaining = timeout.saturating_sub(start.elapsed());
+        let mut waiter = Box::pin(waiter);
+        let mut delay = Box::pin(Delay::new(remaining));
+        let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
+            Poll::Ready(result) => Poll::Ready(result),
+            Poll::Pending => match delay.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Pending => Poll::Pending,
+            },
+        })
+        .await?;
         let response = Response::try_from_websocket(response_value)
             .map_err(|e| EGError::External(Box::new(e)))?;
         self.validate_retry_after(&response)?;
