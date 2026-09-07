@@ -62,7 +62,7 @@ impl RateLimiterState {
         }
     }
     pub fn refund(&mut self, cost: UsageCount) {
-        self.current_capacity = self.current_capacity + cost.min(self.capacity_per_interval);
+        self.current_capacity += cost.min(self.capacity_per_interval);
     }
     pub fn throttle(&mut self, until: Instant) {
         self.current_capacity = UsageCount::ZERO;

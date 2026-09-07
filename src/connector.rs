@@ -51,7 +51,7 @@ impl<Client> Connector<Client> {
         C: HttpClient,
     {
         let url = url(urls, Protocol::Http, trading_mode);
-        let client = Arc::new(client_creator(url.into())?);
+        let client = Arc::new(client_creator(url)?);
         Ok(Connector::<C> {
             rate_limiters: Self::rate_limiters(rate_limits),
             clock: Clock::default(),
@@ -69,6 +69,7 @@ impl<Client> Connector<Client> {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
         Self::try_new_http(trading_mode, urls, rate_limits, signer, client_creator)
     }
+    #[allow(clippy::type_complexity)]
     pub fn try_new_websocket<C, TransportRes>(
         trading_mode: TradingMode,
         urls: &impl Urls,
@@ -89,7 +90,7 @@ impl<Client> Connector<Client> {
     {
         let websocket_listener = Arc::new(WebsocketListener::new(converter, listener));
         let url = url(urls, Protocol::Websocket, trading_mode);
-        let client = client_creator((url.into(), websocket_listener.clone()))?;
+        let client = client_creator((url, websocket_listener.clone()))?;
         Ok(
             Connector::<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)> {
                 rate_limiters: Self::rate_limiters(rate_limits),
@@ -99,6 +100,7 @@ impl<Client> Connector<Client> {
             },
         )
     }
+    #[allow(clippy::type_complexity)]
     #[cfg(feature = "iris")]
     pub fn try_new_websocket_iris(
         trading_mode: TradingMode,
