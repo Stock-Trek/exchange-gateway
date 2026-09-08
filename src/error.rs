@@ -2,8 +2,6 @@ pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EGError {
-    #[error("Exchange API error {code}: {message}")]
-    ApiError { code: i64, message: String },
     #[error("Received unrecognised response")]
     BadResponse,
     #[error("A user callback panicked: {0}")]
