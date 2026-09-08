@@ -199,14 +199,16 @@ impl<Client> Connector<Client> {
         }
         Err(error)
     }
-    fn validate_retry_after(&self, response: &impl ETResponse) -> EGResult<()> {
+    fn sync_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
+        if let Some(usage) = response.rate_limit_usage() {
+            let _ = self.rate_limiters.set_usage(usage);
+        }
         if let Some(retry_after_seconds) = response.retry_after() {
             let retry_after = Duration::from_secs(retry_after_seconds.0);
             let _ = self.rate_limiters.retry_after(retry_after);
-            Err(EGError::RateLimited)
-        } else {
-            Ok(())
+            return Err(EGError::RateLimited);
         }
+        Ok(())
     }
 }
 
@@ -234,7 +236,7 @@ where
         };
         let round_trip_time = start.elapsed();
         let response = SyncResponse::try_from_http(response).map_err(|_| EGError::BadResponse)?;
-        self.validate_retry_after(&response)?;
+        self.sync_rate_limits(&response)?;
         let server_time = response.server_time() as i64;
         self.clock.sync(server_time, round_trip_time)
     }
@@ -256,7 +258,7 @@ where
             Err(error) => return self.on_error(error, costs),
         };
         let response = Response::try_from_http(response).map_err(|_| EGError::BadResponse)?;
-        self.validate_retry_after(&response)?;
+        self.sync_rate_limits(&response)?;
         Ok(response)
     }
 }
@@ -355,7 +357,7 @@ where
         .await?;
         let response = Response::try_from_websocket(response_value)
             .map_err(|e| EGError::External(Box::new(e)))?;
-        self.validate_retry_after(&response)?;
+        self.sync_rate_limits(&response)?;
         Ok(response)
     }
 }
