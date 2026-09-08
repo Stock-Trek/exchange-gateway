@@ -40,7 +40,7 @@ impl IrisWebsocketClient {
         poll_fn(move |cx| match send.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.map_err(Self::map_send_error)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Ready(()) => Poll::Ready(Err(EGError::NotSent(Box::new(EGError::TimedOut)))),
                 Poll::Pending => Poll::Pending,
             },
         })
