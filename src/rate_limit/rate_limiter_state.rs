@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const MAX_THROTTLE_AFTER: Duration = Duration::from_secs(u32::MAX as u64);
+
 #[derive(Clone)]
 pub struct RateLimiterState {
     interval_nanos: Nanoseconds,
@@ -69,7 +71,7 @@ impl RateLimiterState {
         self.throttled_until = Some(until);
     }
     pub(crate) fn throttle_after(&mut self, duration: Duration) {
-        self.throttle(self.now() + duration);
+        self.throttle(self.now() + duration.min(MAX_THROTTLE_AFTER));
     }
     pub fn sync_usage(&mut self, used: Option<UsageCount>, limit: Option<UsageCount>) {
         if let Some(limit) = limit {
