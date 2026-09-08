@@ -66,7 +66,6 @@ where
         self.delegate.on_connected().await
     }
     async fn on_disconnected(&self) -> EGResult<()> {
-        fail_pending_waiters(&self.handlers)?;
         self.delegate.on_disconnected().await
     }
     async fn on_error(&self, error: EGError) -> EGResult<()> {
@@ -112,18 +111,6 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
     }
 }
 
-fn fail_pending_waiters<EGRes>(handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>) -> EGResult<()> {
-    let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-    for handler in guard.drain(..) {
-        let mut state = handler.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-        state.connection_lost = Some(EGError::NotConnected);
-        if let Some(waker) = state.waker.take() {
-            waker.wake();
-        }
-    }
-    Ok(())
-}
-
 pub(crate) struct WaiterForResponse<EGRes>
 where
     EGRes: Send,
@@ -144,7 +131,7 @@ where
         };
         if let Some(msg) = state.filtered_response.take() {
             Poll::Ready(Ok(msg))
-        } else if let Some(error) = state.connection_lost.take() {
+        } else if let Some(error) = state.error.take() {
             Poll::Ready(Err(error))
         } else {
             state.waker = Some(cx.waker().clone());
@@ -202,7 +189,7 @@ impl<EGRes> ResponseHandler<EGRes> {
                 let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
                 let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
                 if !state.abandoned {
-                    state.connection_lost = Some(error);
+                    state.error = Some(error);
                     if let Some(waker) = state.waker.take() {
                         waker.wake();
                     }
@@ -225,7 +212,7 @@ impl<EGRes> ResponseHandler<EGRes> {
 
 struct WaiterState<EGRes> {
     filtered_response: Option<EGRes>,
-    connection_lost: Option<EGError>,
+    error: Option<EGError>,
     waker: Option<Waker>,
     abandoned: bool,
 }
@@ -237,7 +224,7 @@ where
     fn default() -> Self {
         Self {
             filtered_response: None,
-            connection_lost: None,
+            error: None,
             waker: None,
             abandoned: false,
         }
