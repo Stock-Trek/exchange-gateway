@@ -4,6 +4,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Longest throttle window applied from a single `Retry-After`.
+///
+/// `Instant + Duration` panics when the duration overflows the platform's
+/// clock representation (`Instant::checked_add` + `expect`). Retry-After is
+/// server-controlled, so the window is clamped to a horizon that is far
+/// beyond any real retry horizon yet far below the overflow point of
+/// `Instant` arithmetic on every supported platform (~136 years).
+const MAX_THROTTLE_AFTER: Duration = Duration::from_secs(u32::MAX as u64);
+
 #[derive(Clone)]
 pub struct RateLimiterState {
     interval_nanos: Nanoseconds,
@@ -69,7 +78,7 @@ impl RateLimiterState {
         self.throttled_until = Some(until);
     }
     pub(crate) fn throttle_after(&mut self, duration: Duration) {
-        self.throttle(self.now() + duration);
+        self.throttle(self.now() + duration.min(MAX_THROTTLE_AFTER));
     }
     pub fn sync_usage(&mut self, used: Option<UsageCount>, limit: Option<UsageCount>) {
         if let Some(limit) = limit {
@@ -154,5 +163,65 @@ impl std::fmt::Debug for RateLimiterState {
             .field("excess_interval_nanos", &self.excess_interval_nanos)
             .field("throttled_until", &self.throttled_until)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// A controllable clock: `advance` moves `now` forward, so tests can
+    /// drive time-based refill and throttle expiry without sleeping.
+    #[derive(Clone)]
+    struct ManualClock {
+        now: Arc<Mutex<Instant>>,
+    }
+
+    impl ManualClock {
+        fn new() -> Self {
+            Self {
+                now: Arc::new(Mutex::new(Instant::now())),
+            }
+        }
+        fn advance(&self, duration: Duration) {
+            *self.now.lock().expect("mutex should not be poisoned") += duration;
+        }
+        fn now(&self) -> Instant {
+            *self.now.lock().expect("mutex should not be poisoned")
+        }
+    }
+
+    fn state_with(clock: &ManualClock) -> RateLimiterState {
+        let clock = clock.clone();
+        RateLimiterState::with_clock(
+            Nanoseconds(1_000_000_000),
+            UsageCount::ONE,
+            Arc::new(move || clock.now()),
+        )
+    }
+
+    #[test]
+    fn throttle_after_denies_until_the_deadline_passes() {
+        let clock = ManualClock::new();
+        let mut state = state_with(&clock);
+        assert!(state.did_consume(UsageCount::ONE));
+        state.throttle_after(Duration::from_secs(60));
+        assert!(!state.did_consume(UsageCount::ONE));
+        clock.advance(Duration::from_secs(61));
+        assert!(state.did_consume(UsageCount::ONE));
+    }
+
+    #[test]
+    fn throttle_after_clamps_overflowing_duration_instead_of_panicking() {
+        let clock = ManualClock::new();
+        let mut state = state_with(&clock);
+        // u64::MAX seconds is far beyond what `Instant + Duration` can
+        // represent; this used to panic the calling task.
+        state.throttle_after(Duration::from_secs(u64::MAX));
+        assert!(!state.did_consume(UsageCount::ONE));
+        // Even a year later the clamped deadline is still in force.
+        clock.advance(Duration::from_secs(365 * 24 * 60 * 60));
+        assert!(!state.did_consume(UsageCount::ONE));
     }
 }
