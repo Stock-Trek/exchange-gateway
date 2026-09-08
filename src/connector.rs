@@ -12,7 +12,6 @@ use crate::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
         rate_limiters::RateLimiters,
     },
-    server_time_response::ServerTimeResponse,
     urls::url,
 };
 use exchange_types::{
@@ -21,6 +20,7 @@ use exchange_types::{
     rate_limited::{RateLimit, RateLimitRestriction, RateLimits},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETResponse, ETWebsocketResponse},
+    server_time::{ServerTimeHttpRequest, ServerTimeResponse},
     signer::Signer,
     urls::{Protocol, TradingMode, Urls},
     websocket_id::ETWebsocketId,
@@ -223,7 +223,7 @@ where
         timeout: Duration,
     ) -> EGResult<()>
     where
-        SyncRequest: ETHttpRequest<Response = SyncResponse>,
+        SyncRequest: ServerTimeHttpRequest<SyncResponse>,
         SyncResponse: ETHttpResponse + ServerTimeResponse,
     {
         let costs = self.validate_rate_limits(&sync_request)?;
@@ -239,8 +239,10 @@ where
         let response = self.validate_http_status(response)?;
         let response = SyncResponse::try_from_http(response).map_err(|_| EGError::BadResponse)?;
         self.sync_rate_limits(&response)?;
-        let server_time = response.server_time() as i64;
-        self.clock.sync(server_time, round_trip_time)
+        if let Some(server_time) = response.server_time() {
+            self.clock.sync(server_time.0 as i64, round_trip_time)?;
+        }
+        Ok(())
     }
     pub async fn send<Request, Response>(
         &self,
@@ -327,8 +329,10 @@ where
             )
             .await?;
         let round_trip_time = start.elapsed();
-        let server_time = response.server_time() as i64;
-        self.clock.sync(server_time, round_trip_time)
+        if let Some(server_time) = response.server_time() {
+            self.clock.sync(server_time.0 as i64, round_trip_time)?;
+        }
+        Ok(())
     }
     pub async fn send<Request, Response>(
         &self,

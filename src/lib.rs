@@ -6,7 +6,6 @@ pub mod functions;
 pub mod listeners;
 mod panic_guard;
 pub mod rate_limit;
-pub mod server_time_response;
 mod urls;
 
 pub use async_trait::async_trait;
