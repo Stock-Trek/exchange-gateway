@@ -43,7 +43,7 @@ pub struct Connector<Client> {
     client: Arc<Client>,
 }
 
-impl<Client> Connector<Client> {
+impl Connector<()> {
     pub fn try_new_http<C>(
         trading_mode: TradingMode,
         urls: &impl Urls,
@@ -144,6 +144,9 @@ impl<Client> Connector<Client> {
             client_creator,
         )
     }
+}
+
+impl<Client> Connector<Client> {
     pub fn server_time_millis(&self) -> EGResult<i64> {
         Ok(self.clock.now_millis())
     }

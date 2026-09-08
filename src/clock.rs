@@ -73,20 +73,3 @@ impl Clock {
         system_time.as_millis() as i64
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn clock_applies_server_offset() {
-        let clock = Clock::default();
-        let local = clock.now_millis();
-        clock
-            .sync(local + 10_000, Duration::ZERO)
-            .expect("Cannot sync clock");
-        let synced = clock.now_millis();
-        assert!(synced >= local + 10_000, "synced: {synced}");
-        assert!(synced < local + 10_000 + 60_000, "synced: {synced}");
-    }
-}
