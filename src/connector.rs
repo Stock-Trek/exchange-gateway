@@ -43,7 +43,12 @@ pub struct Connector<Client> {
     client: Arc<Client>,
 }
 
-impl<Client> Connector<Client> {
+// The constructors live in a non-generic impl so that callers can write
+// `Connector::try_new_http_reqwest(..)` without turbofish annotations: the
+// `Client` type parameter is only known from what a constructor returns, so
+// a generic `impl<Client> Connector<Client>` would leave it unconstrained
+// (E0282).
+impl Connector<()> {
     pub fn try_new_http<C>(
         trading_mode: TradingMode,
         urls: &impl Urls,
@@ -144,6 +149,9 @@ impl<Client> Connector<Client> {
             client_creator,
         )
     }
+}
+
+impl<Client> Connector<Client> {
     pub fn server_time_millis(&self) -> EGResult<i64> {
         Ok(self.clock.now_millis())
     }

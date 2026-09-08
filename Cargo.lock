@@ -512,6 +512,7 @@ dependencies = [
  "reqwest",
  "rust_decimal",
  "rustls",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",
