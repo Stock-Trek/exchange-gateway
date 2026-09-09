@@ -42,7 +42,7 @@ impl ConnectorBuilder<serde_json::Value> {
             converter: Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> {
                 Ok(value)
             }),
-            listener: Box::new(NoOpListener),
+            listener: Box::new(NoOpListener::new()),
         }
     }
     #[cfg(feature = "iris")]

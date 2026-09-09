@@ -4,11 +4,14 @@ use crate::{
 };
 use async_trait::async_trait;
 
-pub(crate) struct BoxedListener(pub(crate) Box<dyn ListenerTrait<TMessage = serde_json::Value>>);
+pub(crate) struct BoxedListener<Message>(pub(crate) Box<dyn ListenerTrait<TMessage = Message>>);
 
 #[async_trait]
-impl ListenerTrait for BoxedListener {
-    type TMessage = serde_json::Value;
+impl<TMessage> ListenerTrait for BoxedListener<TMessage>
+where
+    TMessage: Send,
+{
+    type TMessage = TMessage;
 
     async fn on_connected(&self) -> EGResult<()> {
         self.0.on_connected().await
@@ -19,7 +22,7 @@ impl ListenerTrait for BoxedListener {
     async fn on_error(&self, error: EGError) -> EGResult<()> {
         self.0.on_error(error).await
     }
-    async fn on_message(&self, message: serde_json::Value) -> EGResult<()> {
+    async fn on_message(&self, message: TMessage) -> EGResult<()> {
         self.0.on_message(message).await
     }
 }
