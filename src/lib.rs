@@ -16,7 +16,7 @@ pub use iris;
 pub mod prelude {
     pub use crate::{
         clock::Clock,
-        connector::Connector,
+        connector::{Connector, ConnectorBuilder},
         error::{EGError, EGResult},
         listeners::listener::ListenerTrait,
     };

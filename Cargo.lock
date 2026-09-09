@@ -499,6 +499,7 @@ dependencies = [
  "p384",
  "reqwest",
  "rust_decimal",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",
