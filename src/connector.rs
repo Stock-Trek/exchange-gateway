@@ -1,5 +1,5 @@
 use crate::{
-    auto_resync::AutoResync,
+    auto_resync::{AutoResync, Resync, ResyncFn, ResyncFuture},
     clients::{
         client::{HttpClient, WebsocketClient},
         iris::IrisWebsocketClient,
@@ -32,15 +32,11 @@ use iris::Config as IrisConfig;
 use std::{
     collections::HashMap,
     future::{Future, poll_fn},
-    pin::Pin,
     sync::{Arc, Mutex},
     task::Poll,
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
-
-type ResyncFuture = Pin<Box<dyn Future<Output = EGResult<()>> + Send>>;
-type ResyncFn = Arc<dyn Fn() -> ResyncFuture + Send + Sync>;
 
 pub struct Connector<Client> {
     rate_limiters: RateLimiters,
@@ -49,25 +45,6 @@ pub struct Connector<Client> {
     client: Arc<Client>,
     auto_resync: AutoResync,
     resync: Arc<Mutex<Option<ResyncFn>>>,
-}
-
-impl<Client> Clone for Connector<Client> {
-    fn clone(&self) -> Self {
-        Self {
-            rate_limiters: self.rate_limiters.clone(),
-            clock: self.clock.clone(),
-            signer: Arc::clone(&self.signer),
-            client: Arc::clone(&self.client),
-            auto_resync: self.auto_resync.clone(),
-            resync: Arc::clone(&self.resync),
-        }
-    }
-}
-
-#[doc(hidden)]
-#[async_trait]
-pub trait Resync<SyncRequest, SyncResponse> {
-    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()>;
 }
 
 #[async_trait]
@@ -206,9 +183,6 @@ impl Connector<()> {
 }
 
 impl<Client> Connector<Client> {
-    pub fn server_time_millis(&self) -> EGResult<i64> {
-        Ok(self.clock.now_millis())
-    }
     pub fn set_auto_resync_clock<SyncRequest, SyncResponse>(
         &self,
         sync_request: SyncRequest,
@@ -243,6 +217,12 @@ impl<Client> Connector<Client> {
                 self.auto_resync.start_or_update(duration, move || resync())
             }
         }
+    }
+}
+
+impl<Client> Connector<Client> {
+    pub fn server_time_millis(&self) -> EGResult<i64> {
+        Ok(self.clock.now_millis())
     }
     fn rate_limiters(rate_limits: impl RateLimits) -> RateLimiters {
         let default_capacity = rate_limits.default_capacity();
@@ -297,13 +277,13 @@ impl<Client> Connector<Client> {
         }
         Err(error)
     }
-    fn sync_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
+    fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
             let _ = self.rate_limiters.set_usage(usage);
         }
         if let Some(retry_after_seconds) = response.retry_after() {
             let retry_after = Duration::from_secs(retry_after_seconds.0);
-            let _ = self.rate_limiters.retry_after(retry_after);
+            let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
         Ok(())
@@ -335,7 +315,7 @@ where
         let round_trip_time = start.elapsed();
         let response = self.validate_http_status(response)?;
         let response = SyncResponse::try_from_http(response).map_err(|_| EGError::BadResponse)?;
-        self.sync_rate_limits(&response)?;
+        self.set_rate_limits(&response)?;
         if let Some(server_time) = response.server_time() {
             self.clock.sync(server_time.0 as i64, round_trip_time)?;
         }
@@ -360,7 +340,7 @@ where
         };
         let response = self.validate_http_status(response)?;
         let response = Response::try_from_http(response).map_err(|_| EGError::BadResponse)?;
-        self.sync_rate_limits(&response)?;
+        self.set_rate_limits(&response)?;
         Ok(response)
     }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
@@ -375,7 +355,7 @@ where
         {
             let _ = self
                 .rate_limiters
-                .retry_after(Duration::from_secs(retry_after_seconds));
+                .set_retry_after(Duration::from_secs(retry_after_seconds));
             return Err(EGError::RateLimited);
         }
         Err(EGError::HttpError {
@@ -481,8 +461,21 @@ where
         .await?;
         let response = Response::try_from_websocket(response_value)
             .map_err(|e| EGError::External(Box::new(e)))?;
-        self.sync_rate_limits(&response)?;
+        self.set_rate_limits(&response)?;
         Ok(response)
+    }
+}
+
+impl<Client> Clone for Connector<Client> {
+    fn clone(&self) -> Self {
+        Self {
+            rate_limiters: self.rate_limiters.clone(),
+            clock: self.clock.clone(),
+            signer: self.signer.clone(),
+            client: self.client.clone(),
+            auto_resync: self.auto_resync.clone(),
+            resync: self.resync.clone(),
+        }
     }
 }
 

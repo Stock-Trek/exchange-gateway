@@ -1,6 +1,8 @@
 use crate::error::{EGError, EGResult};
+use async_trait::async_trait;
 use std::{
     future::Future,
+    pin::Pin,
     sync::{
         Arc, Mutex,
         mpsc::{self, RecvTimeoutError, Sender},
@@ -8,6 +10,15 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
+
+#[doc(hidden)]
+#[async_trait]
+pub trait Resync<SyncRequest, SyncResponse> {
+    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()>;
+}
+
+pub(crate) type ResyncFuture = Pin<Box<dyn Future<Output = EGResult<()>> + Send>>;
+pub(crate) type ResyncFn = Arc<dyn Fn() -> ResyncFuture + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub(crate) struct AutoResync {
@@ -70,15 +81,16 @@ impl AutoResync {
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?
             .take();
-        if let Some(handle) = handle {
-            let _ = handle.sender.send(ControlMsg::Stop);
-            drop(handle.sender);
-            match handle.join.join() {
-                Ok(()) => Ok(()),
-                Err(_) => Err(EGError::AutoResyncClockPanicked),
+        match handle {
+            Some(handle) => {
+                let _ = handle.sender.send(ControlMsg::Stop);
+                drop(handle.sender);
+                match handle.join.join() {
+                    Ok(()) => Ok(()),
+                    Err(_) => Err(EGError::AutoResyncClockPanicked),
+                }
             }
-        } else {
-            Ok(())
+            None => Ok(()),
         }
     }
 }
