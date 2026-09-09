@@ -1,4 +1,5 @@
 mod auto_resync;
+mod boxed_urls;
 pub mod clients;
 pub mod clock;
 pub mod connector;
@@ -8,7 +9,6 @@ pub mod functions;
 pub mod listeners;
 mod panic_guard;
 pub mod rate_limit;
-mod urls;
 
 pub use async_trait::async_trait;
 #[cfg(feature = "iris")]

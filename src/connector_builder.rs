@@ -1,4 +1,5 @@
 use crate::{
+    boxed_urls::BoxedUrls,
     clients::{
         client::{HttpClient, WebsocketClient},
         iris::IrisWebsocketClient,
@@ -11,14 +12,13 @@ use crate::{
         boxed::BoxedListener, listener::ListenerTrait, no_op::NoOpListener,
         websocket_listener::WebsocketListener,
     },
-    rate_limit::{boxed::BoxedRateLimits, unlimited::UnlimitedRateLimits},
-    urls::{BoxedUrls, LocalhostUrls},
+    rate_limit::boxed::BoxedRateLimits,
 };
 use exchange_types::{
     encode::ByteEncoder,
-    rate_limited::RateLimits,
+    rate_limited::{RateLimits, UnlimitedRateLimits},
     signer::Signer,
-    urls::{TradingMode, Urls},
+    urls::{LocalhostUrls, TradingMode, Urls},
 };
 use iris::Config as IrisConfig;
 use std::sync::Arc;

@@ -13,7 +13,6 @@ use crate::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
         rate_limiters::RateLimiters,
     },
-    urls::url,
 };
 use async_trait::async_trait;
 use exchange_types::{
@@ -86,7 +85,7 @@ impl Connector<()> {
     where
         C: HttpClient,
     {
-        let url = url(urls, Protocol::Http, trading_mode);
+        let url = urls.env_var_or_default(Protocol::Http, trading_mode);
         let client = Arc::new(client_creator(url)?);
         Ok(Connector::<C> {
             rate_limiters: Self::rate_limiters(rate_limits),
@@ -127,7 +126,7 @@ impl Connector<()> {
         C: WebsocketClient,
     {
         let websocket_listener = Arc::new(WebsocketListener::new(converter, listener));
-        let url = url(urls, Protocol::Websocket, trading_mode);
+        let url = urls.env_var_or_default(Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
         Ok(
             Connector::<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)> {
