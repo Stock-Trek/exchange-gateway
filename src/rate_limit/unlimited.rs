@@ -4,9 +4,9 @@ use exchange_types::{
 };
 use std::collections::HashMap;
 
-pub(crate) struct NoRateLimits;
+pub(crate) struct UnlimitedRateLimits;
 
-impl RateLimits for NoRateLimits {
+impl RateLimits for UnlimitedRateLimits {
     fn default_capacity(&self) -> HashMap<RateLimit, UsageCount> {
         HashMap::new()
     }

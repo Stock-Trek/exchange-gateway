@@ -11,7 +11,7 @@ use crate::{
         boxed::BoxedListener, listener::ListenerTrait, no_op::NoOpListener,
         websocket_listener::WebsocketListener,
     },
-    rate_limit::{boxed::BoxedRateLimits, unlimited::NoRateLimits},
+    rate_limit::{boxed::BoxedRateLimits, unlimited::UnlimitedRateLimits},
     urls::{BoxedUrls, LocalhostUrls},
 };
 use exchange_types::{
@@ -37,7 +37,7 @@ impl ConnectorBuilder<serde_json::Value> {
         Self {
             trading_mode: TradingMode::Paper,
             urls: Box::new(LocalhostUrls),
-            rate_limits: Box::new(NoRateLimits),
+            rate_limits: Box::new(UnlimitedRateLimits),
             signer: Signer::new_unencrypted(ByteEncoder::Base64),
             converter: Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> {
                 Ok(value)
