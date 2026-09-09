@@ -31,8 +31,8 @@ use futures_timer::Delay;
 use iris::Config as IrisConfig;
 use std::{
     collections::HashMap,
-    future::{Future, poll_fn},
-    sync::{Arc, Mutex},
+    future::{Future, poll_fn, ready},
+    sync::Arc,
     task::Poll,
     time::{Duration, Instant},
 };
@@ -44,7 +44,30 @@ pub struct Connector<Client> {
     signer: Arc<Signer>,
     client: Arc<Client>,
     auto_resync: AutoResync,
-    resync: Arc<Mutex<Option<ResyncFn>>>,
+    resync: ResyncFn,
+}
+
+fn no_resync() -> ResyncFn {
+    Arc::new(|| -> ResyncFuture { Box::pin(ready(Ok(()))) })
+}
+
+fn resync_fn<Client, SyncRequest, SyncResponse>(
+    connector: Connector<Client>,
+    sync_request: SyncRequest,
+    timeout: Duration,
+) -> ResyncFn
+where
+    Client: Send + Sync + 'static,
+    Connector<Client>: Resync<SyncRequest, SyncResponse>,
+    SyncRequest: Clone + Send + Sync + 'static,
+{
+    Arc::new(move || {
+        let connector = connector.clone();
+        let sync_request = sync_request.clone();
+        let future: ResyncFuture =
+            Box::pin(async move { Resync::resync(&connector, sync_request, timeout).await });
+        future
+    })
 }
 
 #[async_trait]
@@ -73,46 +96,69 @@ where
 }
 
 impl Connector<()> {
-    pub fn try_new_http<Client>(
+    pub fn try_new_http<Client, SyncRequest, SyncResponse>(
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, Client>,
+        sync_request: SyncRequest,
+        timeout: Duration,
     ) -> EGResult<Connector<Client>>
     where
-        Client: HttpClient,
+        Client: HttpClient + Send + Sync + 'static,
+        Connector<Client>: Resync<SyncRequest, SyncResponse>,
+        SyncRequest: Clone + Send + Sync + 'static,
     {
         let url = exchange
             .urls()
             .env_var_or_default(exchange.name(), Protocol::Http, trading_mode);
         let client = Arc::new(client_creator(url)?);
-        Ok(Connector::<Client> {
+        let mut connector = Connector::<Client> {
             rate_limiters: Self::rate_limiters(exchange.default_capacity()),
             clock: Clock::default(),
             signer: Arc::new(signer),
             client,
             auto_resync: AutoResync::default(),
-            resync: Arc::new(Mutex::new(None)),
-        })
+            resync: no_resync(),
+        };
+        connector.resync = resync_fn(connector.clone(), sync_request, timeout);
+        Ok(connector)
     }
     #[cfg(feature = "reqwest")]
-    pub fn try_new_http_reqwest(
+    pub fn try_new_http_reqwest<SyncRequest, SyncResponse>(
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
-    ) -> EGResult<Connector<ReqwestHttpClient>> {
+        sync_request: SyncRequest,
+        timeout: Duration,
+    ) -> EGResult<Connector<ReqwestHttpClient>>
+    where
+        SyncRequest: ServerTimeHttpRequest<SyncResponse> + Clone + Send + Sync + 'static,
+        SyncResponse: ETHttpResponse + ServerTimeResponse + Send,
+    {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
-        Self::try_new_http(trading_mode, exchange, signer, client_creator)
+        Self::try_new_http(
+            trading_mode,
+            exchange,
+            signer,
+            client_creator,
+            sync_request,
+            timeout,
+        )
     }
     #[allow(clippy::type_complexity)]
-    pub fn try_new_websocket<Client>(
+    pub fn try_new_websocket<Client, SyncRequest, SyncResponse>(
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
+        sync_request: SyncRequest,
+        timeout: Duration,
     ) -> EGResult<Connector<(Client, Arc<WebsocketListener>)>>
     where
-        Client: WebsocketClient,
+        Client: WebsocketClient + 'static,
+        Connector<(Client, Arc<WebsocketListener>)>: Resync<SyncRequest, SyncResponse>,
+        SyncRequest: Clone + Send + Sync + 'static,
     {
         let websocket_listener = Arc::new(WebsocketListener::new());
         let url =
@@ -120,23 +166,31 @@ impl Connector<()> {
                 .urls()
                 .env_var_or_default(exchange.name(), Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
-        Ok(Connector::<(Client, Arc<WebsocketListener>)> {
+        let mut connector = Connector::<(Client, Arc<WebsocketListener>)> {
             rate_limiters: Self::rate_limiters(exchange.default_capacity()),
             clock: Clock::new(),
             signer: Arc::new(signer),
             client: Arc::new((client, websocket_listener)),
             auto_resync: AutoResync::default(),
-            resync: Arc::new(Mutex::new(None)),
-        })
+            resync: no_resync(),
+        };
+        connector.resync = resync_fn(connector.clone(), sync_request, timeout);
+        Ok(connector)
     }
     #[allow(clippy::type_complexity)]
     #[cfg(feature = "iris")]
-    pub fn try_new_websocket_iris(
+    pub fn try_new_websocket_iris<SyncRequest, SyncResponse>(
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
         iris_config: IrisConfig,
-    ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>> {
+        sync_request: SyncRequest,
+        timeout: Duration,
+    ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>>
+    where
+        SyncRequest: ServerTimeWebsocketRequest<SyncResponse> + Clone + Send + Sync + 'static,
+        SyncResponse: ETWebsocketResponse + ServerTimeResponse + Send,
+    {
         let client_creator: BoxTryCreateOnce<
             (String, Arc<WebsocketListener>),
             IrisWebsocketClient,
@@ -147,42 +201,23 @@ impl Connector<()> {
                 websocket_listener,
             ))
         });
-        Self::try_new_websocket(trading_mode, exchange, signer, client_creator)
+        Self::try_new_websocket(
+            trading_mode,
+            exchange,
+            signer,
+            client_creator,
+            sync_request,
+            timeout,
+        )
     }
 }
 
 impl<Client> Connector<Client> {
-    pub fn set_auto_resync_clock<SyncRequest, SyncResponse>(
-        &self,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<()>
-    where
-        Self: Resync<SyncRequest, SyncResponse>,
-        Client: Send + Sync + 'static,
-        SyncRequest: Clone + Send + Sync + 'static,
-    {
-        let connector = self.clone();
-        let resync: ResyncFn = Arc::new(move || {
-            let connector = connector.clone();
-            let sync_request = sync_request.clone();
-            let future: ResyncFuture =
-                Box::pin(async move { Resync::resync(&connector, sync_request, timeout).await });
-            future
-        });
-        *self.resync.lock().map_err(|_| EGError::MutexPoisoned)? = Some(resync);
-        Ok(())
-    }
     pub fn auto_resync_clock(&self, duration: Option<Duration>) -> EGResult<()> {
         match duration {
             None => self.auto_resync.stop(),
             Some(duration) => {
-                let resync = self
-                    .resync
-                    .lock()
-                    .map_err(|_| EGError::MutexPoisoned)?
-                    .clone()
-                    .ok_or(EGError::AutoResyncClockNotConfigured)?;
+                let resync = self.resync.clone();
                 self.auto_resync.start_or_update(duration, move || resync())
             }
         }
