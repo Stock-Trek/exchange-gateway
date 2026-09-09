@@ -16,9 +16,10 @@ use crate::{
 };
 use async_trait::async_trait;
 use exchange_types::{
+    exchange::ETExchange,
     http::HttpResponse,
     new_types::UsageCount,
-    rate_limited::{RateLimit, RateLimitRestriction, RateLimits},
+    rate_limited::{RateLimit, RateLimitRestriction},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETResponse, ETWebsocketResponse},
     server_time::{ServerTimeHttpRequest, ServerTimeResponse, ServerTimeWebsocketRequest},
@@ -74,18 +75,19 @@ where
 impl Connector<()> {
     pub fn try_new_http<C>(
         trading_mode: TradingMode,
-        urls: &impl Urls,
-        rate_limits: impl RateLimits,
+        exchange: impl ETExchange,
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, C>,
     ) -> EGResult<Connector<C>>
     where
         C: HttpClient,
     {
-        let url = urls.env_var_or_default(Protocol::Http, trading_mode);
+        let url = exchange
+            .urls()
+            .env_var_or_default(exchange.name(), Protocol::Http, trading_mode);
         let client = Arc::new(client_creator(url)?);
         Ok(Connector::<C> {
-            rate_limiters: Self::rate_limiters(rate_limits),
+            rate_limiters: Self::rate_limiters(exchange.default_capacity()),
             clock: Clock::default(),
             signer: Arc::new(signer),
             client,
@@ -96,18 +98,16 @@ impl Connector<()> {
     #[cfg(feature = "reqwest")]
     pub fn try_new_http_reqwest(
         trading_mode: TradingMode,
-        urls: &impl Urls,
-        rate_limits: impl RateLimits,
+        exchange: impl ETExchange,
         signer: Signer,
     ) -> EGResult<Connector<ReqwestHttpClient>> {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
-        Self::try_new_http(trading_mode, urls, rate_limits, signer, client_creator)
+        Self::try_new_http(trading_mode, exchange, signer, client_creator)
     }
     #[allow(clippy::type_complexity)]
     pub fn try_new_websocket<C>(
         trading_mode: TradingMode,
-        urls: &impl Urls,
-        rate_limits: impl RateLimits,
+        exchange: impl ETExchange,
         signer: Signer,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), C>,
     ) -> EGResult<Connector<(C, Arc<WebsocketListener>)>>
@@ -115,10 +115,13 @@ impl Connector<()> {
         C: WebsocketClient,
     {
         let websocket_listener = Arc::new(WebsocketListener::new());
-        let url = urls.env_var_or_default(Protocol::Websocket, trading_mode);
+        let url =
+            exchange
+                .urls()
+                .env_var_or_default(exchange.name(), Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
         Ok(Connector::<(C, Arc<WebsocketListener>)> {
-            rate_limiters: Self::rate_limiters(rate_limits),
+            rate_limiters: Self::rate_limiters(exchange.default_capacity()),
             clock: Clock::new(),
             signer: Arc::new(signer),
             client: Arc::new((client, websocket_listener)),
@@ -130,8 +133,7 @@ impl Connector<()> {
     #[cfg(feature = "iris")]
     pub fn try_new_websocket_iris(
         trading_mode: TradingMode,
-        urls: &impl Urls,
-        rate_limits: impl RateLimits,
+        exchange: impl ETExchange,
         signer: Signer,
         iris_config: IrisConfig,
     ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>> {
@@ -145,7 +147,7 @@ impl Connector<()> {
                 websocket_listener,
             ))
         });
-        Self::try_new_websocket(trading_mode, urls, rate_limits, signer, client_creator)
+        Self::try_new_websocket(trading_mode, exchange, signer, client_creator)
     }
 }
 
@@ -191,8 +193,7 @@ impl<Client> Connector<Client> {
     pub fn server_time_millis(&self) -> EGResult<i64> {
         Ok(self.clock.now_millis())
     }
-    fn rate_limiters(rate_limits: impl RateLimits) -> RateLimiters {
-        let default_capacity = rate_limits.default_capacity();
+    fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> RateLimiters {
         let mut limiter_states = HashMap::new();
         for (rate_limit, capacity) in default_capacity {
             let RateLimit {

@@ -5,7 +5,7 @@ use std::{
     task::Poll,
 };
 
-pub struct PanicUtils;
+pub(crate) struct PanicUtils;
 
 impl PanicUtils {
     /// Runs `f`, converting a panic into an `Err` containing the panic payload
