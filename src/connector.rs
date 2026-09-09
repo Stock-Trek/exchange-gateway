@@ -73,20 +73,20 @@ where
 }
 
 impl Connector<()> {
-    pub fn try_new_http<C>(
+    pub fn try_new_http<Client>(
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
-        client_creator: BoxTryCreateOnce<String, C>,
-    ) -> EGResult<Connector<C>>
+        client_creator: BoxTryCreateOnce<String, Client>,
+    ) -> EGResult<Connector<Client>>
     where
-        C: HttpClient,
+        Client: HttpClient,
     {
         let url = exchange
             .urls()
             .env_var_or_default(exchange.name(), Protocol::Http, trading_mode);
         let client = Arc::new(client_creator(url)?);
-        Ok(Connector::<C> {
+        Ok(Connector::<Client> {
             rate_limiters: Self::rate_limiters(exchange.default_capacity()),
             clock: Clock::default(),
             signer: Arc::new(signer),
@@ -105,14 +105,14 @@ impl Connector<()> {
         Self::try_new_http(trading_mode, exchange, signer, client_creator)
     }
     #[allow(clippy::type_complexity)]
-    pub fn try_new_websocket<C>(
+    pub fn try_new_websocket<Client>(
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
-        client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), C>,
-    ) -> EGResult<Connector<(C, Arc<WebsocketListener>)>>
+        client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
+    ) -> EGResult<Connector<(Client, Arc<WebsocketListener>)>>
     where
-        C: WebsocketClient,
+        Client: WebsocketClient,
     {
         let websocket_listener = Arc::new(WebsocketListener::new());
         let url =
@@ -120,7 +120,7 @@ impl Connector<()> {
                 .urls()
                 .env_var_or_default(exchange.name(), Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
-        Ok(Connector::<(C, Arc<WebsocketListener>)> {
+        Ok(Connector::<(Client, Arc<WebsocketListener>)> {
             rate_limiters: Self::rate_limiters(exchange.default_capacity()),
             clock: Clock::new(),
             signer: Arc::new(signer),
