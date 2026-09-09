@@ -1026,9 +1026,9 @@ checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "iris"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+ssh://git@ssh.shipyard.rs/stock-trek/crate-index.git"
-checksum = "574ab86226b9538351ccd03646333e4b38332980cde07cca422b159c8a2145f9"
+checksum = "a65dae46977beb0dfaeaebc947260a06588f39bd7e3054186f0be4d146f59ad1"
 dependencies = [
  "async-trait",
  "futures",
