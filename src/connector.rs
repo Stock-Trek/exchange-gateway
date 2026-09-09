@@ -8,11 +8,11 @@ use crate::{
     clock::Clock,
     error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
-    listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
         rate_limiters::RateLimiters,
     },
+    websocket_listener::WebsocketListener,
 };
 use async_trait::async_trait;
 use exchange_types::{
@@ -109,13 +109,12 @@ impl Connector<()> {
         urls: &impl Urls,
         rate_limits: impl RateLimits,
         signer: Signer,
-        listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), C>,
     ) -> EGResult<Connector<(C, Arc<WebsocketListener>)>>
     where
         C: WebsocketClient,
     {
-        let websocket_listener = Arc::new(WebsocketListener::new(listener));
+        let websocket_listener = Arc::new(WebsocketListener::new());
         let url = urls.env_var_or_default(Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
         Ok(Connector::<(C, Arc<WebsocketListener>)> {
@@ -134,7 +133,6 @@ impl Connector<()> {
         urls: &impl Urls,
         rate_limits: impl RateLimits,
         signer: Signer,
-        listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
         iris_config: IrisConfig,
     ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>> {
         let client_creator: BoxTryCreateOnce<
@@ -147,14 +145,7 @@ impl Connector<()> {
                 websocket_listener,
             ))
         });
-        Self::try_new_websocket(
-            trading_mode,
-            urls,
-            rate_limits,
-            signer,
-            listener,
-            client_creator,
-        )
+        Self::try_new_websocket(trading_mode, urls, rate_limits, signer, client_creator)
     }
 }
 

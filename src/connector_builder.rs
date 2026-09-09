@@ -8,11 +8,8 @@ use crate::{
     connector::Connector,
     error::EGResult,
     functions::BoxTryCreateOnce,
-    listeners::{
-        boxed::BoxedListener, listener::ListenerTrait, no_op::NoOpListener,
-        websocket_listener::WebsocketListener,
-    },
     rate_limit::boxed::BoxedRateLimits,
+    websocket_listener::WebsocketListener,
 };
 use exchange_types::{
     encode::ByteEncoder,
@@ -28,7 +25,6 @@ pub struct ConnectorBuilder {
     urls: Box<dyn Urls>,
     rate_limits: Box<dyn RateLimits>,
     signer: Signer,
-    listener: Box<dyn ListenerTrait<TMessage = serde_json::Value>>,
 }
 
 impl ConnectorBuilder {
@@ -38,7 +34,6 @@ impl ConnectorBuilder {
             urls: Box::new(LocalhostUrls),
             rate_limits: Box::new(UnlimitedRateLimits),
             signer: Signer::new_unencrypted(ByteEncoder::Base64),
-            listener: Box::new(NoOpListener::new()),
         }
     }
     #[cfg(feature = "iris")]
@@ -84,13 +79,6 @@ impl ConnectorBuilder {
         self.signer = signer;
         self
     }
-    pub fn listener(
-        mut self,
-        listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
-    ) -> Self {
-        self.listener = Box::new(listener);
-        self
-    }
     #[cfg(feature = "reqwest")]
     pub fn build_http_reqwest(self) -> EGResult<Connector<ReqwestHttpClient>> {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
@@ -124,7 +112,6 @@ impl ConnectorBuilder {
             &BoxedUrls(self.urls),
             BoxedRateLimits(self.rate_limits),
             self.signer,
-            BoxedListener(self.listener),
             client_creator,
         )
     }

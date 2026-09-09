@@ -1,8 +1,8 @@
 use crate::{
     clients::client::WebsocketClient,
     error::{EGError, EGResult},
-    listeners::listener::ListenerTrait,
     panic_guard::PanicUtils,
+    websocket_listener::WebsocketListener,
 };
 use async_trait::async_trait;
 use futures_timer::Delay;
@@ -19,11 +19,7 @@ pub struct IrisWebsocketClient {
 }
 
 impl IrisWebsocketClient {
-    pub fn with_config(
-        url: &str,
-        config: IrisConfig,
-        listener: Arc<dyn ListenerTrait<TMessage = serde_json::Value>>,
-    ) -> Self {
+    pub fn with_config(url: &str, config: IrisConfig, listener: Arc<WebsocketListener>) -> Self {
         let client = IrisClient::new(
             config,
             Arc::new(IrisListenerAdapter { delegate: listener }),
@@ -88,36 +84,21 @@ impl std::fmt::Debug for IrisWebsocketClient {
 }
 
 struct IrisListenerAdapter {
-    delegate: Arc<dyn ListenerTrait<TMessage = serde_json::Value>>,
-}
-
-impl IrisListenerAdapter {
-    async fn run_guarded<F>(&self, future: F)
-    where
-        F: Future<Output = EGResult<()>>,
-    {
-        let result = match PanicUtils::catch_panic_async(future).await {
-            Ok(result) => result,
-            Err(payload) => Err(EGError::CallbackPanicked(PanicUtils::panic_message(
-                payload.as_ref(),
-            ))),
-        };
-        if let Err(error) = result {
-            let _ = PanicUtils::catch_panic_async(self.delegate.on_error(error)).await;
-        }
-    }
+    delegate: Arc<WebsocketListener>,
 }
 
 #[async_trait]
 impl IrisListener<serde_json::Value> for IrisListenerAdapter {
-    async fn on_connected(&self) {
-        self.run_guarded(self.delegate.on_connected()).await;
-    }
-    async fn on_disconnected(&self) {
-        self.run_guarded(self.delegate.on_disconnected()).await;
-    }
     async fn on_message(&self, message: serde_json::Value) {
-        self.run_guarded(self.delegate.on_message(message)).await;
+        let future = self.delegate.on_message(message);
+        let _ = match PanicUtils::catch_panic_async(future).await {
+            Ok(result) => result,
+            Err(payload) => {
+                let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
+                eprintln!("Error when calling `on_message`: {}", error);
+                Ok(())
+            }
+        };
     }
 }
 
