@@ -107,7 +107,10 @@ fn builder_with_all_fields_build_http_custom_client() {
 #[test]
 fn builder_defaults_build_websocket_custom_client() {
     let creator: exchange_gateway::functions::BoxTryCreateOnce<
-        (String, Arc<WebsocketListener<serde_json::Value, serde_json::Value>>),
+        (
+            String,
+            Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
+        ),
         TestWebsocketClient,
     > = Box::new(|(url, _)| {
         assert_eq!(url, "ws://localhost");
