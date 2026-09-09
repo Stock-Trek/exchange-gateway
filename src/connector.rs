@@ -7,13 +7,12 @@ use crate::{
     },
     clock::Clock,
     error::{EGError, EGResult},
-    functions::{ArcTryConvertValue, BoxTryCreateOnce},
+    functions::BoxTryCreateOnce,
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
         rate_limiters::RateLimiters,
     },
-    urls::url,
 };
 use async_trait::async_trait;
 use exchange_types::{
@@ -60,11 +59,8 @@ where
 }
 
 #[async_trait]
-impl<Client, TransportRes, SyncRequest, SyncResponse> Resync<SyncRequest, SyncResponse>
-    for Connector<(
-        Client,
-        Arc<WebsocketListener<TransportRes, serde_json::Value>>,
-    )>
+impl<Client, SyncRequest, SyncResponse> Resync<SyncRequest, SyncResponse>
+    for Connector<(Client, Arc<WebsocketListener>)>
 where
     Client: WebsocketClient,
     SyncRequest: ServerTimeWebsocketRequest<SyncResponse> + Send + 'static,
@@ -86,7 +82,7 @@ impl Connector<()> {
     where
         C: HttpClient,
     {
-        let url = url(urls, Protocol::Http, trading_mode);
+        let url = urls.env_var_or_default(Protocol::Http, trading_mode);
         let client = Arc::new(client_creator(url)?);
         Ok(Connector::<C> {
             rate_limiters: Self::rate_limiters(rate_limits),
@@ -108,37 +104,28 @@ impl Connector<()> {
         Self::try_new_http(trading_mode, urls, rate_limits, signer, client_creator)
     }
     #[allow(clippy::type_complexity)]
-    pub fn try_new_websocket<C, TransportRes>(
+    pub fn try_new_websocket<C>(
         trading_mode: TradingMode,
         urls: &impl Urls,
         rate_limits: impl RateLimits,
         signer: Signer,
-        converter: ArcTryConvertValue<TransportRes, serde_json::Value>,
         listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
-        client_creator: BoxTryCreateOnce<
-            (
-                String,
-                Arc<WebsocketListener<TransportRes, serde_json::Value>>,
-            ),
-            C,
-        >,
-    ) -> EGResult<Connector<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)>>
+        client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), C>,
+    ) -> EGResult<Connector<(C, Arc<WebsocketListener>)>>
     where
         C: WebsocketClient,
     {
-        let websocket_listener = Arc::new(WebsocketListener::new(converter, listener));
-        let url = url(urls, Protocol::Websocket, trading_mode);
+        let websocket_listener = Arc::new(WebsocketListener::new(listener));
+        let url = urls.env_var_or_default(Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
-        Ok(
-            Connector::<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)> {
-                rate_limiters: Self::rate_limiters(rate_limits),
-                clock: Clock::new(),
-                signer: Arc::new(signer),
-                client: Arc::new((client, websocket_listener)),
-                auto_resync: AutoResync::default(),
-                resync: Arc::new(Mutex::new(None)),
-            },
-        )
+        Ok(Connector::<(C, Arc<WebsocketListener>)> {
+            rate_limiters: Self::rate_limiters(rate_limits),
+            clock: Clock::new(),
+            signer: Arc::new(signer),
+            client: Arc::new((client, websocket_listener)),
+            auto_resync: AutoResync::default(),
+            resync: Arc::new(Mutex::new(None)),
+        })
     }
     #[allow(clippy::type_complexity)]
     #[cfg(feature = "iris")]
@@ -149,17 +136,9 @@ impl Connector<()> {
         signer: Signer,
         listener: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
         iris_config: IrisConfig,
-    ) -> EGResult<
-        Connector<(
-            IrisWebsocketClient,
-            Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
-        )>,
-    > {
+    ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>> {
         let client_creator: BoxTryCreateOnce<
-            (
-                String,
-                Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
-            ),
+            (String, Arc<WebsocketListener>),
             IrisWebsocketClient,
         > = Box::new(move |(url, websocket_listener)| {
             Ok(IrisWebsocketClient::with_config(
@@ -168,14 +147,11 @@ impl Connector<()> {
                 websocket_listener,
             ))
         });
-        let converter: ArcTryConvertValue<serde_json::Value, serde_json::Value> =
-            Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> { Ok(value) });
         Self::try_new_websocket(
             trading_mode,
             urls,
             rate_limits,
             signer,
-            converter,
             listener,
             client_creator,
         )
@@ -365,11 +341,7 @@ where
     }
 }
 
-impl<Client, TransportRes>
-    Connector<(
-        Client,
-        Arc<WebsocketListener<TransportRes, serde_json::Value>>,
-    )>
+impl<Client> Connector<(Client, Arc<WebsocketListener>)>
 where
     Client: WebsocketClient,
 {
@@ -484,7 +456,10 @@ impl<Client> std::fmt::Debug for Connector<Client> {
         f.debug_struct("ConnectorImpl")
             .field("rate_limits", &self.rate_limiters)
             .field("clock", &self.clock)
+            .field("signer", &"<signer>")
             .field("client", &"<client>")
+            .field("auto_resync", &"<auto_resync>")
+            .field("resync", &"<resync>")
             .finish()
     }
 }
