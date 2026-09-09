@@ -179,20 +179,10 @@ impl ResponseHandler {
     }
 }
 
+#[derive(Default)]
 struct WaiterState {
     filtered_response: Option<serde_json::Value>,
     error: Option<EGError>,
     waker: Option<Waker>,
     abandoned: bool,
-}
-
-impl Default for WaiterState {
-    fn default() -> Self {
-        Self {
-            filtered_response: None,
-            error: None,
-            waker: None,
-            abandoned: false,
-        }
-    }
 }
