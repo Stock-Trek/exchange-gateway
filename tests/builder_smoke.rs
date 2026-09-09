@@ -1,6 +1,7 @@
 use exchange_gateway::{
     clients::{client::WebsocketClient, reqwest::ReqwestHttpClient},
-    connector::{Connector, ConnectorBuilder},
+    connector::Connector,
+    connector_builder::ConnectorBuilder,
     error::{EGError, EGResult},
     functions::ArcTryConvertValue,
     listeners::{listener::ListenerTrait, websocket_listener::WebsocketListener},
