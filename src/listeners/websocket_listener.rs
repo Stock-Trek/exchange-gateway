@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    functions::{ArcPredicate, ArcTryConvertValue},
+    functions::ArcPredicate,
     listeners::listener::ListenerTrait,
     panic_guard::PanicUtils,
 };
@@ -14,30 +14,24 @@ use std::{
 const MAX_PENDING_HANDLERS: usize = 1024;
 
 #[derive(Clone)]
-pub struct WebsocketListener<TransportRes, EGRes> {
-    converter: ArcTryConvertValue<TransportRes, EGRes>,
-    delegate: Arc<dyn ListenerTrait<TMessage = EGRes>>,
-    handlers: Arc<Mutex<Vec<Arc<ResponseHandler<EGRes>>>>>,
+pub struct WebsocketListener {
+    delegate: Arc<dyn ListenerTrait<TMessage = serde_json::Value>>,
+    handlers: Arc<Mutex<Vec<Arc<ResponseHandler>>>>,
 }
 
-impl<TransportRes, EGRes> WebsocketListener<TransportRes, EGRes>
-where
-    EGRes: Send + Sync + 'static,
-{
+impl WebsocketListener {
     pub(crate) fn new(
-        converter: ArcTryConvertValue<TransportRes, EGRes>,
-        delegate: impl ListenerTrait<TMessage = EGRes> + 'static,
+        delegate: impl ListenerTrait<TMessage = serde_json::Value> + 'static,
     ) -> Self {
         Self {
-            converter,
             delegate: Arc::new(delegate),
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
     pub(crate) fn waiter_for_filtered_response(
         &self,
-        filter: ArcPredicate<EGRes>,
-    ) -> EGResult<WaiterForResponse<EGRes>> {
+        filter: ArcPredicate<serde_json::Value>,
+    ) -> EGResult<WaiterForResponse> {
         let state = Arc::new(Mutex::new(WaiterState::default()));
         let handler = Arc::new(ResponseHandler {
             state: state.clone(),
@@ -55,12 +49,8 @@ where
 }
 
 #[async_trait]
-impl<TransportRes, EGRes> ListenerTrait for WebsocketListener<TransportRes, EGRes>
-where
-    EGRes: Clone + Send,
-    TransportRes: Send,
-{
-    type TMessage = TransportRes;
+impl ListenerTrait for WebsocketListener {
+    type TMessage = serde_json::Value;
 
     async fn on_connected(&self) -> EGResult<()> {
         self.delegate.on_connected().await
@@ -71,21 +61,9 @@ where
     async fn on_error(&self, error: EGError) -> EGResult<()> {
         self.delegate.on_error(error).await
     }
-    async fn on_message(&self, message: TransportRes) -> EGResult<()> {
-        let response = match PanicUtils::catch_panic(|| (self.converter)(message)) {
-            Ok(Ok(response)) => response,
-            Ok(Err(error)) => {
-                self.delegate.on_error(error).await?;
-                return Ok(());
-            }
-            Err(payload) => {
-                let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
-                self.delegate.on_error(error).await?;
-                return Ok(());
-            }
-        };
+    async fn on_message(&self, message: serde_json::Value) -> EGResult<()> {
         match remove_handler(&self.handlers, |handler| {
-            handler.clone().handle(response.clone())
+            handler.clone().handle(message.clone())
         }) {
             Ok(true) => return Ok(()),
             Ok(false) => {}
@@ -94,14 +72,14 @@ where
                 return Ok(());
             }
         }
-        if let Err(error) = self.delegate.on_message(response).await {
+        if let Err(error) = self.delegate.on_message(message).await {
             self.delegate.on_error(error).await?;
         }
         Ok(())
     }
 }
 
-impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EGRes> {
+impl std::fmt::Debug for WebsocketListener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WebsocketListener")
             .field("converter", &"<Converter>")
@@ -111,18 +89,12 @@ impl<TransportRes, EGRes> std::fmt::Debug for WebsocketListener<TransportRes, EG
     }
 }
 
-pub(crate) struct WaiterForResponse<EGRes>
-where
-    EGRes: Send,
-{
-    state: Arc<Mutex<WaiterState<EGRes>>>,
+pub(crate) struct WaiterForResponse {
+    state: Arc<Mutex<WaiterState>>,
 }
 
-impl<EGRes> Future for WaiterForResponse<EGRes>
-where
-    EGRes: Send,
-{
-    type Output = EGResult<EGRes>;
+impl Future for WaiterForResponse {
+    type Output = EGResult<serde_json::Value>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut state = match self.state.lock() {
@@ -140,10 +112,7 @@ where
     }
 }
 
-impl<EGRes> Drop for WaiterForResponse<EGRes>
-where
-    EGRes: Send,
-{
+impl Drop for WaiterForResponse {
     fn drop(&mut self) {
         let _ = self.state.lock().map(|mut state| {
             state.abandoned = true;
@@ -152,9 +121,9 @@ where
     }
 }
 
-fn remove_handler<EGRes>(
-    handlers: &Mutex<Vec<Arc<ResponseHandler<EGRes>>>>,
-    mut predicate: impl FnMut(&Arc<ResponseHandler<EGRes>>) -> EGResult<bool>,
+fn remove_handler(
+    handlers: &Mutex<Vec<Arc<ResponseHandler>>>,
+    mut predicate: impl FnMut(&Arc<ResponseHandler>) -> EGResult<bool>,
 ) -> EGResult<bool> {
     let mut guard = handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
     let mut handler_index = None;
@@ -172,17 +141,17 @@ fn remove_handler<EGRes>(
     }
 }
 
-struct ResponseHandler<EGRes> {
-    state: Arc<Mutex<WaiterState<EGRes>>>,
-    filter: ArcPredicate<EGRes>,
+struct ResponseHandler {
+    state: Arc<Mutex<WaiterState>>,
+    filter: ArcPredicate<serde_json::Value>,
 }
 
-impl<EGRes> ResponseHandler<EGRes> {
+impl ResponseHandler {
     fn is_abandoned(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.abandoned)
     }
 
-    fn handle(self: Arc<Self>, response: EGRes) -> EGResult<bool> {
+    fn handle(self: Arc<Self>, response: serde_json::Value) -> EGResult<bool> {
         let is_handled = match PanicUtils::catch_panic(|| (self.filter)(&response)) {
             Ok(is_handled) => is_handled,
             Err(payload) => {
@@ -210,17 +179,14 @@ impl<EGRes> ResponseHandler<EGRes> {
     }
 }
 
-struct WaiterState<EGRes> {
-    filtered_response: Option<EGRes>,
+struct WaiterState {
+    filtered_response: Option<serde_json::Value>,
     error: Option<EGError>,
     waker: Option<Waker>,
     abandoned: bool,
 }
 
-impl<EGRes> Default for WaiterState<EGRes>
-where
-    EGRes: Send,
-{
+impl Default for WaiterState {
     fn default() -> Self {
         Self {
             filtered_response: None,

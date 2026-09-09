@@ -7,7 +7,7 @@ use crate::{
     },
     connector::Connector,
     error::EGResult,
-    functions::{ArcTryConvertValue, BoxTryCreateOnce},
+    functions::BoxTryCreateOnce,
     listeners::{
         boxed::BoxedListener, listener::ListenerTrait, no_op::NoOpListener,
         websocket_listener::WebsocketListener,
@@ -23,25 +23,21 @@ use exchange_types::{
 use iris::Config as IrisConfig;
 use std::sync::Arc;
 
-pub struct ConnectorBuilder<TransportRes = serde_json::Value> {
+pub struct ConnectorBuilder {
     trading_mode: TradingMode,
     urls: Box<dyn Urls>,
     rate_limits: Box<dyn RateLimits>,
     signer: Signer,
-    converter: ArcTryConvertValue<TransportRes, serde_json::Value>,
     listener: Box<dyn ListenerTrait<TMessage = serde_json::Value>>,
 }
 
-impl ConnectorBuilder<serde_json::Value> {
+impl ConnectorBuilder {
     pub fn new() -> Self {
         Self {
             trading_mode: TradingMode::Paper,
             urls: Box::new(LocalhostUrls),
             rate_limits: Box::new(UnlimitedRateLimits),
             signer: Signer::new_unencrypted(ByteEncoder::Base64),
-            converter: Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> {
-                Ok(value)
-            }),
             listener: Box::new(NoOpListener::new()),
         }
     }
@@ -50,17 +46,9 @@ impl ConnectorBuilder<serde_json::Value> {
     pub fn build_websocket_iris(
         self,
         iris_config: IrisConfig,
-    ) -> EGResult<
-        Connector<(
-            IrisWebsocketClient,
-            Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
-        )>,
-    > {
+    ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>> {
         let client_creator: BoxTryCreateOnce<
-            (
-                String,
-                Arc<WebsocketListener<serde_json::Value, serde_json::Value>>,
-            ),
+            (String, Arc<WebsocketListener>),
             IrisWebsocketClient,
         > = Box::new(move |(url, websocket_listener)| {
             Ok(IrisWebsocketClient::with_config(
@@ -73,13 +61,13 @@ impl ConnectorBuilder<serde_json::Value> {
     }
 }
 
-impl Default for ConnectorBuilder<serde_json::Value> {
+impl Default for ConnectorBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<TransportRes> ConnectorBuilder<TransportRes> {
+impl ConnectorBuilder {
     pub fn trading_mode(mut self, trading_mode: TradingMode) -> Self {
         self.trading_mode = trading_mode;
         self
@@ -102,19 +90,6 @@ impl<TransportRes> ConnectorBuilder<TransportRes> {
     ) -> Self {
         self.listener = Box::new(listener);
         self
-    }
-    pub fn converter<NewTransportRes>(
-        self,
-        converter: ArcTryConvertValue<NewTransportRes, serde_json::Value>,
-    ) -> ConnectorBuilder<NewTransportRes> {
-        ConnectorBuilder {
-            trading_mode: self.trading_mode,
-            urls: self.urls,
-            rate_limits: self.rate_limits,
-            signer: self.signer,
-            listener: self.listener,
-            converter,
-        }
     }
     #[cfg(feature = "reqwest")]
     pub fn build_http_reqwest(self) -> EGResult<Connector<ReqwestHttpClient>> {
@@ -139,14 +114,8 @@ impl<TransportRes> ConnectorBuilder<TransportRes> {
     #[allow(clippy::type_complexity)]
     pub fn build_websocket<C>(
         self,
-        client_creator: BoxTryCreateOnce<
-            (
-                String,
-                Arc<WebsocketListener<TransportRes, serde_json::Value>>,
-            ),
-            C,
-        >,
-    ) -> EGResult<Connector<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)>>
+        client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), C>,
+    ) -> EGResult<Connector<(C, Arc<WebsocketListener>)>>
     where
         C: WebsocketClient,
     {
@@ -155,7 +124,6 @@ impl<TransportRes> ConnectorBuilder<TransportRes> {
             &BoxedUrls(self.urls),
             BoxedRateLimits(self.rate_limits),
             self.signer,
-            self.converter,
             BoxedListener(self.listener),
             client_creator,
         )
