@@ -43,7 +43,7 @@ impl RateLimiters {
         }
         Ok(())
     }
-    pub fn retry_after(&self, retry_after: Duration) -> EGResult<()> {
+    pub fn set_retry_after(&self, retry_after: Duration) -> EGResult<()> {
         for limiter in self.limiters.values() {
             limiter.throttle(retry_after)?;
         }
