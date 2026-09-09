@@ -38,6 +38,9 @@ use std::{
 };
 use strum::IntoEnumIterator;
 
+#[cfg(feature = "iris")]
+use iris::DisconnectedBehavior;
+
 pub struct Connector<Client> {
     rate_limiters: RateLimiters,
     clock: Clock,
@@ -135,8 +138,9 @@ impl Connector<()> {
         trading_mode: TradingMode,
         exchange: impl ETExchange,
         signer: Signer,
-        iris_config: IrisConfig,
+        mut iris_config: IrisConfig,
     ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>> {
+        iris_config = iris_config.with_disconnected_behavior(DisconnectedBehavior::DropAllQueued);
         let client_creator: BoxTryCreateOnce<
             (String, Arc<WebsocketListener>),
             IrisWebsocketClient,
