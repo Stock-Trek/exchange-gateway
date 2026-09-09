@@ -1,4 +1,5 @@
 use crate::{
+    auto_resync::AutoResync,
     clients::{
         client::{HttpClient, WebsocketClient},
         iris::IrisWebsocketClient,
@@ -14,13 +15,14 @@ use crate::{
     },
     urls::url,
 };
+use async_trait::async_trait;
 use exchange_types::{
     http::HttpResponse,
     new_types::UsageCount,
     rate_limited::{RateLimit, RateLimitRestriction, RateLimits},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETResponse, ETWebsocketResponse},
-    server_time::{ServerTimeHttpRequest, ServerTimeResponse},
+    server_time::{ServerTimeHttpRequest, ServerTimeResponse, ServerTimeWebsocketRequest},
     signer::Signer,
     urls::{Protocol, TradingMode, Urls},
     websocket_id::ETWebsocketId,
@@ -30,17 +32,70 @@ use iris::Config as IrisConfig;
 use std::{
     collections::HashMap,
     future::{Future, poll_fn},
-    sync::Arc,
+    pin::Pin,
+    sync::{Arc, Mutex},
     task::Poll,
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
 
+type ResyncFuture = Pin<Box<dyn Future<Output = EGResult<()>> + Send>>;
+type ResyncFn = Arc<dyn Fn() -> ResyncFuture + Send + Sync>;
+
 pub struct Connector<Client> {
     rate_limiters: RateLimiters,
     clock: Clock,
-    signer: Signer,
+    signer: Arc<Signer>,
     client: Arc<Client>,
+    auto_resync: AutoResync,
+    resync: Arc<Mutex<Option<ResyncFn>>>,
+}
+
+impl<Client> Clone for Connector<Client> {
+    fn clone(&self) -> Self {
+        Self {
+            rate_limiters: self.rate_limiters.clone(),
+            clock: self.clock.clone(),
+            signer: Arc::clone(&self.signer),
+            client: Arc::clone(&self.client),
+            auto_resync: self.auto_resync.clone(),
+            resync: Arc::clone(&self.resync),
+        }
+    }
+}
+
+#[doc(hidden)]
+#[async_trait]
+pub trait Resync<SyncRequest, SyncResponse> {
+    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()>;
+}
+
+#[async_trait]
+impl<Client, SyncRequest, SyncResponse> Resync<SyncRequest, SyncResponse> for Connector<Client>
+where
+    Client: HttpClient + Send + Sync,
+    SyncRequest: ServerTimeHttpRequest<SyncResponse> + Send + 'static,
+    SyncResponse: ETHttpResponse + ServerTimeResponse + Send,
+{
+    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()> {
+        self.sync_clock(request, timeout).await
+    }
+}
+
+#[async_trait]
+impl<Client, TransportRes, SyncRequest, SyncResponse> Resync<SyncRequest, SyncResponse>
+    for Connector<(
+        Client,
+        Arc<WebsocketListener<TransportRes, serde_json::Value>>,
+    )>
+where
+    Client: WebsocketClient,
+    SyncRequest: ServerTimeWebsocketRequest<SyncResponse> + Send + 'static,
+    SyncResponse: ETWebsocketResponse + ServerTimeResponse + Send,
+{
+    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()> {
+        self.sync_clock(request, timeout).await
+    }
 }
 
 impl Connector<()> {
@@ -59,8 +114,10 @@ impl Connector<()> {
         Ok(Connector::<C> {
             rate_limiters: Self::rate_limiters(rate_limits),
             clock: Clock::default(),
-            signer,
+            signer: Arc::new(signer),
             client,
+            auto_resync: AutoResync::default(),
+            resync: Arc::new(Mutex::new(None)),
         })
     }
     #[cfg(feature = "reqwest")]
@@ -99,8 +156,10 @@ impl Connector<()> {
             Connector::<(C, Arc<WebsocketListener<TransportRes, serde_json::Value>>)> {
                 rate_limiters: Self::rate_limiters(rate_limits),
                 clock: Clock::new(),
-                signer,
+                signer: Arc::new(signer),
                 client: Arc::new((client, websocket_listener)),
+                auto_resync: AutoResync::default(),
+                resync: Arc::new(Mutex::new(None)),
             },
         )
     }
@@ -149,6 +208,41 @@ impl Connector<()> {
 impl<Client> Connector<Client> {
     pub fn server_time_millis(&self) -> EGResult<i64> {
         Ok(self.clock.now_millis())
+    }
+    pub fn set_auto_resync_clock<SyncRequest, SyncResponse>(
+        &self,
+        sync_request: SyncRequest,
+        timeout: Duration,
+    ) -> EGResult<()>
+    where
+        Self: Resync<SyncRequest, SyncResponse>,
+        Client: Send + Sync + 'static,
+        SyncRequest: Clone + Send + Sync + 'static,
+    {
+        let connector = self.clone();
+        let resync: ResyncFn = Arc::new(move || {
+            let connector = connector.clone();
+            let sync_request = sync_request.clone();
+            let future: ResyncFuture =
+                Box::pin(async move { Resync::resync(&connector, sync_request, timeout).await });
+            future
+        });
+        *self.resync.lock().map_err(|_| EGError::MutexPoisoned)? = Some(resync);
+        Ok(())
+    }
+    pub fn auto_resync_clock(&self, duration: Option<Duration>) -> EGResult<()> {
+        match duration {
+            None => self.auto_resync.stop(),
+            Some(duration) => {
+                let resync = self
+                    .resync
+                    .lock()
+                    .map_err(|_| EGError::MutexPoisoned)?
+                    .clone()
+                    .ok_or(EGError::AutoResyncClockNotConfigured)?;
+                self.auto_resync.start_or_update(duration, move || resync())
+            }
+        }
     }
     fn rate_limiters(rate_limits: impl RateLimits) -> RateLimiters {
         let default_capacity = rate_limits.default_capacity();
@@ -231,7 +325,7 @@ where
     {
         let costs = self.validate_rate_limits(&sync_request)?;
         let http_request = sync_request
-            .try_into_http(&self.signer)
+            .try_into_http(self.signer.as_ref())
             .map_err(|e| EGError::External(Box::new(e)))?;
         let start = Instant::now();
         let response = match self.client.send(http_request, timeout).await {
@@ -258,7 +352,7 @@ where
     {
         let costs = self.validate_rate_limits(&request)?;
         let http_request = request
-            .try_into_http(&self.signer)
+            .try_into_http(self.signer.as_ref())
             .map_err(|e| EGError::External(Box::new(e)))?;
         let response = match self.client.send(http_request, timeout).await {
             Ok(response) => response,
@@ -320,7 +414,7 @@ where
         let costs = self.validate_rate_limits(&sync_request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         let (websocket_request, response_matcher) = sync_request
-            .try_into_websocket(&self.signer, id)
+            .try_into_websocket(self.signer.as_ref(), id)
             .map_err(|_| EGError::BadResponse)?;
         let start = Instant::now();
         let response = self
@@ -349,7 +443,7 @@ where
         let costs = self.validate_rate_limits(&request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         let (websocket_request, response_matcher) = request
-            .try_into_websocket(&self.signer, id)
+            .try_into_websocket(self.signer.as_ref(), id)
             .map_err(|e| EGError::External(Box::new(e)))?;
         self.send_wait::<Request, Response>(websocket_request, costs, timeout, response_matcher)
             .await

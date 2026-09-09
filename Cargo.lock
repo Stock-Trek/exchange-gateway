@@ -504,6 +504,7 @@ dependencies = [
  "sha2",
  "strum",
  "thiserror",
+ "tokio",
  "uuid",
 ]
 
