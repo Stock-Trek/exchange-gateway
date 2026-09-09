@@ -511,9 +511,9 @@ dependencies = [
 
 [[package]]
 name = "exchange-types"
-version = "0.8.23"
+version = "0.8.25"
 source = "registry+ssh://git@ssh.shipyard.rs/stock-trek/crate-index.git"
-checksum = "570224fa5b109767d505dbeb078134e3d37a2015b180bd2c3460d268cb436e87"
+checksum = "a3198bf34e410c943df0eb94a19491c7f22703ecc8cfeaa5d3b5427e662bc6f7"
 dependencies = [
  "bs58",
  "data-encoding",

@@ -15,6 +15,7 @@ use crate::{
     urls::{BoxedUrls, LocalhostUrls},
 };
 use exchange_types::{
+    encode::ByteEncoder,
     rate_limited::RateLimits,
     signer::Signer,
     urls::{TradingMode, Urls},
@@ -37,7 +38,7 @@ impl ConnectorBuilder<serde_json::Value> {
             trading_mode: TradingMode::Paper,
             urls: Box::new(LocalhostUrls),
             rate_limits: Box::new(NoRateLimits),
-            signer: NoOpListener::noop_signer(),
+            signer: Signer::new_unencrypted(ByteEncoder::Base64),
             converter: Arc::new(|value: serde_json::Value| -> EGResult<serde_json::Value> {
                 Ok(value)
             }),
