@@ -238,7 +238,7 @@ where
             let _ = self.rate_limiters.set_usage(usage);
         }
         if let Some(retry_after_seconds) = response.retry_after() {
-            let retry_after = Duration::from_secs(retry_after_seconds.0 as u64);
+            let retry_after = Duration::from_secs(retry_after_seconds.0.max(0) as u64);
             let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
