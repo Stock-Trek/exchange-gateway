@@ -9,6 +9,10 @@ pub enum EGError {
     AutoResyncClockPanicked,
     #[error("A user callback panicked: {0}")]
     CallbackPanicked(String),
+    #[error(
+        "The server clock has not been synchronised; call sync_clock_http or sync_clock_websocket before sending signed requests"
+    )]
+    ClockNotSynced,
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error(
@@ -16,6 +20,8 @@ pub enum EGError {
         body = String::from_utf8_lossy(body)
     )]
     HttpError { status: u16, body: Vec<u8> },
+    #[error("Server time response did not contain a server time")]
+    MissingServerTime,
     #[error("Internal mutex poisoned by a panicking operation")]
     MutexPoisoned,
     #[error("Connector is not connected")]
