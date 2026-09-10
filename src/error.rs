@@ -7,6 +7,9 @@ pub enum EGError {
     #[cfg(feature = "auto-resync")]
     #[error("Auto resync clock thread panicked")]
     AutoResyncClockPanicked,
+    #[cfg(feature = "auto-resync")]
+    #[error("Clock sync frequency must be greater than zero")]
+    InvalidSyncFrequency,
     #[error("A user callback panicked: {0}")]
     CallbackPanicked(String),
     #[error(transparent)]
