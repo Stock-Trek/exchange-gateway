@@ -23,11 +23,30 @@ pub struct AutoResyncConnector<Exchange, Client> {
     resync_handle: Arc<Mutex<Option<AutoResyncHandle>>>,
 }
 
+struct AutoResyncHandle {
+    sender: Sender<ClockSyncCommand>,
+    join: JoinHandle<()>,
+}
+
+enum ClockSyncCommand {
+    SetFrequency(Duration),
+    Stop,
+}
+
 impl<Exchange, Client> AutoResyncConnector<Exchange, Client>
 where
     Exchange: ETExchange + Send + Sync + 'static,
     Client: Send + Sync + 'static,
 {
+    pub(crate) fn new(connector: Arc<Connector<Exchange, Client>>) -> Self {
+        Self {
+            connector,
+            resync_handle: Arc::new(Mutex::new(None)),
+        }
+    }
+    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+        self.connector.duration_since_last_sync()
+    }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.connector.server_time_estimate()
     }
@@ -105,6 +124,16 @@ where
     pub async fn sync_clock_http(&self) -> EGResult<()> {
         self.connector.sync_clock_http().await
     }
+    pub async fn set_clock_sync_frequency_http(&self, frequency: Duration) -> EGResult<()>
+    where
+        Exchange: Send + Sync + 'static,
+        Client: Send + Sync + 'static,
+    {
+        self.set_clock_sync_frequency(frequency, async |connector| {
+            connector.sync_clock_http().await
+        })
+        .await
+    }
     pub async fn send_http<Response>(
         &self,
         request: impl ETHttpRequest<Exchange = Exchange, Response = Response>,
@@ -133,6 +162,16 @@ where
     pub async fn sync_clock_websocket(&self) -> EGResult<()> {
         self.connector.sync_clock_websocket().await
     }
+    pub async fn set_clock_sync_frequency_websocket(&self, frequency: Duration) -> EGResult<()>
+    where
+        Exchange: Send + Sync + 'static,
+        Client: Send + Sync + 'static,
+    {
+        self.set_clock_sync_frequency(frequency, async |connector| {
+            connector.sync_clock_websocket().await
+        })
+        .await
+    }
     pub async fn send_websocket<Response>(
         &self,
         request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response>,
@@ -150,41 +189,5 @@ impl<Client, SyncRequest> std::fmt::Debug for AutoResyncConnector<Client, SyncRe
             .field("connector", &self.connector)
             .field("resync", &"<resync>")
             .finish()
-    }
-}
-
-struct AutoResyncHandle {
-    sender: Sender<ClockSyncCommand>,
-    join: JoinHandle<()>,
-}
-
-enum ClockSyncCommand {
-    SetFrequency(Duration),
-    Stop,
-}
-
-impl<Exchange, Client> AutoResyncConnector<Exchange, Client>
-where
-    Exchange: ETExchange + Send + Sync + 'static,
-    Client: HttpClient + Send + Sync + 'static,
-{
-    pub async fn set_clock_sync_frequency_http(&self, frequency: Duration) -> EGResult<()> {
-        self.set_clock_sync_frequency(frequency, async |connector| {
-            connector.sync_clock_http().await
-        })
-        .await
-    }
-}
-
-impl<Exchange, Client> AutoResyncConnector<Exchange, Client>
-where
-    Exchange: ETExchange + Send + Sync + 'static,
-    Client: WebsocketClient + Send + Sync + 'static,
-{
-    pub async fn set_clock_sync_frequency_websocket(&self, frequency: Duration) -> EGResult<()> {
-        self.set_clock_sync_frequency(frequency, async |connector| {
-            connector.sync_clock_websocket().await
-        })
-        .await
     }
 }

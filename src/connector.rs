@@ -1,4 +1,5 @@
 use crate::{
+    auto_resync_connector::AutoResyncConnector,
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
     error::{EGError, EGResult},
@@ -41,12 +42,12 @@ use {
 use crate::clients::reqwest::ReqwestHttpClient;
 
 pub struct Connector<Exchange, Client> {
-    pub exchange: Exchange,
-    pub rate_limiters: RateLimiters,
-    pub clock: Clock,
-    pub signer: Signer,
-    pub client: Client,
-    pub request_timeout: Duration,
+    exchange: Exchange,
+    rate_limiters: RateLimiters,
+    clock: Clock,
+    signer: Signer,
+    client: Client,
+    request_timeout: Duration,
     websocket_listener: Option<Arc<WebsocketListener>>,
 }
 
@@ -71,7 +72,7 @@ impl Connector<(), ()> {
             exchange,
             rate_limiters,
             clock: Clock::default(),
-            signer: signer,
+            signer,
             client,
             request_timeout,
             websocket_listener: None,
@@ -119,7 +120,7 @@ impl Connector<(), ()> {
             exchange,
             rate_limiters,
             clock: Clock::default(),
-            signer: signer,
+            signer,
             client,
             request_timeout,
             websocket_listener: Some(websocket_listener),
@@ -179,6 +180,16 @@ impl<Exchange, Client> Connector<Exchange, Client>
 where
     Exchange: ETExchange,
 {
+    pub fn into_auto_resync(self) -> AutoResyncConnector<Exchange, Client>
+    where
+        Exchange: Send + Sync + 'static,
+        Client: Send + Sync + 'static,
+    {
+        AutoResyncConnector::new(Arc::new(self))
+    }
+    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+        self.clock.duration_since_last_sync()
+    }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         Ok(self.clock.server_time_estimate())
     }
