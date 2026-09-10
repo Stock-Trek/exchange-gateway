@@ -22,14 +22,10 @@ pub enum EGError {
         body = String::from_utf8_lossy(body)
     )]
     HttpError { status: u16, body: Vec<u8> },
-    #[error(
-        "Failed to parse HTTP response: {source}; body: {body}",
-        body = String::from_utf8_lossy(body)
-    )]
+    #[error("Failed to parse HTTP response: {source}")]
     HttpParseError {
         #[source]
         source: ETError,
-        body: Vec<u8>,
     },
     #[cfg(feature = "auto-resync")]
     #[error("Clock sync frequency must be at least 1 minute")]
