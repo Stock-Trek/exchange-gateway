@@ -1,15 +1,14 @@
+use exchange_types::error::ETError;
+
 pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EGError {
-    #[error("Received unrecognised response")]
-    BadResponse,
     #[cfg(feature = "auto-resync")]
     #[error("Auto resync clock thread panicked")]
     AutoResyncClockPanicked,
-    #[cfg(feature = "auto-resync")]
-    #[error("Clock sync frequency must be at least 1 minute")]
-    InvalidSyncFrequency,
+    #[error("Received unrecognised response")]
+    BadResponse,
     #[error("A user callback panicked: {0}")]
     CallbackPanicked(String),
     #[error(transparent)]
@@ -19,6 +18,18 @@ pub enum EGError {
         body = String::from_utf8_lossy(body)
     )]
     HttpError { status: u16, body: Vec<u8> },
+    #[error(
+        "Failed to parse HTTP response: {source}; body: {body}",
+        body = String::from_utf8_lossy(body)
+    )]
+    HttpParseError {
+        #[source]
+        source: ETError,
+        body: Vec<u8>,
+    },
+    #[cfg(feature = "auto-resync")]
+    #[error("Clock sync frequency must be at least 1 minute")]
+    InvalidSyncFrequency,
     #[error("Internal mutex poisoned by a panicking operation")]
     MutexPoisoned,
     #[error("Connector is not connected")]
