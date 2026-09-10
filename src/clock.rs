@@ -28,11 +28,11 @@ impl Clock {
         }
     }
 
-    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+    pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
         let result = self.last_sync.lock();
         let mutex = result.map_err(|_| EGError::MutexPoisoned)?;
         let last_sync = *mutex;
-        Ok(last_sync.map_or(Duration::MAX, |i| i.elapsed()))
+        Ok(last_sync.map(|i| i.elapsed()))
     }
 
     pub fn sync(&self, server_time: Milliseconds, round_trip_duration: Duration) -> EGResult<()> {

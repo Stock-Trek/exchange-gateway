@@ -189,8 +189,11 @@ where
     {
         AutoResyncConnector::new(Arc::new(self))
     }
-    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+    pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
         self.clock.duration_since_last_sync()
+    }
+    pub fn remaining_rate_limit_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
+        self.rate_limiters.remaining_capacity()
     }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         Ok(self.clock.server_time_estimate())
@@ -417,15 +420,13 @@ where
     }
 }
 
-impl<Client, SyncRequest> std::fmt::Debug for Connector<Client, SyncRequest> {
+impl<Exchange, Client> std::fmt::Debug for Connector<Exchange, Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConnectorImpl")
-            .field("rate_limits", &self.rate_limiters)
+        f.debug_struct("Connector")
+            .field("rate_limiters", &self.rate_limiters)
             .field("clock", &self.clock)
             .field("signer", &"<signer>")
             .field("client", &"<client>")
-            .field("auto_resync", &"<auto_resync>")
-            .field("resync", &"<resync>")
             .finish()
     }
 }

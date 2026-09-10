@@ -5,11 +5,13 @@ use crate::{
 };
 use exchange_types::{
     exchange::ETExchange,
-    new_types::Milliseconds,
+    new_types::{Milliseconds, UsageCount},
+    rate_limited::RateLimit,
     request::{ETHttpRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETWebsocketResponse},
 };
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -41,8 +43,11 @@ where
             resync_handle: Mutex::new(None),
         }
     }
-    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+    pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
         self.connector.duration_since_last_sync()
+    }
+    pub fn remaining_rate_limit_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
+        self.connector.remaining_rate_limit_capacity()
     }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.connector.server_time_estimate()
@@ -193,11 +198,10 @@ where
     }
 }
 
-impl<Client, SyncRequest> std::fmt::Debug for AutoResyncConnector<Client, SyncRequest> {
+impl<Exchange, Client> std::fmt::Debug for AutoResyncConnector<Exchange, Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConnectorImpl")
+        f.debug_struct("AutoResyncConnector")
             .field("connector", &self.connector)
-            .field("resync", &"<resync>")
             .finish()
     }
 }
