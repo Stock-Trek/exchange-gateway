@@ -17,7 +17,7 @@ use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
 pub struct AutoResyncConnector<Exchange, Client> {
     connector: Arc<Connector<Exchange, Client>>,
-    resync_handle: Arc<Mutex<Option<AutoResyncHandle>>>,
+    resync_handle: Mutex<Option<AutoResyncHandle>>,
 }
 
 struct AutoResyncHandle {
@@ -38,7 +38,7 @@ where
     pub(crate) fn new(connector: Arc<Connector<Exchange, Client>>) -> Self {
         Self {
             connector,
-            resync_handle: Arc::new(Mutex::new(None)),
+            resync_handle: Mutex::new(None),
         }
     }
     pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
@@ -75,15 +75,18 @@ where
             .resync_handle
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
-        if let Some(handle) = resync_handle.as_ref()
-            && handle
-                .sender
-                .send(ClockSyncCommand::SetFrequency(frequency))
-                .is_ok()
-        {
+        if let Some(handle) = resync_handle.as_ref() {
+            if handle.join.is_finished()
+                || handle
+                    .sender
+                    .send(ClockSyncCommand::SetFrequency(frequency))
+                    .is_err()
+            {
+                *resync_handle = None;
+                return Err(EGError::AutoResyncClockPanicked);
+            }
             return Ok(());
         }
-        *resync_handle = None;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let connector = self.connector.clone();
         let join = tokio::spawn(async move {
@@ -105,6 +108,19 @@ where
         });
         *resync_handle = Some(AutoResyncHandle { sender, join });
         Ok(())
+    }
+}
+
+impl<Exchange, Client> Drop for AutoResyncConnector<Exchange, Client> {
+    fn drop(&mut self) {
+        let handle = match self.resync_handle.get_mut() {
+            Ok(handle) => handle.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(handle) = handle {
+            let _ = handle.sender.send(ClockSyncCommand::Stop);
+            handle.join.abort();
+        }
     }
 }
 
