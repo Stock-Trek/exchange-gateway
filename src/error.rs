@@ -4,6 +4,7 @@ pub type EGResult<T> = Result<T, EGError>;
 pub enum EGError {
     #[error("Received unrecognised response")]
     BadResponse,
+    #[cfg(feature = "auto-resync")]
     #[error("Auto resync clock thread panicked")]
     AutoResyncClockPanicked,
     #[error("A user callback panicked: {0}")]

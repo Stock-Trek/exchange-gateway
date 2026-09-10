@@ -1,5 +1,6 @@
+#[cfg(feature = "auto-resync")]
+use crate::auto_resync_connector::AutoResyncConnector;
 use crate::{
-    auto_resync_connector::AutoResyncConnector,
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
     error::{EGError, EGResult},
@@ -180,6 +181,7 @@ impl<Exchange, Client> Connector<Exchange, Client>
 where
     Exchange: ETExchange,
 {
+    #[cfg(feature = "auto-resync")]
     pub fn into_auto_resync(self) -> AutoResyncConnector<Exchange, Client>
     where
         Exchange: Send + Sync + 'static,

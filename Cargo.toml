@@ -28,6 +28,7 @@ uuid = { version = "1.23.3", features = ["v4"] }
 
 [features]
 default = ["iris", "reqwest"]
+auto-resync = []
 iris = ["dep:iris"]
 reqwest = ["dep:reqwest"]
 
@@ -36,6 +37,6 @@ too_many_arguments = "allow"
 
 [package.metadata.docs.rs]
 default-target = "x86_64-unknown-linux-gnu"
-features = ["iris", "reqwest"]
+features = ["auto-resync", "iris", "reqwest"]
 no-deps = true
 targets = ["x86_64-unknown-linux-gnu"]
