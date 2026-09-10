@@ -1,4 +1,17 @@
+use exchange_types::error::ETError;
+
 pub type EGResult<T> = Result<T, EGError>;
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Failed to parse HTTP response: {source}; body: {body}",
+    body = String::from_utf8_lossy(body)
+)]
+pub struct HttpParseError {
+    #[source]
+    pub source: ETError,
+    pub body: Vec<u8>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EGError {

@@ -3,7 +3,7 @@ use crate::auto_resync_connector::AutoResyncConnector;
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
-    error::{EGError, EGResult},
+    error::{EGError, EGResult, HttpParseError},
     functions::BoxTryCreateOnce,
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
@@ -268,8 +268,7 @@ where
         };
         let round_trip_time = start.elapsed();
         let response = self.validate_http_status(response)?;
-        let response = Exchange::ServerTimeResponseHttp::try_from_http(response)
-            .map_err(|_| EGError::BadResponse)?;
+        let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         if let Some(server_time) = response.server_time() {
             self.clock.sync(server_time, round_trip_time)?;
@@ -297,9 +296,17 @@ where
             Err(error) => return self.on_error(error, costs),
         };
         let response = self.validate_http_status(response)?;
-        let response = Response::try_from_http(response).map_err(|_| EGError::BadResponse)?;
+        let response = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         Ok(response)
+    }
+    fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
+    where
+        Response: ETHttpResponse,
+    {
+        let body = response.body.clone();
+        Response::try_from_http(response)
+            .map_err(|source| EGError::External(Box::new(HttpParseError { source, body })))
     }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
