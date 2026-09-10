@@ -39,6 +39,16 @@ impl RateLimiter {
         }
         Ok(true)
     }
+    pub fn remaining_capacity(&self) -> EGResult<HashMap<Nanoseconds, UsageCount>> {
+        let mut limiters_guard = self
+            .rate_limiters
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        Ok(limiters_guard
+            .iter_mut()
+            .map(|limiter| (limiter.interval_nanos(), limiter.remaining_capacity()))
+            .collect())
+    }
     pub fn refund(&self, cost: UsageCount) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters

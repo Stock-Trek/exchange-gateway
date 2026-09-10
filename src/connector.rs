@@ -189,8 +189,11 @@ where
     {
         AutoResyncConnector::new(Arc::new(self))
     }
-    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+    pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
         self.clock.duration_since_last_sync()
+    }
+    pub fn remaining_rate_limit_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
+        self.rate_limiters.remaining_capacity()
     }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.clock.server_time_estimate()
@@ -238,7 +241,7 @@ where
             let _ = self.rate_limiters.set_usage(usage);
         }
         if let Some(retry_after_seconds) = response.retry_after() {
-            let retry_after = Duration::from_secs(retry_after_seconds.0 as u64);
+            let retry_after = Duration::from_secs(retry_after_seconds.0.max(0) as u64);
             let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
@@ -268,8 +271,7 @@ where
         };
         let round_trip_time = start.elapsed();
         let response = self.validate_http_status(response)?;
-        let response = Exchange::ServerTimeResponseHttp::try_from_http(response)
-            .map_err(|_| EGError::BadResponse)?;
+        let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
@@ -301,9 +303,16 @@ where
             Err(error) => return self.on_error(error, costs),
         };
         let response = self.validate_http_status(response)?;
-        let response = Response::try_from_http(response).map_err(|_| EGError::BadResponse)?;
+        let response = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         Ok(response)
+    }
+    fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
+    where
+        Response: ETHttpResponse,
+    {
+        let body = response.body.clone();
+        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source, body })
     }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
@@ -425,15 +434,13 @@ where
     }
 }
 
-impl<Client, SyncRequest> std::fmt::Debug for Connector<Client, SyncRequest> {
+impl<Exchange, Client> std::fmt::Debug for Connector<Exchange, Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConnectorImpl")
-            .field("rate_limits", &self.rate_limiters)
+        f.debug_struct("Connector")
+            .field("rate_limiters", &self.rate_limiters)
             .field("clock", &self.clock)
             .field("signer", &"<signer>")
             .field("client", &"<client>")
-            .field("auto_resync", &"<auto_resync>")
-            .field("resync", &"<resync>")
             .finish()
     }
 }
