@@ -51,6 +51,10 @@ impl RateLimiterState {
     pub fn interval_nanos(&self) -> Nanoseconds {
         self.interval_nanos
     }
+    pub fn remaining_capacity(&mut self) -> UsageCount {
+        self.update_capacity();
+        self.current_capacity
+    }
     #[must_use]
     pub fn did_consume(&mut self, cost: UsageCount) -> bool {
         if self.is_throttled() {
