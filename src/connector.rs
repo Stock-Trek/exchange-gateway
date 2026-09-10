@@ -218,15 +218,18 @@ where
         }
         Ok(acquired)
     }
+    fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) {
+        for (restriction, cost) in costs {
+            let _ = self.rate_limiters.refund(restriction, cost);
+        }
+    }
     fn on_error<T>(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<T> {
         if matches!(&error, EGError::RateLimited | EGError::NotSent(..)) {
-            for (restriction, cost) in costs {
-                let _ = self.rate_limiters.refund(restriction, cost);
-            }
+            self.refund(costs);
         }
         Err(error)
     }
@@ -251,9 +254,13 @@ where
     pub async fn sync_clock_http(&self) -> EGResult<()> {
         let server_time_request = self.exchange.server_time_request_http();
         let costs = self.validate_rate_limits(&server_time_request)?;
-        let http_request = server_time_request
-            .try_into_http(&self.signer)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let http_request = match server_time_request.try_into_http(&self.signer) {
+            Ok(http_request) => http_request,
+            Err(error) => {
+                self.refund(costs);
+                return Err(EGError::External(Box::new(error)));
+            }
+        };
         let start = Instant::now();
         let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
@@ -278,9 +285,13 @@ where
     {
         request.set_timestamp(self.clock.server_time_estimate());
         let costs = self.validate_rate_limits(&request)?;
-        let http_request = request
-            .try_into_http(&self.signer)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let http_request = match request.try_into_http(&self.signer) {
+            Ok(http_request) => http_request,
+            Err(error) => {
+                self.refund(costs);
+                return Err(EGError::External(Box::new(error)));
+            }
+        };
         let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
@@ -330,9 +341,14 @@ where
         let server_time_request = self.exchange.server_time_request_websocket();
         let costs = self.validate_rate_limits(&server_time_request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-        let (websocket_request, response_matcher) = server_time_request
-            .try_into_websocket(&self.signer, id)
-            .map_err(|_| EGError::BadResponse)?;
+        let (websocket_request, response_matcher) =
+            match server_time_request.try_into_websocket(&self.signer, id) {
+                Ok(request) => request,
+                Err(_) => {
+                    self.refund(costs);
+                    return Err(EGError::BadResponse);
+                }
+            };
         let start = Instant::now();
         let response: Exchange::ServerTimeResponseWebsocket = self
             .send_wait(websocket_request, costs, response_matcher)
@@ -353,9 +369,14 @@ where
         request.set_timestamp(self.clock.server_time_estimate());
         let costs = self.validate_rate_limits(&request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-        let (websocket_request, response_matcher) = request
-            .try_into_websocket(&self.signer, id)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let (websocket_request, response_matcher) =
+            match request.try_into_websocket(&self.signer, id) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.refund(costs);
+                    return Err(EGError::External(Box::new(error)));
+                }
+            };
         self.send_wait(websocket_request, costs, response_matcher)
             .await
     }
