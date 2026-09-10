@@ -3,7 +3,7 @@ use crate::auto_resync_connector::AutoResyncConnector;
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
-    error::{EGError, EGResult, HttpParseError},
+    error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
@@ -305,8 +305,7 @@ where
         Response: ETHttpResponse,
     {
         let body = response.body.clone();
-        Response::try_from_http(response)
-            .map_err(|source| EGError::External(Box::new(HttpParseError { source, body })))
+        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source, body })
     }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
