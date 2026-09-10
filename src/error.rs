@@ -4,8 +4,20 @@ pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EGError {
+    #[cfg(feature = "auto-resync")]
+    #[error("Auto resync clock thread panicked")]
+    AutoResyncClockPanicked,
     #[error("Received unrecognised response")]
     BadResponse,
+    #[error("A user callback panicked: {0}")]
+    CallbackPanicked(String),
+    #[error(transparent)]
+    External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error(
+        "HTTP request failed with status {status}: {body}",
+        body = String::from_utf8_lossy(body)
+    )]
+    HttpError { status: u16, body: Vec<u8> },
     #[error(
         "Failed to parse HTTP response: {source}; body: {body}",
         body = String::from_utf8_lossy(body)
@@ -16,20 +28,8 @@ pub enum EGError {
         body: Vec<u8>,
     },
     #[cfg(feature = "auto-resync")]
-    #[error("Auto resync clock thread panicked")]
-    AutoResyncClockPanicked,
-    #[cfg(feature = "auto-resync")]
     #[error("Clock sync frequency must be at least 1 minute")]
     InvalidSyncFrequency,
-    #[error("A user callback panicked: {0}")]
-    CallbackPanicked(String),
-    #[error(transparent)]
-    External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(
-        "HTTP request failed with status {status}: {body}",
-        body = String::from_utf8_lossy(body)
-    )]
-    HttpError { status: u16, body: Vec<u8> },
     #[error("Internal mutex poisoned by a panicking operation")]
     MutexPoisoned,
     #[error("Connector is not connected")]
