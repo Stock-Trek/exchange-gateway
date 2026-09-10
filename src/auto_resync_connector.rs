@@ -10,13 +10,10 @@ use exchange_types::{
     response::{ETHttpResponse, ETWebsocketResponse},
 };
 use std::{
-    sync::{
-        Arc, Mutex,
-        mpsc::{RecvTimeoutError, Sender},
-    },
-    thread::JoinHandle,
+    sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
 pub struct AutoResyncConnector<Exchange, Client> {
     connector: Arc<Connector<Exchange, Client>>,
@@ -24,7 +21,7 @@ pub struct AutoResyncConnector<Exchange, Client> {
 }
 
 struct AutoResyncHandle {
-    sender: Sender<ClockSyncCommand>,
+    sender: UnboundedSender<ClockSyncCommand>,
     join: JoinHandle<()>,
 }
 
@@ -50,13 +47,29 @@ where
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.connector.server_time_estimate()
     }
-    async fn set_clock_sync_frequency<SyncClockFn>(
+    pub async fn stop_clock_sync(&self) -> EGResult<()> {
+        let handle = self
+            .resync_handle
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .take();
+        let Some(handle) = handle else { return Ok(()) };
+        let _ = handle.sender.send(ClockSyncCommand::Stop);
+        drop(handle.sender); // let the loop drain
+        match handle.join.await {
+            Ok(()) => Ok(()),
+            Err(e) if e.is_panic() => Err(EGError::AutoResyncClockPanicked),
+            Err(_) => Ok(()),
+        }
+    }
+    async fn set_clock_sync_frequency<F, Fut>(
         &self,
         frequency: Duration,
-        sync_clock_fn: SyncClockFn,
+        sync_clock_fn: F,
     ) -> EGResult<()>
     where
-        SyncClockFn: AsyncFn(Arc<Connector<Exchange, Client>>) -> EGResult<()> + Send + 'static,
+        F: Fn(Arc<Connector<Exchange, Client>>) -> Fut + Send + 'static,
+        Fut: Future<Output = EGResult<()>> + Send + 'static,
     {
         let mut resync_handle = self
             .resync_handle
@@ -71,48 +84,27 @@ where
             return Ok(());
         }
         *resync_handle = None;
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| EGError::External(Box::new(e)))?;
-        let connector_clone = self.connector.clone();
-        let join = std::thread::Builder::new()
-            .name("exchange-gateway-auto-resync".into())
-            .spawn(move || {
-                let mut current = frequency;
-                loop {
-                    match receiver.recv_timeout(current) {
-                        Ok(ClockSyncCommand::SetFrequency(new_duration)) => current = new_duration,
-                        Ok(ClockSyncCommand::Stop) | Err(RecvTimeoutError::Disconnected) => break,
-                        Err(RecvTimeoutError::Timeout) => {
-                            let future = sync_clock_fn(connector_clone.clone());
-                            let _ = runtime.block_on(future);
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let connector = self.connector.clone();
+        let join = tokio::spawn(async move {
+            let mut current = frequency;
+            loop {
+                tokio::select! {
+                    cmd = receiver.recv() => match cmd {
+                        Some(ClockSyncCommand::SetFrequency(new_freq)) => {
+                            current = new_freq;
+                            continue;
                         }
+                        Some(ClockSyncCommand::Stop) | None => break,
+                    },
+                    _ = tokio::time::sleep(current) => {
+                        let _ = sync_clock_fn(connector.clone()).await;
                     }
                 }
-            })
-            .map_err(|e| EGError::External(Box::new(e)))?;
+            }
+        });
         *resync_handle = Some(AutoResyncHandle { sender, join });
         Ok(())
-    }
-    pub fn stop_clock_sync(&self) -> EGResult<()> {
-        let resync_handle = self
-            .resync_handle
-            .lock()
-            .map_err(|_| EGError::MutexPoisoned)?
-            .take();
-        match resync_handle {
-            Some(handle) => {
-                let _ = handle.sender.send(ClockSyncCommand::Stop);
-                drop(handle.sender);
-                match handle.join.join() {
-                    Ok(()) => Ok(()),
-                    Err(_) => Err(EGError::AutoResyncClockPanicked),
-                }
-            }
-            None => Ok(()),
-        }
     }
 }
 
@@ -127,6 +119,7 @@ where
     pub async fn set_clock_sync_frequency_http(&self, frequency: Duration) -> EGResult<()>
     where
         Exchange: Send + Sync + 'static,
+        Exchange::ServerTimeRequestHttp: Send,
         Client: Send + Sync + 'static,
     {
         self.set_clock_sync_frequency(frequency, async |connector| {
@@ -165,6 +158,7 @@ where
     pub async fn set_clock_sync_frequency_websocket(&self, frequency: Duration) -> EGResult<()>
     where
         Exchange: Send + Sync + 'static,
+        Exchange::ServerTimeRequestWebsocket: Send,
         Client: Send + Sync + 'static,
     {
         self.set_clock_sync_frequency(frequency, async |connector| {
