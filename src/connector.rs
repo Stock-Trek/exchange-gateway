@@ -196,7 +196,7 @@ where
         self.rate_limiters.remaining_capacity()
     }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
-        Ok(self.clock.server_time_estimate())
+        self.clock.server_time_estimate()
     }
     fn validate_rate_limits<Request>(
         &self,
@@ -273,9 +273,8 @@ where
         let response = self.validate_http_status(response)?;
         let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
-        if let Some(server_time) = response.server_time() {
-            self.clock.sync(server_time, round_trip_time)?;
-        }
+        let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
+        self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     pub async fn send_http<Response>(
@@ -285,7 +284,12 @@ where
     where
         Response: ETHttpResponse,
     {
-        request.set_timestamp(self.clock.server_time_estimate());
+        let timestamp = if request.is_signed() {
+            self.clock.server_time_estimate()?
+        } else {
+            self.clock.server_time_estimate_unchecked()
+        };
+        request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
         let http_request = match request.try_into_http(&self.signer) {
             Ok(http_request) => http_request,
@@ -363,9 +367,8 @@ where
             .send_wait(websocket_request, costs, response_matcher)
             .await?;
         let round_trip_time = start.elapsed();
-        if let Some(server_time) = response.server_time() {
-            self.clock.sync(server_time, round_trip_time)?;
-        }
+        let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
+        self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     pub async fn send_websocket<Response>(
@@ -375,7 +378,12 @@ where
     where
         Response: ETWebsocketResponse,
     {
-        request.set_timestamp(self.clock.server_time_estimate());
+        let timestamp = if request.is_signed() {
+            self.clock.server_time_estimate()?
+        } else {
+            self.clock.server_time_estimate_unchecked()
+        };
+        request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         let (websocket_request, response_matcher) =
