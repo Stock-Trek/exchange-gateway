@@ -133,9 +133,9 @@ impl RateLimiterState {
             self.last_calculation = throttled_until;
         }
         let elapsed_nanos =
-            Nanoseconds(now.duration_since(self.last_calculation).as_nanos() as u64);
+            Nanoseconds(now.duration_since(self.last_calculation).as_nanos() as i64);
         let total_nanos = self.excess_interval_nanos + elapsed_nanos;
-        let complete_intervals = total_nanos / self.interval_nanos;
+        let complete_intervals = (total_nanos / self.interval_nanos) as u64;
         if complete_intervals > 0 {
             let capacity_to_add = self.capacity_per_interval * complete_intervals;
             let capacity_potentially_over_max = self.current_capacity + capacity_to_add;

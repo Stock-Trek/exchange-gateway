@@ -1,10 +1,5 @@
 use crate::{
-    auto_resync::{AutoResync, Resync, ResyncFn, ResyncFuture},
-    clients::{
-        client::{HttpClient, WebsocketClient},
-        iris::IrisWebsocketClient,
-        reqwest::ReqwestHttpClient,
-    },
+    clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
     error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
@@ -14,24 +9,22 @@ use crate::{
     },
     websocket_listener::WebsocketListener,
 };
-use async_trait::async_trait;
 use exchange_types::{
     exchange::ETExchange,
     http::HttpResponse,
-    new_types::UsageCount,
+    new_types::{Milliseconds, UsageCount},
     rate_limited::{RateLimit, RateLimitRestriction},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETResponse, ETWebsocketResponse},
-    server_time::{ServerTimeHttpRequest, ServerTimeResponse, ServerTimeWebsocketRequest},
+    server_time::ServerTimeResponse,
     signer::Signer,
     urls::{Protocol, TradingMode, Urls},
     websocket_id::ETWebsocketId,
 };
 use futures_timer::Delay;
-use iris::Config as IrisConfig;
 use std::{
     collections::HashMap,
-    future::{Future, poll_fn, ready},
+    future::{Future, poll_fn},
     sync::Arc,
     task::Poll,
     time::{Duration, Instant},
@@ -39,105 +32,60 @@ use std::{
 use strum::IntoEnumIterator;
 
 #[cfg(feature = "iris")]
-use iris::DisconnectedBehavior;
+use {
+    crate::clients::iris::IrisWebsocketClient,
+    iris::{Config as IrisConfig, DisconnectedBehavior},
+};
 
-pub struct Connector<Client> {
-    rate_limiters: RateLimiters,
-    clock: Clock,
-    signer: Arc<Signer>,
-    client: Arc<Client>,
-    auto_resync: AutoResync,
-    resync: ResyncFn,
+#[cfg(feature = "reqwest")]
+use crate::clients::reqwest::ReqwestHttpClient;
+
+pub struct Connector<Exchange, Client> {
+    pub exchange: Exchange,
+    pub rate_limiters: RateLimiters,
+    pub clock: Clock,
+    pub signer: Signer,
+    pub client: Client,
+    pub request_timeout: Duration,
+    websocket_listener: Option<Arc<WebsocketListener>>,
 }
 
-fn no_resync() -> ResyncFn {
-    Arc::new(|| -> ResyncFuture { Box::pin(ready(Ok(()))) })
-}
-
-fn resync_fn<Client, SyncRequest, SyncResponse>(
-    connector: Connector<Client>,
-    sync_request: SyncRequest,
-    timeout: Duration,
-) -> ResyncFn
-where
-    Client: Send + Sync + 'static,
-    Connector<Client>: Resync<SyncRequest, SyncResponse>,
-    SyncRequest: Clone + Send + Sync + 'static,
-{
-    Arc::new(move || {
-        let connector = connector.clone();
-        let sync_request = sync_request.clone();
-        let future: ResyncFuture =
-            Box::pin(async move { Resync::resync(&connector, sync_request, timeout).await });
-        future
-    })
-}
-
-#[async_trait]
-impl<Client, SyncRequest, SyncResponse> Resync<SyncRequest, SyncResponse> for Connector<Client>
-where
-    Client: HttpClient + Send + Sync,
-    SyncRequest: ServerTimeHttpRequest<SyncResponse> + Send + 'static,
-    SyncResponse: ETHttpResponse + ServerTimeResponse + Send,
-{
-    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()> {
-        self.sync_clock(request, timeout).await
-    }
-}
-
-#[async_trait]
-impl<Client, SyncRequest, SyncResponse> Resync<SyncRequest, SyncResponse>
-    for Connector<(Client, Arc<WebsocketListener>)>
-where
-    Client: WebsocketClient,
-    SyncRequest: ServerTimeWebsocketRequest<SyncResponse> + Send + 'static,
-    SyncResponse: ETWebsocketResponse + ServerTimeResponse + Send,
-{
-    async fn resync(&self, request: SyncRequest, timeout: Duration) -> EGResult<()> {
-        self.sync_clock(request, timeout).await
-    }
-}
-
-impl Connector<()> {
-    pub fn try_new_http<Client, SyncRequest, SyncResponse>(
+impl Connector<(), ()> {
+    pub fn try_new_http<Exchange, Client>(
         trading_mode: TradingMode,
-        exchange: impl ETExchange,
+        exchange: Exchange,
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, Client>,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<Connector<Client>>
+        request_timeout: Duration,
+    ) -> EGResult<Connector<Exchange, Client>>
     where
-        Client: HttpClient + Send + Sync + 'static,
-        Connector<Client>: Resync<SyncRequest, SyncResponse>,
-        SyncRequest: Clone + Send + Sync + 'static,
+        Exchange: ETExchange,
+        Client: HttpClient + Send + Sync,
     {
         let url = exchange
             .urls()
             .env_var_or_default(exchange.name(), Protocol::Http, trading_mode);
-        let client = Arc::new(client_creator(url)?);
-        let mut connector = Connector::<Client> {
-            rate_limiters: Self::rate_limiters(exchange.default_capacity()),
+        let client = client_creator(url)?;
+        let rate_limiters = Self::rate_limiters(exchange.default_capacity());
+        Ok(Connector {
+            exchange,
+            rate_limiters,
             clock: Clock::default(),
-            signer: Arc::new(signer),
+            signer: signer,
             client,
-            auto_resync: AutoResync::default(),
-            resync: no_resync(),
-        };
-        connector.resync = resync_fn(connector.clone(), sync_request, timeout);
-        Ok(connector)
+            request_timeout,
+            websocket_listener: None,
+        })
     }
     #[cfg(feature = "reqwest")]
-    pub fn try_new_http_reqwest<SyncRequest, SyncResponse>(
+    pub fn try_new_http_reqwest<Exchange>(
         trading_mode: TradingMode,
-        exchange: impl ETExchange,
+        exchange: Exchange,
         signer: Signer,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<Connector<ReqwestHttpClient>>
+        request_timeout: Duration,
+    ) -> EGResult<Connector<Exchange, ReqwestHttpClient>>
     where
-        SyncRequest: ServerTimeHttpRequest<SyncResponse> + Clone + Send + Sync + 'static,
-        SyncResponse: ETHttpResponse + ServerTimeResponse + Send,
+        Exchange: ETExchange,
     {
         let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
         Self::try_new_http(
@@ -145,23 +93,20 @@ impl Connector<()> {
             exchange,
             signer,
             client_creator,
-            sync_request,
-            timeout,
+            request_timeout,
         )
     }
     #[allow(clippy::type_complexity)]
-    pub fn try_new_websocket<Client, SyncRequest, SyncResponse>(
+    pub fn try_new_websocket<Exchange, Client>(
         trading_mode: TradingMode,
-        exchange: impl ETExchange,
+        exchange: Exchange,
         signer: Signer,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<Connector<(Client, Arc<WebsocketListener>)>>
+        request_timeout: Duration,
+    ) -> EGResult<Connector<Exchange, Client>>
     where
-        Client: WebsocketClient + 'static,
-        Connector<(Client, Arc<WebsocketListener>)>: Resync<SyncRequest, SyncResponse>,
-        SyncRequest: Clone + Send + Sync + 'static,
+        Exchange: ETExchange,
+        Client: WebsocketClient,
     {
         let websocket_listener = Arc::new(WebsocketListener::new());
         let url =
@@ -169,30 +114,28 @@ impl Connector<()> {
                 .urls()
                 .env_var_or_default(exchange.name(), Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
-        let mut connector = Connector::<(Client, Arc<WebsocketListener>)> {
-            rate_limiters: Self::rate_limiters(exchange.default_capacity()),
-            clock: Clock::new(),
-            signer: Arc::new(signer),
-            client: Arc::new((client, websocket_listener)),
-            auto_resync: AutoResync::default(),
-            resync: no_resync(),
-        };
-        connector.resync = resync_fn(connector.clone(), sync_request, timeout);
-        Ok(connector)
+        let rate_limiters = Self::rate_limiters(exchange.default_capacity());
+        Ok(Connector {
+            exchange,
+            rate_limiters,
+            clock: Clock::default(),
+            signer: signer,
+            client,
+            request_timeout,
+            websocket_listener: Some(websocket_listener),
+        })
     }
     #[allow(clippy::type_complexity)]
     #[cfg(feature = "iris")]
-    pub fn try_new_websocket_iris<SyncRequest, SyncResponse>(
+    pub fn try_new_websocket_iris<Exchange>(
         trading_mode: TradingMode,
-        exchange: impl ETExchange,
+        exchange: Exchange,
         signer: Signer,
         mut iris_config: IrisConfig,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<Connector<(IrisWebsocketClient, Arc<WebsocketListener>)>>
+        request_timeout: Duration,
+    ) -> EGResult<Connector<Exchange, IrisWebsocketClient>>
     where
-        SyncRequest: ServerTimeWebsocketRequest<SyncResponse> + Clone + Send + Sync + 'static,
-        SyncResponse: ETWebsocketResponse + ServerTimeResponse + Send,
+        Exchange: ETExchange,
     {
         iris_config = iris_config.with_disconnected_behavior(DisconnectedBehavior::DropAllQueued);
         let client_creator: BoxTryCreateOnce<
@@ -210,27 +153,8 @@ impl Connector<()> {
             exchange,
             signer,
             client_creator,
-            sync_request,
-            timeout,
+            request_timeout,
         )
-    }
-}
-
-impl<Client> Connector<Client> {
-    pub fn auto_resync_clock(&self, duration: Option<Duration>) -> EGResult<()> {
-        match duration {
-            None => self.auto_resync.stop(),
-            Some(duration) => {
-                let resync = self.resync.clone();
-                self.auto_resync.start_or_update(duration, move || resync())
-            }
-        }
-    }
-}
-
-impl<Client> Connector<Client> {
-    pub fn server_time_millis(&self) -> EGResult<i64> {
-        Ok(self.clock.now_millis())
     }
     fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> RateLimiters {
         let mut limiter_states = HashMap::new();
@@ -248,6 +172,15 @@ impl<Client> Connector<Client> {
             .map(|(restriction, states)| (*restriction, RateLimiter::new(states)))
             .collect::<HashMap<RateLimitRestriction, RateLimiter>>();
         RateLimiters::new(limiters)
+    }
+}
+
+impl<Exchange, Client> Connector<Exchange, Client>
+where
+    Exchange: ETExchange,
+{
+    pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
+        Ok(self.clock.server_time_estimate())
     }
     fn validate_rate_limits<Request>(
         &self,
@@ -289,7 +222,7 @@ impl<Client> Connector<Client> {
             let _ = self.rate_limiters.set_usage(usage);
         }
         if let Some(retry_after_seconds) = response.retry_after() {
-            let retry_after = Duration::from_secs(retry_after_seconds.0);
+            let retry_after = Duration::from_secs(retry_after_seconds.0 as u64);
             let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
@@ -297,51 +230,45 @@ impl<Client> Connector<Client> {
     }
 }
 
-impl<Client> Connector<Client>
+impl<Exchange, Client> Connector<Exchange, Client>
 where
+    Exchange: ETExchange,
     Client: HttpClient,
 {
-    pub async fn sync_clock<SyncRequest, SyncResponse>(
-        &self,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<()>
-    where
-        SyncRequest: ServerTimeHttpRequest<SyncResponse>,
-        SyncResponse: ETHttpResponse + ServerTimeResponse,
-    {
-        let costs = self.validate_rate_limits(&sync_request)?;
-        let http_request = sync_request
-            .try_into_http(self.signer.as_ref())
+    pub async fn sync_clock_http(&self) -> EGResult<()> {
+        let server_time_request = self.exchange.server_time_request_http();
+        let costs = self.validate_rate_limits(&server_time_request)?;
+        let http_request = server_time_request
+            .try_into_http(&self.signer)
             .map_err(|e| EGError::External(Box::new(e)))?;
         let start = Instant::now();
-        let response = match self.client.send(http_request, timeout).await {
+        let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
         let round_trip_time = start.elapsed();
         let response = self.validate_http_status(response)?;
-        let response = SyncResponse::try_from_http(response).map_err(|_| EGError::BadResponse)?;
+        let response = Exchange::ServerTimeResponseHttp::try_from_http(response)
+            .map_err(|_| EGError::BadResponse)?;
         self.set_rate_limits(&response)?;
         if let Some(server_time) = response.server_time() {
-            self.clock.sync(server_time.0 as i64, round_trip_time)?;
+            self.clock.sync(server_time, round_trip_time)?;
         }
         Ok(())
     }
-    pub async fn send<Request, Response>(
+    pub async fn send_http<Response>(
         &self,
-        request: Request,
-        timeout: Duration,
+        mut request: impl ETHttpRequest<Exchange = Exchange, Response = Response>,
     ) -> EGResult<Response>
     where
-        Request: ETHttpRequest<Response = Response>,
         Response: ETHttpResponse,
     {
+        request.set_timestamp(self.clock.server_time_estimate());
         let costs = self.validate_rate_limits(&request)?;
         let http_request = request
-            .try_into_http(self.signer.as_ref())
+            .try_into_http(&self.signer)
             .map_err(|e| EGError::External(Box::new(e)))?;
-        let response = match self.client.send(http_request, timeout).await {
+        let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
@@ -372,86 +299,73 @@ where
     }
 }
 
-impl<Client> Connector<(Client, Arc<WebsocketListener>)>
+impl<Exchange, Client> Connector<Exchange, Client>
 where
+    Exchange: ETExchange,
     Client: WebsocketClient,
 {
     pub async fn connect(&self) -> EGResult<()> {
-        self.client.0.connect().await
+        self.client.connect().await
     }
     pub fn is_connected(&self) -> EGResult<bool> {
-        Ok(self.client.0.is_connected())
+        Ok(self.client.is_connected())
     }
     pub async fn disconnect(&self) -> EGResult<()> {
-        self.client.0.disconnect().await
+        self.client.disconnect().await
     }
-    pub async fn sync_clock<SyncRequest, SyncResponse>(
-        &self,
-        sync_request: SyncRequest,
-        timeout: Duration,
-    ) -> EGResult<()>
-    where
-        SyncRequest: ETWebsocketRequest<Response = SyncResponse>,
-        SyncResponse: ETWebsocketResponse + ServerTimeResponse,
-    {
-        let costs = self.validate_rate_limits(&sync_request)?;
+    pub async fn sync_clock_websocket(&self) -> EGResult<()> {
+        let server_time_request = self.exchange.server_time_request_websocket();
+        let costs = self.validate_rate_limits(&server_time_request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-        let (websocket_request, response_matcher) = sync_request
-            .try_into_websocket(self.signer.as_ref(), id)
+        let (websocket_request, response_matcher) = server_time_request
+            .try_into_websocket(&self.signer, id)
             .map_err(|_| EGError::BadResponse)?;
         let start = Instant::now();
-        let response = self
-            .send_wait::<SyncRequest, SyncResponse>(
-                websocket_request,
-                costs,
-                timeout,
-                response_matcher,
-            )
+        let response: Exchange::ServerTimeResponseWebsocket = self
+            .send_wait(websocket_request, costs, response_matcher)
             .await?;
         let round_trip_time = start.elapsed();
         if let Some(server_time) = response.server_time() {
-            self.clock.sync(server_time.0 as i64, round_trip_time)?;
+            self.clock.sync(server_time, round_trip_time)?;
         }
         Ok(())
     }
-    pub async fn send<Request, Response>(
+    pub async fn send_websocket<Response>(
         &self,
-        request: Request,
-        timeout: Duration,
+        mut request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response>,
     ) -> EGResult<Response>
     where
-        Request: ETWebsocketRequest<Response = Response>,
         Response: ETWebsocketResponse,
     {
+        request.set_timestamp(self.clock.server_time_estimate());
         let costs = self.validate_rate_limits(&request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         let (websocket_request, response_matcher) = request
-            .try_into_websocket(self.signer.as_ref(), id)
+            .try_into_websocket(&self.signer, id)
             .map_err(|e| EGError::External(Box::new(e)))?;
-        self.send_wait::<Request, Response>(websocket_request, costs, timeout, response_matcher)
+        self.send_wait(websocket_request, costs, response_matcher)
             .await
     }
-    async fn send_wait<Request, Response>(
+    async fn send_wait<Response>(
         &self,
         message: String,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-        timeout: Duration,
         response_matcher: Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>,
-    ) -> EGResult<Request::Response>
+    ) -> EGResult<Response>
     where
-        Request: ETWebsocketRequest<Response = Response>,
         Response: ETWebsocketResponse,
     {
         let waiter = self
-            .client
-            .1
+            .websocket_listener
+            .as_ref()
+            .expect("Error getting websocket listener")
             .waiter_for_filtered_response(response_matcher)?;
         let start = Instant::now();
-        match self.client.0.send(message, timeout).await {
+        match self.client.send(message, self.request_timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
-        let remaining = timeout.saturating_sub(start.elapsed());
+        let remaining = self.request_timeout.saturating_sub(start.elapsed());
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
@@ -469,20 +383,7 @@ where
     }
 }
 
-impl<Client> Clone for Connector<Client> {
-    fn clone(&self) -> Self {
-        Self {
-            rate_limiters: self.rate_limiters.clone(),
-            clock: self.clock.clone(),
-            signer: self.signer.clone(),
-            client: self.client.clone(),
-            auto_resync: self.auto_resync.clone(),
-            resync: self.resync.clone(),
-        }
-    }
-}
-
-impl<Client> std::fmt::Debug for Connector<Client> {
+impl<Client, SyncRequest> std::fmt::Debug for Connector<Client, SyncRequest> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectorImpl")
             .field("rate_limits", &self.rate_limiters)
