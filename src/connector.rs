@@ -311,8 +311,7 @@ where
     where
         Response: ETHttpResponse,
     {
-        let body = response.body.clone();
-        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source, body })
+        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source })
     }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
