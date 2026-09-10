@@ -71,7 +71,7 @@ where
         F: Fn(Arc<Connector<Exchange, Client>>) -> Fut + Send + 'static,
         Fut: Future<Output = EGResult<()>> + Send + 'static,
     {
-        if frequency.is_zero() {
+        if frequency < Duration::from_mins(1) {
             return Err(EGError::InvalidSyncFrequency);
         }
         let mut resync_handle = self
