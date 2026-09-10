@@ -1,4 +1,4 @@
-mod auto_resync;
+pub mod auto_resync_connector;
 pub mod clients;
 mod clock;
 pub mod connector;
@@ -14,7 +14,7 @@ pub use iris;
 
 pub mod prelude {
     pub use crate::{
-        clock::Clock,
+        auto_resync_connector::AutoResyncConnector,
         connector::Connector,
         error::{EGError, EGResult},
     };

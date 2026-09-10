@@ -1,4 +1,5 @@
 use crate::error::{EGError, EGResult};
+use exchange_types::new_types::Milliseconds;
 use std::{
     sync::{
         Mutex,
@@ -9,7 +10,7 @@ use std::{
 
 #[derive(Debug)]
 pub struct Clock {
-    offset_millis: AtomicI64,
+    server_offset_millis: AtomicI64,
     last_sync: Mutex<Option<Instant>>,
 }
 
@@ -19,27 +20,12 @@ impl Default for Clock {
     }
 }
 
-impl Clone for Clock {
-    fn clone(&self) -> Self {
-        let offset = self.offset_millis();
-        let last_sync = *self.last_sync.lock().expect("Cannot read last_sync");
-        Self {
-            offset_millis: AtomicI64::from(offset),
-            last_sync: Mutex::from(last_sync),
-        }
-    }
-}
-
 impl Clock {
     pub fn new() -> Self {
         Self {
-            offset_millis: AtomicI64::new(0),
+            server_offset_millis: AtomicI64::new(0),
             last_sync: Mutex::new(None),
         }
-    }
-
-    pub fn offset_millis(&self) -> i64 {
-        self.offset_millis.load(Ordering::Relaxed)
     }
 
     pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
@@ -49,27 +35,28 @@ impl Clock {
         Ok(last_sync.map_or(Duration::MAX, |i| i.elapsed()))
     }
 
-    pub fn sync(&self, server_time_millis: i64, round_trip_time: Duration) -> EGResult<()> {
-        let rtt_ms = round_trip_time.as_millis() as i64;
-        let system_millis = Self::system_millis();
-        let midpoint_system_millis = system_millis - (rtt_ms / 2);
-        let new_offset = midpoint_system_millis - server_time_millis;
-        self.offset_millis.store(new_offset, Ordering::Relaxed);
+    pub fn sync(&self, server_time: Milliseconds, round_trip_duration: Duration) -> EGResult<()> {
+        let system_time = Self::system_time();
+        let round_trip_time = Milliseconds(round_trip_duration.as_millis() as i64);
+        let system_time_estimate = system_time - (round_trip_time / 2);
+        let offset_estimate = system_time_estimate - server_time;
+        self.server_offset_millis
+            .store(offset_estimate.0, Ordering::Relaxed);
         let mut last_sync = self.last_sync.lock().map_err(|_| EGError::MutexPoisoned)?;
         *last_sync = Some(Instant::now());
         Ok(())
     }
-
-    pub fn now_millis(&self) -> i64 {
-        let system_millis = Self::system_millis();
-        let offset = self.offset_millis.load(Ordering::Relaxed);
-        system_millis - offset
+    pub fn server_time_estimate(&self) -> Milliseconds {
+        Self::system_time() - self.server_offset()
     }
 
-    fn system_millis() -> i64 {
+    fn system_time() -> Milliseconds {
         let system_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("SystemTime is before UNIX_EPOCH");
-        system_time.as_millis() as i64
+        Milliseconds(system_time.as_millis() as i64)
+    }
+    fn server_offset(&self) -> Milliseconds {
+        Milliseconds(self.server_offset_millis.load(Ordering::Relaxed))
     }
 }
