@@ -64,10 +64,9 @@ impl Default for WebsocketListener {
 
 impl std::fmt::Debug for WebsocketListener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let handlers = self.handlers.lock().map_or(0, |handlers| handlers.len());
         f.debug_struct("WebsocketListener")
-            .field("converter", &"<Converter>")
-            .field("delegate", &"<Listener>")
-            .field("handlers", &"<Vec<ResponseHandler>>")
+            .field("handlers", &handlers)
             .finish()
     }
 }

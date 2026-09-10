@@ -5,11 +5,13 @@ use crate::{
 };
 use exchange_types::{
     exchange::ETExchange,
-    new_types::Milliseconds,
+    new_types::{Milliseconds, UsageCount},
+    rate_limited::RateLimit,
     request::{ETHttpRequest, ETWebsocketRequest},
     response::{ETHttpResponse, ETWebsocketResponse},
 };
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -17,7 +19,7 @@ use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
 pub struct AutoResyncConnector<Exchange, Client> {
     connector: Arc<Connector<Exchange, Client>>,
-    resync_handle: Arc<Mutex<Option<AutoResyncHandle>>>,
+    resync_handle: Mutex<Option<AutoResyncHandle>>,
 }
 
 struct AutoResyncHandle {
@@ -38,11 +40,14 @@ where
     pub(crate) fn new(connector: Arc<Connector<Exchange, Client>>) -> Self {
         Self {
             connector,
-            resync_handle: Arc::new(Mutex::new(None)),
+            resync_handle: Mutex::new(None),
         }
     }
-    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+    pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
         self.connector.duration_since_last_sync()
+    }
+    pub fn remaining_rate_limit_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
+        self.connector.remaining_rate_limit_capacity()
     }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.connector.server_time_estimate()
@@ -71,19 +76,25 @@ where
         F: Fn(Arc<Connector<Exchange, Client>>) -> Fut + Send + 'static,
         Fut: Future<Output = EGResult<()>> + Send + 'static,
     {
+        if frequency < Duration::from_mins(1) {
+            return Err(EGError::InvalidSyncFrequency);
+        }
         let mut resync_handle = self
             .resync_handle
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
-        if let Some(handle) = resync_handle.as_ref()
-            && handle
-                .sender
-                .send(ClockSyncCommand::SetFrequency(frequency))
-                .is_ok()
-        {
+        if let Some(handle) = resync_handle.as_ref() {
+            if handle.join.is_finished()
+                || handle
+                    .sender
+                    .send(ClockSyncCommand::SetFrequency(frequency))
+                    .is_err()
+            {
+                *resync_handle = None;
+                return Err(EGError::AutoResyncClockPanicked);
+            }
             return Ok(());
         }
-        *resync_handle = None;
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let connector = self.connector.clone();
         let join = tokio::spawn(async move {
@@ -105,6 +116,19 @@ where
         });
         *resync_handle = Some(AutoResyncHandle { sender, join });
         Ok(())
+    }
+}
+
+impl<Exchange, Client> Drop for AutoResyncConnector<Exchange, Client> {
+    fn drop(&mut self) {
+        let handle = match self.resync_handle.get_mut() {
+            Ok(handle) => handle.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(handle) = handle {
+            let _ = handle.sender.send(ClockSyncCommand::Stop);
+            handle.join.abort();
+        }
     }
 }
 
@@ -177,11 +201,10 @@ where
     }
 }
 
-impl<Client, SyncRequest> std::fmt::Debug for AutoResyncConnector<Client, SyncRequest> {
+impl<Exchange, Client> std::fmt::Debug for AutoResyncConnector<Exchange, Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConnectorImpl")
+        f.debug_struct("AutoResyncConnector")
             .field("connector", &self.connector)
-            .field("resync", &"<resync>")
             .finish()
     }
 }

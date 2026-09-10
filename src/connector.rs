@@ -189,11 +189,14 @@ where
     {
         AutoResyncConnector::new(Arc::new(self))
     }
-    pub fn duration_since_last_sync(&self) -> EGResult<Duration> {
+    pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
         self.clock.duration_since_last_sync()
     }
+    pub fn remaining_rate_limit_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
+        self.rate_limiters.remaining_capacity()
+    }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
-        Ok(self.clock.server_time_estimate())
+        self.clock.server_time_estimate()
     }
     fn validate_rate_limits<Request>(
         &self,
@@ -218,15 +221,18 @@ where
         }
         Ok(acquired)
     }
+    fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) {
+        for (restriction, cost) in costs {
+            let _ = self.rate_limiters.refund(restriction, cost);
+        }
+    }
     fn on_error<T>(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<T> {
         if matches!(&error, EGError::RateLimited | EGError::NotSent(..)) {
-            for (restriction, cost) in costs {
-                let _ = self.rate_limiters.refund(restriction, cost);
-            }
+            self.refund(costs);
         }
         Err(error)
     }
@@ -235,7 +241,7 @@ where
             let _ = self.rate_limiters.set_usage(usage);
         }
         if let Some(retry_after_seconds) = response.retry_after() {
-            let retry_after = Duration::from_secs(retry_after_seconds.0 as u64);
+            let retry_after = Duration::from_secs(retry_after_seconds.0.max(0) as u64);
             let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
@@ -251,9 +257,13 @@ where
     pub async fn sync_clock_http(&self) -> EGResult<()> {
         let server_time_request = self.exchange.server_time_request_http();
         let costs = self.validate_rate_limits(&server_time_request)?;
-        let http_request = server_time_request
-            .try_into_http(&self.signer)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let http_request = match server_time_request.try_into_http(&self.signer) {
+            Ok(http_request) => http_request,
+            Err(error) => {
+                self.refund(costs);
+                return Err(EGError::External(Box::new(error)));
+            }
+        };
         let start = Instant::now();
         let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
@@ -261,12 +271,10 @@ where
         };
         let round_trip_time = start.elapsed();
         let response = self.validate_http_status(response)?;
-        let response = Exchange::ServerTimeResponseHttp::try_from_http(response)
-            .map_err(|_| EGError::BadResponse)?;
+        let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
-        if let Some(server_time) = response.server_time() {
-            self.clock.sync(server_time, round_trip_time)?;
-        }
+        let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
+        self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     pub async fn send_http<Response>(
@@ -276,19 +284,35 @@ where
     where
         Response: ETHttpResponse,
     {
-        request.set_timestamp(self.clock.server_time_estimate());
+        let timestamp = if request.is_signed() {
+            self.clock.server_time_estimate()?
+        } else {
+            self.clock.server_time_estimate_unchecked()
+        };
+        request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
-        let http_request = request
-            .try_into_http(&self.signer)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let http_request = match request.try_into_http(&self.signer) {
+            Ok(http_request) => http_request,
+            Err(error) => {
+                self.refund(costs);
+                return Err(EGError::External(Box::new(error)));
+            }
+        };
         let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
         let response = self.validate_http_status(response)?;
-        let response = Response::try_from_http(response).map_err(|_| EGError::BadResponse)?;
+        let response = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         Ok(response)
+    }
+    fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
+    where
+        Response: ETHttpResponse,
+    {
+        let body = response.body.clone();
+        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source, body })
     }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
@@ -330,17 +354,21 @@ where
         let server_time_request = self.exchange.server_time_request_websocket();
         let costs = self.validate_rate_limits(&server_time_request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-        let (websocket_request, response_matcher) = server_time_request
-            .try_into_websocket(&self.signer, id)
-            .map_err(|_| EGError::BadResponse)?;
+        let (websocket_request, response_matcher) =
+            match server_time_request.try_into_websocket(&self.signer, id) {
+                Ok(request) => request,
+                Err(_) => {
+                    self.refund(costs);
+                    return Err(EGError::BadResponse);
+                }
+            };
         let start = Instant::now();
         let response: Exchange::ServerTimeResponseWebsocket = self
             .send_wait(websocket_request, costs, response_matcher)
             .await?;
         let round_trip_time = start.elapsed();
-        if let Some(server_time) = response.server_time() {
-            self.clock.sync(server_time, round_trip_time)?;
-        }
+        let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
+        self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     pub async fn send_websocket<Response>(
@@ -350,12 +378,22 @@ where
     where
         Response: ETWebsocketResponse,
     {
-        request.set_timestamp(self.clock.server_time_estimate());
+        let timestamp = if request.is_signed() {
+            self.clock.server_time_estimate()?
+        } else {
+            self.clock.server_time_estimate_unchecked()
+        };
+        request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-        let (websocket_request, response_matcher) = request
-            .try_into_websocket(&self.signer, id)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+        let (websocket_request, response_matcher) =
+            match request.try_into_websocket(&self.signer, id) {
+                Ok(request) => request,
+                Err(error) => {
+                    self.refund(costs);
+                    return Err(EGError::External(Box::new(error)));
+                }
+            };
         self.send_wait(websocket_request, costs, response_matcher)
             .await
     }
@@ -396,15 +434,13 @@ where
     }
 }
 
-impl<Client, SyncRequest> std::fmt::Debug for Connector<Client, SyncRequest> {
+impl<Exchange, Client> std::fmt::Debug for Connector<Exchange, Client> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ConnectorImpl")
-            .field("rate_limits", &self.rate_limiters)
+        f.debug_struct("Connector")
+            .field("rate_limiters", &self.rate_limiters)
             .field("clock", &self.clock)
             .field("signer", &"<signer>")
             .field("client", &"<client>")
-            .field("auto_resync", &"<auto_resync>")
-            .field("resync", &"<resync>")
             .finish()
     }
 }

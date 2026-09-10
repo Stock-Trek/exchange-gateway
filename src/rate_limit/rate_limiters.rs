@@ -14,6 +14,21 @@ impl RateLimiters {
     pub fn new(limiters: HashMap<RateLimitRestriction, RateLimiter>) -> Self {
         Self { limiters }
     }
+    pub fn remaining_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
+        let mut capacities = HashMap::new();
+        for (restriction, limiter) in &self.limiters {
+            for (interval_nanos, remaining) in limiter.remaining_capacity()? {
+                capacities.insert(
+                    RateLimit {
+                        restriction: *restriction,
+                        interval_nanos,
+                    },
+                    remaining,
+                );
+            }
+        }
+        Ok(capacities)
+    }
     pub fn did_acquire(
         &self,
         restriction: RateLimitRestriction,

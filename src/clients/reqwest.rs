@@ -71,7 +71,7 @@ impl HttpClient for ReqwestHttpClient {
             .map(|(name, value)| {
                 (
                     name.as_str().to_ascii_lowercase(),
-                    value.to_str().unwrap_or_default().to_string(),
+                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
                 )
             })
             .collect();
