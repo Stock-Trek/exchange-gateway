@@ -9,11 +9,11 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-const MAX_PENDING_HANDLERS: usize = 1024;
+type Handlers = Arc<Mutex<Vec<ResponseHandler>>>;
 
 #[derive(Clone)]
 pub struct WebsocketListener {
-    handlers: Arc<Mutex<Vec<ResponseHandler>>>,
+    handlers: Handlers,
 }
 
 impl WebsocketListener {
@@ -45,14 +45,14 @@ impl WebsocketListener {
             state: state.clone(),
             filter,
         };
-        {
-            let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-            if guard.len() >= MAX_PENDING_HANDLERS {
-                guard.retain(|existing| !existing.is_abandoned());
-            }
-            guard.push(handler);
-        }
-        Ok(WaiterForResponse { state })
+        self.handlers
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .push(handler);
+        Ok(WaiterForResponse {
+            state,
+            handlers: self.handlers.clone(),
+        })
     }
 }
 
@@ -73,6 +73,7 @@ impl std::fmt::Debug for WebsocketListener {
 
 pub(crate) struct WaiterForResponse {
     state: Arc<Mutex<WaiterState>>,
+    handlers: Handlers,
 }
 
 impl Future for WaiterForResponse {
@@ -96,10 +97,9 @@ impl Future for WaiterForResponse {
 
 impl Drop for WaiterForResponse {
     fn drop(&mut self) {
-        let _ = self.state.lock().map(|mut state| {
-            state.abandoned = true;
-            state.waker = None;
-        });
+        if let Ok(mut handlers) = self.handlers.lock() {
+            handlers.retain(|handler| !Arc::ptr_eq(&handler.state, &self.state));
+        }
     }
 }
 
@@ -109,31 +109,24 @@ struct ResponseHandler {
 }
 
 impl ResponseHandler {
-    fn is_abandoned(&self) -> bool {
-        self.state.lock().is_ok_and(|state| state.abandoned)
-    }
     fn handle(&self, response: &serde_json::Value) -> EGResult<bool> {
         let is_handled = match PanicUtils::catch_panic(|| (self.filter)(response)) {
             Ok(is_handled) => is_handled,
             Err(payload) => {
                 let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
                 let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-                if !state.abandoned {
-                    state.error = Some(error);
-                    if let Some(waker) = state.waker.take() {
-                        waker.wake();
-                    }
+                state.error = Some(error);
+                if let Some(waker) = state.waker.take() {
+                    waker.wake();
                 }
                 return Ok(true);
             }
         };
         if is_handled {
             let mut state = self.state.lock().map_err(|_| EGError::MutexPoisoned)?;
-            if !state.abandoned {
-                state.filtered_response = Some(response.clone());
-                if let Some(waker) = state.waker.take() {
-                    waker.wake();
-                }
+            state.filtered_response = Some(response.clone());
+            if let Some(waker) = state.waker.take() {
+                waker.wake();
             }
         }
         Ok(is_handled)
@@ -145,5 +138,47 @@ struct WaiterState {
     filtered_response: Option<serde_json::Value>,
     error: Option<EGError>,
     waker: Option<Waker>,
-    abandoned: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{future::Future, sync::Arc, task::Waker};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        let mut future = Box::pin(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(output) => return output,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    #[test]
+    fn dropped_waiter_is_removed_from_listener() {
+        let listener = WebsocketListener::new();
+        let waiter = listener
+            .waiter_for_filtered_response(Arc::new(|_| true))
+            .unwrap();
+        assert_eq!(listener.handlers.lock().unwrap().len(), 1);
+        drop(waiter);
+        assert_eq!(listener.handlers.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn dropped_waiter_does_not_swallow_response() {
+        let listener = WebsocketListener::new();
+        let stale = listener
+            .waiter_for_filtered_response(Arc::new(|_| true))
+            .unwrap();
+        drop(stale);
+        let fresh = listener
+            .waiter_for_filtered_response(Arc::new(|_| true))
+            .unwrap();
+        block_on(listener.on_message(serde_json::json!({ "value": 42 }))).unwrap();
+        assert_eq!(block_on(fresh).unwrap(), serde_json::json!({ "value": 42 }));
+    }
 }
