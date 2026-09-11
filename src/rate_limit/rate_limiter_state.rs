@@ -7,6 +7,17 @@ use std::{
 
 const MAX_THROTTLE_AFTER: Duration = Duration::from_secs(u32::MAX as u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcquireResult {
+    Acquired,
+    RateLimited,
+    ExceedsCapacity {
+        cost: UsageCount,
+        capacity: UsageCount,
+        interval_nanos: Nanoseconds,
+    },
+}
+
 #[derive(Clone)]
 pub struct RateLimiterState {
     interval_nanos: Nanoseconds,
@@ -53,20 +64,37 @@ impl RateLimiterState {
     pub fn interval_nanos(&self) -> Nanoseconds {
         self.interval_nanos
     }
+    pub fn capacity_per_interval(&self) -> UsageCount {
+        self.capacity_per_interval
+    }
+    pub fn cost_exceeds_capacity(&self, cost: UsageCount) -> bool {
+        cost > self.capacity_per_interval
+    }
     pub fn remaining_capacity(&mut self) -> UsageCount {
         self.update_capacity();
         self.current_capacity
     }
     #[must_use]
-    pub fn did_consume(&mut self, cost: UsageCount) -> bool {
+    pub fn did_consume(&mut self, cost: UsageCount) -> AcquireResult {
+        if self.cost_exceeds_capacity(cost) {
+            return AcquireResult::ExceedsCapacity {
+                cost,
+                capacity: self.capacity_per_interval,
+                interval_nanos: self.interval_nanos,
+            };
+        }
         if self.is_throttled() {
-            return false;
+            return AcquireResult::RateLimited;
         }
         if self.did_quick_consume(cost) {
-            true
+            AcquireResult::Acquired
         } else {
             self.update_capacity();
-            self.did_quick_consume(cost)
+            if self.did_quick_consume(cost) {
+                AcquireResult::Acquired
+            } else {
+                AcquireResult::RateLimited
+            }
         }
     }
     pub fn refund(&mut self, cost: UsageCount) {

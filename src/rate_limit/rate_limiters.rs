@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    rate_limit::rate_limiter::RateLimiter,
+    rate_limit::{rate_limiter::RateLimiter, rate_limiter_state::AcquireResult},
 };
 use exchange_types::{
     new_types::{Nanoseconds, UsageCount},
@@ -40,30 +40,47 @@ impl RateLimiters {
         }
         Ok(capacities)
     }
-    pub fn did_acquire(&self, costs: &[(RateLimitRestriction, UsageCount)]) -> EGResult<bool> {
+    pub fn did_acquire(
+        &self,
+        costs: &[(RateLimitRestriction, UsageCount)],
+    ) -> EGResult<AcquireResult> {
         let _guard = self
             .acquisition_lock
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
         let mut acquired = Vec::with_capacity(costs.len());
         for &(restriction, cost) in costs {
-            let did_acquire = match self.limiters.get(&restriction) {
+            let result = match self.limiters.get(&restriction) {
                 Some(limiter) => match limiter.did_acquire(cost) {
-                    Ok(did_acquire) => did_acquire,
+                    Ok(result) => result,
                     Err(error) => {
                         self.refund_acquired(&acquired);
                         return Err(error);
                     }
                 },
-                None => true,
+                None => AcquireResult::Acquired,
             };
-            if !did_acquire {
-                self.refund_acquired(&acquired);
-                return Ok(false);
+            match result {
+                AcquireResult::Acquired => acquired.push((restriction, cost)),
+                AcquireResult::RateLimited => {
+                    self.refund_acquired(&acquired);
+                    return Ok(AcquireResult::RateLimited);
+                }
+                AcquireResult::ExceedsCapacity {
+                    cost,
+                    capacity,
+                    interval_nanos,
+                } => {
+                    self.refund_acquired(&acquired);
+                    return Ok(AcquireResult::ExceedsCapacity {
+                        cost,
+                        capacity,
+                        interval_nanos,
+                    });
+                }
             }
-            acquired.push((restriction, cost));
         }
-        Ok(true)
+        Ok(AcquireResult::Acquired)
     }
     fn refund_acquired(&self, acquired: &[(RateLimitRestriction, UsageCount)]) {
         for &(restriction, cost) in acquired {
