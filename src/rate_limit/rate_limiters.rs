@@ -48,18 +48,27 @@ impl RateLimiters {
         let mut acquired = Vec::with_capacity(costs.len());
         for &(restriction, cost) in costs {
             let did_acquire = match self.limiters.get(&restriction) {
-                Some(limiter) => limiter.did_acquire(cost)?,
+                Some(limiter) => match limiter.did_acquire(cost) {
+                    Ok(did_acquire) => did_acquire,
+                    Err(error) => {
+                        self.refund_acquired(&acquired);
+                        return Err(error);
+                    }
+                },
                 None => true,
             };
             if !did_acquire {
-                for &(restriction, cost) in &acquired {
-                    let _ = self.refund(restriction, cost);
-                }
+                self.refund_acquired(&acquired);
                 return Ok(false);
             }
             acquired.push((restriction, cost));
         }
         Ok(true)
+    }
+    fn refund_acquired(&self, acquired: &[(RateLimitRestriction, UsageCount)]) {
+        for &(restriction, cost) in acquired {
+            let _ = self.refund(restriction, cost);
+        }
     }
     pub fn refund(&self, restriction: RateLimitRestriction, cost: UsageCount) -> EGResult<()> {
         if let Some(limiter) = self.limiters.get(&restriction) {
