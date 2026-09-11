@@ -212,7 +212,7 @@ where
                 (cost > UsageCount::ZERO).then_some((restriction, cost))
             })
             .collect::<Vec<_>>();
-        if self.rate_limiters.did_acquire_all(&costs)? {
+        if self.rate_limiters.did_acquire(&costs)? {
             Ok(costs)
         } else {
             Err(EGError::RateLimited)

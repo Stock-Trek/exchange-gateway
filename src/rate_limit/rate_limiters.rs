@@ -40,25 +40,18 @@ impl RateLimiters {
         }
         Ok(capacities)
     }
-    pub fn did_acquire(
-        &self,
-        restriction: RateLimitRestriction,
-        cost: UsageCount,
-    ) -> EGResult<bool> {
-        if let Some(limiter) = self.limiters.get(&restriction) {
-            limiter.did_acquire(cost)
-        } else {
-            Ok(true)
-        }
-    }
-    pub fn did_acquire_all(&self, costs: &[(RateLimitRestriction, UsageCount)]) -> EGResult<bool> {
+    pub fn did_acquire(&self, costs: &[(RateLimitRestriction, UsageCount)]) -> EGResult<bool> {
         let _guard = self
             .acquisition_lock
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
         let mut acquired = Vec::with_capacity(costs.len());
         for &(restriction, cost) in costs {
-            if !self.did_acquire(restriction, cost)? {
+            let did_acquire = match self.limiters.get(&restriction) {
+                Some(limiter) => limiter.did_acquire(cost)?,
+                None => true,
+            };
+            if !did_acquire {
                 for &(restriction, cost) in &acquired {
                     let _ = self.refund(restriction, cost);
                 }
