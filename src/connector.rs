@@ -166,7 +166,7 @@ impl Connector<(), ()> {
                 interval_nanos,
             } = rate_limit;
             let states = limiter_states.entry(restriction).or_insert_with(Vec::new);
-            let state = RateLimiterState::new(interval_nanos, capacity)?;
+            let state = RateLimiterState::try_new(interval_nanos, capacity)?;
             states.push(state);
         }
         let limiters = limiter_states

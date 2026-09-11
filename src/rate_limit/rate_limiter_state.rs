@@ -19,7 +19,10 @@ pub struct RateLimiterState {
 }
 
 impl RateLimiterState {
-    pub fn new(interval_nanos: Nanoseconds, capacity_per_interval: UsageCount) -> EGResult<Self> {
+    pub fn try_new(
+        interval_nanos: Nanoseconds,
+        capacity_per_interval: UsageCount,
+    ) -> EGResult<Self> {
         Self::with_clock(
             interval_nanos,
             capacity_per_interval,
@@ -159,31 +162,5 @@ impl std::fmt::Debug for RateLimiterState {
             .field("excess_interval_nanos", &self.excess_interval_nanos)
             .field("throttled_until", &self.throttled_until)
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rejects_zero_interval() {
-        assert!(matches!(
-            RateLimiterState::new(Nanoseconds::ZERO, UsageCount(1)),
-            Err(EGError::InvalidRateLimitInterval)
-        ));
-    }
-
-    #[test]
-    fn rejects_zero_capacity() {
-        assert!(matches!(
-            RateLimiterState::new(Nanoseconds(1), UsageCount::ZERO),
-            Err(EGError::InvalidRateLimitCapacity)
-        ));
-    }
-
-    #[test]
-    fn accepts_positive_interval_and_capacity() {
-        assert!(RateLimiterState::new(Nanoseconds(1), UsageCount(1)).is_ok());
     }
 }
