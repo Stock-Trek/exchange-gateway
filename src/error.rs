@@ -1,4 +1,7 @@
-use exchange_types::{error::ETError, new_types::UsageCount};
+use exchange_types::{
+    error::ETError,
+    new_types::{Nanoseconds, UsageCount},
+};
 
 pub type EGResult<T> = Result<T, EGError>;
 
@@ -46,10 +49,13 @@ pub enum EGError {
     RateLimited,
     #[error("The system time is before the UNIX epoch")]
     SystemTimeBeforeUnixEpoch,
-    #[error("Request rate limit cost {cost} exceeds the maximum capacity {capacity}")]
+    #[error(
+        "Request rate limit cost {cost} exceeds the maximum capacity {capacity} for interval {interval_nanos}ns"
+    )]
     RequestExceedsRateLimit {
         cost: UsageCount,
         capacity: UsageCount,
+        interval_nanos: Nanoseconds,
     },
     #[error("Request timed out waiting for a response")]
     TimedOut,
