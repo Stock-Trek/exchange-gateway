@@ -37,6 +37,14 @@ classification is unreliable:
 This document audits the current behaviour and presents options. It does not
 change any code.
 
+> **Update after master merge (#354/#355).** While this investigation was in
+> progress, master added a bounded automatic retry for idempotent requests to
+> `send_http` / `send_websocket` (the constructors now take
+> `max_retry_attempts`, and errors are filtered through `is_retryable`). That
+> implements a conservative first slice of Option E and is audited in §3.4; the
+> core classification ask (Option A) is still outstanding. The rest of this
+> document has been updated to reflect the merged behaviour.
+
 ## 2. Desired outcome taxonomy
 
 The four classes above can be modelled as a small public enum. `Ok(response)`
@@ -73,8 +81,9 @@ Three important observations frame the whole design:
   error.** The `exchange-types` version this crate depends on now exposes
   `ETRequest::is_idempotent()` (defaulting to `false`), so the connector can
   attach a retry-safety hint to an unknown outcome without inventing new
-  per-request metadata. Classifying the outcome (Option A) and deciding whether
-  to retry (Option E) stay separate concerns.
+  per-request metadata. Master has already used this to auto-retry idempotent
+  requests (§3.4); classifying the outcome (Option A) and deciding whether to
+  retry (Option E) remain separate concerns.
 
 ## 3. Audit of current behaviour
 
@@ -88,10 +97,10 @@ Three important observations frame the whole design:
 | `ReqwestHttpClient::send`, `error.is_connect()` | `NotSent(External)` | not sent |
 | `ReqwestHttpClient::send`, other error incl. timeout | `External` | **unknown** (classification bug) |
 | `response.bytes()` fails after headers | `External` | **unknown** (server responded) |
-| `handle_retry_after` sees `Retry-After` | `RateLimited` | sent; exchange throttled |
-| `validate_http_status` sees 429 | `RateLimited` | failed (server responded; throttled) |
-| `validate_http_status` other non-2xx | `HttpError { status, body }` | failed (server responded) |
-| `parse_http_response` fails | `HttpParseError { source }` | response received; semantics unclear |
+| `handle_http_response` sees `Retry-After` | `RateLimited` | sent; exchange throttled |
+| `handle_http_response` sees 429 | `RateLimited` | failed (server responded; throttled) |
+| `handle_http_response` other non-2xx | `HttpError { status, body }` | failed (server responded) |
+| `handle_http_response` parsing fails | `HttpParseError { source }` | response received; semantics unclear |
 | `set_rate_limits` sees `Retry-After` | `RateLimited` | sent; exchange throttled |
 | success | `Ok(response)` | succeeded |
 
@@ -143,6 +152,45 @@ case the correlation machinery is supposed to prevent. The response is
 effectively lost, and the caller has no way to ask for it later. There is no
 HTTP equivalent, but an HTTP timeout leaves the same uncertainty about whether
 the exchange acted.
+
+### 3.4 Automatic retry for idempotent requests (`send_http` / `send_websocket`)
+
+Master added a bounded retry loop to `Connector::send_http` and
+`Connector::send_websocket` (issue #354, PR #355). The constructors now take a
+`max_retry_attempts: u8`, and each send acquires its rate-limit cost once up
+front and then:
+
+1. reads `request.is_idempotent()` and `request.is_signed()`;
+2. sets `retries_remaining = max_retry_attempts` only when the request is
+   idempotent, so non-idempotent requests are never retried;
+3. attempts the send, and on error retries while `retries_remaining > 0` and
+   `is_retryable(error)` is true;
+4. re-acquires the rate-limit cost for each retry whose previous error was not
+   `NotSent` (a `NotSent` error never reached the wire, so it is not charged
+   again);
+5. on the final error calls `on_send_error`, which refunds only `NotSent`.
+
+`is_retryable` is currently variant-based:
+
+| Error | Retryable? |
+| --- | --- |
+| `NotSent(_)` | yes |
+| `TimedOut` | yes |
+| `External(_)` | yes |
+| `HttpError { status: 408 }` | yes |
+| `HttpError { status >= 500 }` | yes |
+| `RateLimited` | no |
+| `HttpParseError` / `WebsocketParseError` | no |
+| clock / signing / rate-limit pre-flight errors | no |
+
+Restricting retries to idempotent requests makes retrying an unknown outcome
+(the waiter `TimedOut`, or a post-send `External`) safe in that case. It also
+shows why outcome classification is still needed: the policy is expressed in
+terms of *error variants* rather than *outcomes*, because `TimedOut` and
+`External` still conflate "definitely not sent" with "sent, outcome unknown".
+For non-idempotent requests nothing is retried, so the caller must be able to
+tell "the request was never sent" from "the request may have executed"
+(Option A) in order to decide whether to reconcile.
 
 ## 4. Options
 
@@ -338,14 +386,23 @@ to retry*, and have the connector return a "retryable" classification for
 `UnknownOutcome`. This makes the actionable decision explicit for callers who do
 not want to reason about transport phases.
 
-- *Pros:* directly supports automatic retry logic; connects the outcome to the
-  request type where safety is actually known; the trait already carries the
-  metadata (default `false`), so the only work is surfacing it on the outcome —
-  no request-spec or trait changes are needed.
+**Partially implemented in master (#354/#355).** `send_http` and
+`send_websocket` now consult `is_idempotent()` and automatically retry up to
+`max_retry_attempts` times when `is_retryable(error)` holds (§3.4). What is not
+yet implemented is surfacing the same decision to the caller: there is no
+`RequestOutcome` and no retry-safety field on the returned error, so a
+non-idempotent caller sees the same raw variants the issue complains about.
+
+- *Pros:* directly supports automatic retry logic (already done for idempotent
+  requests); connects the outcome to the request type where safety is actually
+  known; the trait already carries the metadata (default `false`), so surfacing
+  it on the outcome needs no request-spec or trait changes.
 - *Cons:* the `false` default means read-only requests will be treated as
   unsafe unless each request overrides it; it does not replace A/B because it
   does not classify not-sent vs failed, and it says nothing about the
-  late-response problem in Option C.
+  late-response problem in Option C. The current retry filter (`is_retryable`)
+  keys off error variants rather than outcomes, so it will need revisiting if
+  Option A splits the overloaded variants.
 
 ## 5. Recommendation
 
@@ -362,13 +419,17 @@ not want to reason about transport phases.
   fit if the caller needs to persist correlation ids for reconciliation.
 - **Document Option D as the operational answer for orders.** Classification
   plus reconciliation is what actually resolves "did the order land?".
-- **Surface Option E (`ETRequest::is_idempotent()`) as the retry-safety layer.**
-  Once Option A provides `RequestOutcome::Unknown`, the connector can pair that
-  outcome with the request's `is_idempotent()` value (either as a field on the
-  unknown variant or a companion accessor) so callers can distinguish "unknown
-  and safe to retry" from "unknown and must be reconciled". Because the default
-  is `false`, exchange integrations opt read-only requests in explicitly; this
-  is a recommendation, not an automatic retry.
+- **Build on Option E (`ETRequest::is_idempotent()`), which master has already
+  wired into automatic retry.** `send_http` / `send_websocket` now perform a
+  bounded retry (configured by `max_retry_attempts`) for idempotent requests
+  only, using the variant-based `is_retryable` filter (§3.4). Option A is the
+  complement: once `UnknownOutcome` is a separate variant, the retry policy can
+  be expressed in terms of outcomes, and the returned error can carry the
+  retry-safety hint (or callers can consult `is_idempotent()` themselves) so
+  non-idempotent callers know to reconcile rather than retry. Because the
+  default is `false`, exchange integrations must opt read-only requests in
+  explicitly; automatic retry is bounded by `max_retry_attempts` and is not a
+  substitute for reconciliation.
 
 Option B is the most robust long-term shape but is a semver-major change to
 every call site; it is worth revisiting if callers are found to be
@@ -402,13 +463,18 @@ misclassifying errors in practice.
    changes the meaning of existing variants is a breaking change even though the
    enum is `#[non_exhaustive]`, and needs a release note.
 8. **Idempotency metadata semantics.** `ETRequest::is_idempotent()` defaults to
-   `false`, so an unannotated request is treated as unsafe to retry. Should the
-   connector expose it as a field on `UnknownOutcome` (e.g.
-   `UnknownOutcome { retryable: bool }`) or as a separate accessor that takes
-   the original request? Either way the transport outcome and the retry decision
-   should remain independent, so callers keep control of reconciliation.
+   `false`, so an unannotated request is treated as unsafe to retry. Master
+   already uses it to drive automatic retries (#354/#355), but it is not exposed
+   to callers. Should the connector expose it as a field on `UnknownOutcome`
+   (e.g. `UnknownOutcome { retryable: bool }`) or as a separate accessor that
+   takes the original request? Either way the transport outcome and the retry
+   decision should remain independent, so callers keep control of
+   reconciliation.
 
 ## 7. Implementation touch points (for Options A + C2 + E)
+
+Option E's automatic retry is already merged; its remaining "surface the hint"
+step and Options A/C2 are still to do.
 
 - `src/error.rs`: add `RequestOutcome`, `UnknownOutcome`, `request_outcome()`
   and the `ResultOutcomeExt` helper.
@@ -423,16 +489,21 @@ misclassifying errors in practice.
   where appropriate; keep the `on_send_error` refund logic refunding on
   `NotSent` only (as it does today) and not on `UnknownOutcome` (the request may
   have consumed weight).
-- `src/connector.rs`: read `Request::is_idempotent()` before the request is
-  consumed by `try_into_http` / `try_into_websocket`, and attach it to any
-  `UnknownOutcome` returned from the send path (Option E). Do not use it to
-  auto-retry or to refund rate-limit weight; it is only a hint for the caller.
+- `src/connector.rs`: `Request::is_idempotent()` is already read before the
+  request is cloned into `try_into_http` / `try_into_websocket` and drives the
+  merged bounded retry loop (`max_retry_attempts`, `is_retryable`); the
+  constructors take `max_retry_attempts: u8` and the send methods require
+  `Clone`. For the remaining Option E work, attach the retry-safety hint to any
+  `UnknownOutcome` returned from the send path (or expose a companion accessor).
+  Keep the outcome classification and the retry decision independent, and do not
+  use `is_idempotent()` to refund rate-limit weight.
 - `src/websocket_listener.rs`: for C2, add a way for a waiter to survive its
   timeout (e.g. an owner-held registration or an explicit `release`/`wait_late`
   path) instead of `Drop` always removing the handler; keep `Drop` as the final
   cleanup.
 - `src/auto_resync_connector.rs`: propagate the new outcome accessor to the
-  auto-resync wrapper's `send_http` / `send_websocket`.
+  auto-resync wrapper's `send_http` / `send_websocket` (the merged retry loop's
+  `Clone` bound is already forwarded).
 - Tests: unit tests for the `reqwest` error mapping (connect vs timeout vs body),
   `EGError::request_outcome()` for every variant, and an `is_idempotent()`
   propagation test that an unknown outcome from an idempotent request carries
@@ -472,6 +543,11 @@ misclassifying errors in practice.
 - **Idempotency is not a licence to retry blindly.** `is_idempotent()` describes
   the request's semantics, not the transport, and defaults to `false`; it says
   nothing about whether the exchange has capacity, whether a rate-limit budget
-  was already consumed, or whether a retry will race a late response. Treat it
-  as an input to a caller-owned retry policy (bounded attempts, backoff, and
-  reconciliation for non-idempotent requests), not as automatic retry.
+  was already consumed, or whether a retry will race a late response. Master now
+  applies a bounded automatic retry (`max_retry_attempts`) to idempotent
+  requests via `is_retryable`, with no backoff, so retry should still be treated
+  as a policy input (bound the attempts, add backoff, reconcile non-idempotent
+  requests). Because `is_retryable` currently treats `TimedOut` and `External`
+  (overloaded "unknown outcome" variants) as retryable, an unknown outcome is
+  retried automatically for idempotent requests; once Option A lands, that
+  decision should be expressed per-outcome.
