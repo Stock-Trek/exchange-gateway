@@ -131,7 +131,7 @@ impl RateLimiterState {
     fn now(&self) -> Instant {
         (self.now)()
     }
-    fn is_throttled(&self) -> bool {
+    pub(crate) fn is_throttled(&self) -> bool {
         self.throttled_until
             .is_some_and(|throttled_until| self.now() < throttled_until)
     }

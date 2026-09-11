@@ -45,6 +45,11 @@ impl RateLimiters {
             .acquisition_lock
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
+        for limiter in self.limiters.values() {
+            if limiter.is_throttled()? {
+                return Err(EGError::RateLimited);
+            }
+        }
         let mut acquired = Vec::with_capacity(costs.len());
         for &(restriction, cost) in costs {
             if let Some(limiter) = self.limiters.get(&restriction) {
@@ -85,5 +90,38 @@ impl RateLimiters {
             limiter.throttle(retry_after)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rate_limit::rate_limiter_state::RateLimiterState;
+
+    fn rate_limiters() -> RateLimiters {
+        let state = RateLimiterState::try_new(Nanoseconds(60_000_000_000), UsageCount(10))
+            .expect("valid rate limiter state");
+        RateLimiters::new(HashMap::from([(
+            RateLimitRestriction::RawRequests,
+            RateLimiter::new(&[state]),
+        )]))
+    }
+
+    #[test]
+    fn retry_after_blocks_zero_cost_requests() {
+        let rate_limiters = rate_limiters();
+        rate_limiters
+            .set_retry_after(Duration::from_secs(60))
+            .expect("set retry after");
+        assert!(matches!(
+            rate_limiters.did_acquire(&[]),
+            Err(EGError::RateLimited)
+        ));
+    }
+
+    #[test]
+    fn zero_cost_requests_are_allowed_without_retry_after() {
+        let rate_limiters = rate_limiters();
+        assert!(rate_limiters.did_acquire(&[]).is_ok());
     }
 }

@@ -85,6 +85,13 @@ impl RateLimiter {
         }
         Ok(())
     }
+    pub fn is_throttled(&self) -> EGResult<bool> {
+        let limiters_guard = self
+            .rate_limiters
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        Ok(limiters_guard.iter().any(RateLimiterState::is_throttled))
+    }
     pub fn throttle(&self, retry_after: Duration) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
