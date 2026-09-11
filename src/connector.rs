@@ -493,13 +493,13 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(
-                result.map_err(|error| EGError::Send(SendFailure::unknown(error))),
-            ),
+            Poll::Ready(result) => {
+                Poll::Ready(result.map_err(|error| EGError::Send(SendFailure::unknown(error))))
+            }
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::Send(SendFailure::unknown(
-                    EGError::TimedOut,
-                )))),
+                Poll::Ready(()) => {
+                    Poll::Ready(Err(EGError::Send(SendFailure::unknown(EGError::TimedOut))))
+                }
                 Poll::Pending => Poll::Pending,
             },
         })
