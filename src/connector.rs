@@ -351,10 +351,9 @@ where
                 return self.on_send_error(error, costs);
             }
             retries_remaining -= 1;
-            if matches!(error, EGError::NotSent(..)) {
-                self.refund(costs.clone());
+            if !matches!(error, EGError::NotSent(..)) {
+                self.rate_limiters.did_acquire(&costs)?;
             }
-            self.rate_limiters.did_acquire(&costs)?;
         }
     }
     fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
