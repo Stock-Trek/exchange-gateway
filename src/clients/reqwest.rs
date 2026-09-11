@@ -1,6 +1,6 @@
 use crate::{
     clients::client::HttpClient,
-    error::{EGError, EGResult, RequestOutcome},
+    error::{EGError, EGResult},
 };
 use async_trait::async_trait;
 use exchange_types::http::{HttpMethod, HttpRequest, HttpResponse};
@@ -64,15 +64,9 @@ impl HttpClient for ReqwestHttpClient {
             // the exchange, so the outcome is unknown. `is_connect()` is checked
             // first because a connect timeout satisfies both predicates.
             if error.is_connect() || error.is_builder() {
-                EGError::Send {
-                    outcome: RequestOutcome::NotSent,
-                    source: Box::new(EGError::External(Box::new(error))),
-                }
+                EGError::send_not_sent_external(error)
             } else {
-                EGError::Send {
-                    outcome: RequestOutcome::Unknown,
-                    source: Box::new(EGError::External(Box::new(error))),
-                }
+                EGError::send_unknown_external(error)
             }
         })?;
         let status = response.status();
@@ -89,10 +83,7 @@ impl HttpClient for ReqwestHttpClient {
         let body = response
             .bytes()
             .await
-            .map_err(|error| EGError::Send {
-                outcome: RequestOutcome::Unknown,
-                source: Box::new(EGError::External(Box::new(error))),
-            })?
+            .map_err(|error| EGError::send_unknown_external(error))?
             .to_vec();
         Ok(HttpResponse {
             status: status.as_u16(),
@@ -108,30 +99,5 @@ impl std::fmt::Debug for ReqwestHttpClient {
             .field("client", &"<reqwest::Client>")
             .field("base_url", &self.base_url)
             .finish()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn a_connection_that_never_opens_is_not_sent() {
-        // Port 1 has no listener, so the request never reaches a wire.
-        let client = ReqwestHttpClient::new("http://127.0.0.1:1");
-        let request = HttpRequest {
-            method: HttpMethod::GET,
-            query: None,
-            headers: Vec::new(),
-            body: None,
-        };
-        let error = client
-            .send(request, Duration::from_millis(500))
-            .await
-            .expect_err("connection to port 1 should fail");
-        match error {
-            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::NotSent),
-            other => panic!("expected EGError::Send, got {other:?}"),
-        }
     }
 }

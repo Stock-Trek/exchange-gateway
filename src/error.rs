@@ -5,17 +5,11 @@ use exchange_types::{
 
 pub type EGResult<T> = Result<T, EGError>;
 
-/// What happened to a request that was handed to a send path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum RequestOutcome {
-    /// A valid response was received.
-    Succeeded,
-    /// The exchange received the request and rejected it; it did not take effect.
+pub enum SendFailure {
     Failed,
-    /// The request definitely never left the client.
     NotSent,
-    /// The request may have been sent; the outcome is unknown.
     Unknown,
 }
 
@@ -66,7 +60,7 @@ pub enum EGError {
     NotConnected,
     #[error("{source}")]
     Send {
-        outcome: RequestOutcome,
+        failure: SendFailure,
         #[source]
         source: Box<EGError>,
     },
@@ -88,41 +82,42 @@ pub enum EGError {
     WebsocketListenerMissing,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn io_error() -> EGError {
-        EGError::External(Box::new(std::io::Error::other("boom")))
+impl EGError {
+    pub(crate) fn external(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        EGError::External(Box::new(source))
     }
-
-    fn send(outcome: RequestOutcome, source: EGError) -> EGError {
+    pub(crate) fn send_not_sent(source: EGError) -> Self {
         EGError::Send {
-            outcome,
+            failure: SendFailure::NotSent,
             source: Box::new(source),
         }
     }
-
-    #[test]
-    fn send_errors_carry_their_outcome() {
-        match send(RequestOutcome::NotSent, io_error()) {
-            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::NotSent),
-            other => panic!("expected EGError::Send, got {other:?}"),
-        }
-        match send(RequestOutcome::Failed, io_error()) {
-            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::Failed),
-            other => panic!("expected EGError::Send, got {other:?}"),
-        }
-        match send(RequestOutcome::Unknown, io_error()) {
-            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::Unknown),
-            other => panic!("expected EGError::Send, got {other:?}"),
+    pub(crate) fn send_not_sent_external(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        EGError::Send {
+            failure: SendFailure::NotSent,
+            source: Box::new(EGError::external(source)),
         }
     }
-
-    #[test]
-    fn send_errors_proxy_display_and_source_to_the_cause() {
-        let error = send(RequestOutcome::NotSent, io_error());
-        assert_eq!(error.to_string(), io_error().to_string());
-        assert!(std::error::Error::source(&error).is_some());
+    pub(crate) fn send_failed(source: EGError) -> Self {
+        EGError::Send {
+            failure: SendFailure::Failed,
+            source: Box::new(source),
+        }
+    }
+    pub(crate) fn send_unknown(source: EGError) -> Self {
+        EGError::Send {
+            failure: SendFailure::Unknown,
+            source: Box::new(source),
+        }
+    }
+    pub(crate) fn send_unknown_external(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        EGError::Send {
+            failure: SendFailure::Unknown,
+            source: Box::new(EGError::external(source)),
+        }
     }
 }

@@ -1,6 +1,6 @@
 use crate::{
     clients::client::WebsocketClient,
-    error::{EGError, EGResult, RequestOutcome},
+    error::{EGError, EGResult},
     panic_guard::PanicUtils,
     websocket_listener::WebsocketListener,
 };
@@ -36,10 +36,7 @@ impl IrisWebsocketClient {
         poll_fn(move |cx| match send.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.map_err(Self::map_send_error)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::Send {
-                    outcome: RequestOutcome::NotSent,
-                    source: Box::new(EGError::TimedOut),
-                })),
+                Poll::Ready(()) => Poll::Ready(Err(EGError::send_not_sent(EGError::TimedOut))),
                 Poll::Pending => Poll::Pending,
             },
         })
@@ -47,14 +44,10 @@ impl IrisWebsocketClient {
     }
     fn map_send_error(error: ConnectionError) -> EGError {
         match error {
-            ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => EGError::Send {
-                outcome: RequestOutcome::NotSent,
-                source: Box::new(EGError::External(Box::new(error))),
-            },
-            error => EGError::Send {
-                outcome: RequestOutcome::Unknown,
-                source: Box::new(EGError::External(Box::new(error))),
-            },
+            ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => {
+                EGError::send_not_sent_external(error)
+            }
+            error => EGError::send_unknown_external(error),
         }
     }
 }
@@ -65,7 +58,7 @@ impl WebsocketClient for IrisWebsocketClient {
         self.client
             .connect()
             .await
-            .map_err(|e| EGError::External(Box::new(e)))
+            .map_err(|e| EGError::external(e))
     }
     fn is_connected(&self) -> bool {
         self.client.is_connected()
@@ -78,7 +71,7 @@ impl WebsocketClient for IrisWebsocketClient {
         self.client
             .disconnect()
             .await
-            .map_err(|e| EGError::External(Box::new(e)))
+            .map_err(|e| EGError::external(e))
     }
 }
 
