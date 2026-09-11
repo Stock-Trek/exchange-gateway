@@ -1,6 +1,7 @@
 # Design: classifying request outcomes (succeeded / failed / not sent / unknown)
 
-Issue: #350 (investigation — options, no code changes)
+Issue: #350 (investigation — options). **Option B was selected and is
+implemented** (see §5); the option analysis below is retained for context.
 
 ## 1. Summary
 
@@ -34,8 +35,9 @@ classification is unreliable:
   that arrives later is **silently dropped** and there is no API to observe it,
   so the caller never learns whether, for example, an order landed.
 
-This document audits the current behaviour and presents options. It does not
-change any code.
+This document audits the pre-implementation behaviour, presents options, and
+records the Option B decision that was implemented (§5–§7). Section 3 describes
+the behaviour before the change and is retained as the rationale.
 
 > **Update after master merge (#354/#355).** While this investigation was in
 > progress, master added a bounded automatic retry for idempotent requests to
@@ -44,6 +46,13 @@ change any code.
 > implements a conservative first slice of Option E and is audited in §3.4; the
 > core classification ask (Option A) is still outstanding. The rest of this
 > document has been updated to reflect the merged behaviour.
+
+> **Update — Option B implemented.** Following the issue discussion, Option B
+> (`SendFailure { outcome, source }`) was chosen and implemented. `send_http` /
+> `send_websocket` now return `SendResult<Response>` and the transport assigns
+> the outcome where the information is still available. The option sections
+> below are kept for context; §5–§7 record the decisions taken and what
+> remains.
 
 ## 2. Desired outcome taxonomy
 
@@ -86,6 +95,9 @@ Three important observations frame the whole design:
   retry (Option E) remain separate concerns.
 
 ## 3. Audit of current behaviour
+
+The tables in this section describe the behaviour **before** Option B was
+implemented; they are kept as the rationale for the change.
 
 ### 3.1 HTTP send path (`send_http`, `sync_clock_http`)
 
@@ -404,112 +416,127 @@ non-idempotent caller sees the same raw variants the issue complains about.
   keys off error variants rather than outcomes, so it will need revisiting if
   Option A splits the overloaded variants.
 
-## 5. Recommendation
+## 5. Decision
 
-- **Adopt Option A now.** It is the smallest change that satisfies the core ask
-  ("distinguish the four outcomes") without a breaking rewrite, and it puts the
-  not-sent vs unknown decision where the transport still has enough information
-  (HTTP `is_connect` / `is_timeout` / `is_body`, WebSocket send phase vs wait
-  phase). It also fixes the specific reported bug that a mid-request HTTP
-  timeout is reported as `External` rather than as an unknown outcome.
-- **Follow up with Option C2 (tracked handle).** The issue explicitly calls out
-  the silently dropped late WebSocket response; a per-request handle is the
-  cleanest way to observe it without global state or an id-exposing API. C1 is
-  an acceptable interim if a smaller change is preferred, and C3 is the better
-  fit if the caller needs to persist correlation ids for reconciliation.
-- **Document Option D as the operational answer for orders.** Classification
-  plus reconciliation is what actually resolves "did the order land?".
-- **Build on Option E (`ETRequest::is_idempotent()`), which master has already
-  wired into automatic retry.** `send_http` / `send_websocket` now perform a
-  bounded retry (configured by `max_retry_attempts`) for idempotent requests
-  only, using the variant-based `is_retryable` filter (§3.4). Option A is the
-  complement: once `UnknownOutcome` is a separate variant, the retry policy can
-  be expressed in terms of outcomes, and the returned error can carry the
-  retry-safety hint (or callers can consult `is_idempotent()` themselves) so
-  non-idempotent callers know to reconcile rather than retry. Because the
-  default is `false`, exchange integrations must opt read-only requests in
-  explicitly; automatic retry is bounded by `max_retry_attempts` and is not a
-  substitute for reconciliation.
+**Option B was selected and implemented** because it makes the outcome
+impossible to miss: a send failure cannot be observed without also seeing its
+outcome, and the classification is assigned where the transport still has the
+information rather than derived later from a generic variant.
 
-Option B is the most robust long-term shape but is a semver-major change to
-every call site; it is worth revisiting if callers are found to be
-misclassifying errors in practice.
+```rust
+pub struct SendFailure {
+    pub outcome: RequestOutcome, // Failed | NotSent | Unknown
+    pub source: Box<EGError>,
+}
+pub type SendResult<T> = Result<T, SendFailure>;
+```
 
-## 6. Key decisions / open questions
+What was implemented:
 
-1. **Additive vs typed (A vs B).** A keeps the public API and is the
-   recommended first step; B is stronger but breaking.
-2. **Late-response mechanism (C1 vs C2 vs C3).** C2 is recommended; the
+- `Connector::send_http` / `Connector::send_websocket` (and the
+  `AutoResyncConnector` wrappers) return `SendResult<Response>`.
+- `HttpClient::send` / `WebsocketClient::send` return `SendResult`, so the
+  outcome is assigned at the transport boundary where `reqwest`'s
+  `is_connect()` / `is_timeout()` / `is_body()` / `is_decode()` and the IRIS
+  pre-send vs post-send distinction are still available.
+- `EGError::Send(#[from] SendFailure)` preserves the outcome when a failure is
+  converted back into `EGError`, so `?` in `EGResult`-returning code (for
+  example the clock-sync helpers) keeps working and callers can still match
+  `EGError::Send(failure).outcome`.
+- Pre-flight failures (clock, signing, rate limit) are `NotSent`. Once the
+  connection is established, a timeout or body/decode error is `Unknown`. A
+  non-2xx response is `Failed`, a parse failure is `Unknown`, and a post-send
+  `RateLimited` is `Failed` for 429 and `Unknown` for a `Retry-After` header
+  (a 2xx carrying `Retry-After` may have succeeded).
+- The bounded idempotent retry of §3.4 is unchanged in policy, but rate-limit
+  capacity is refunded only for a `NotSent` outcome, never for `Unknown` or
+  `Failed` (the exchange may have consumed the weight).
+
+The other options remain valid follow-ups:
+
+- **Option C2 (tracked handle)** is still the recommended way to observe a late
+  WebSocket response. Option B fixes the classification half of the issue but
+  does not by itself make a dropped response observable.
+- **Option D (reconcile at the exchange)** remains the operational answer for
+  non-idempotent orders: on `Unknown`, query the exchange rather than retry.
+- **Option E (`ETRequest::is_idempotent()`)** continues to drive automatic
+  retries; Option B surfaces the outcome those callers need in order to decide
+  whether to reconcile.
+
+Option A is no longer needed: keeping both the typed failure and a derived
+`request_outcome()` accessor would create two ways to answer the same question.
+
+## 6. Decisions taken / remaining questions
+
+Resolved by the Option B implementation:
+
+1. **Typed vs additive (B vs A).** Option B was chosen. The outcome is part of
+   the send return type (`SendResult<T> = Result<T, SendFailure>`) instead of
+   being derived on demand, and `EGError::Send` preserves it for callers that
+   convert back to `EGError`.
+2. **`HttpParseError` classification.** A response was received but could not be
+   interpreted, so it is `Unknown` (conservative: a 2xx could be a successful
+   order with an unexpected body).
+3. **`RateLimited` classification.** A local pre-flight rejection is `NotSent`;
+   a post-send `RateLimited` is `Failed` for an HTTP 429 and `Unknown` for a
+   `Retry-After` header, because a 2xx carrying `Retry-After` may have
+   succeeded.
+4. **Not-sent wrapping breadth.** Every pre-flight failure (clock, signing,
+   rate limit) is surfaced as `NotSent` in the typed send failure; the return
+   type requires an outcome for every send error, so the distinction is now
+   explicit rather than inferred.
+5. **Versioning.** This is a breaking change: the send return type changes, the
+   `EGError::NotSent` variant is removed in favour of `SendFailure` /
+   `EGError::Send`, and callers matching on the old shape must be updated. It
+   needs a semver-major release note.
+
+Still open:
+
+6. **Late-response mechanism (C1 vs C2 vs C3).** C2 is recommended; the
    decision depends on whether callers prefer callbacks, handles, or id-keyed
    polling.
-3. **`HttpParseError` classification.** A response was received, but we could
-   not interpret it. For a 2xx this could be a successful order with an
-   unexpected body — so should it be `Failed` or `Unknown`? Recommendation:
-   `Unknown` (conservative; the exchange may have acted).
-4. **`RateLimited` classification.** A local pre-flight rejection is not sent; a
-   `Retry-After` on a received response means the request was sent and
-   (typically) processed. Recommendation: split the two, or classify post-send
-   `RateLimited` as `Unknown` and keep pre-flight as not sent.
-5. **`NotSent` wrapping breadth.** Do we wrap *all* pre-flight failures (clock,
-   signing, rate limit) in `NotSent`, or only transport-level ones and let
-   `request_outcome()` classify the rest? Recommendation: produce `NotSent` only
-   at the transport boundary; have `request_outcome()` classify the pre-flight
-   variants as not sent, so existing `match` arms on `ClockNotSynced` etc. keep
-   working.
-6. **Late-response TTL and bounds.** What TTL and maximum number of retained
+7. **Late-response TTL and bounds.** What TTL and maximum number of retained
    late handlers/messages? Must be bounded; recommend a multiple of the request
    timeout with a hard cap.
-7. **Versioning.** Option A is additive; any change that renames `TimedOut` or
-   changes the meaning of existing variants is a breaking change even though the
-   enum is `#[non_exhaustive]`, and needs a release note.
-8. **Idempotency metadata semantics.** `ETRequest::is_idempotent()` defaults to
-   `false`, so an unannotated request is treated as unsafe to retry. Master
-   already uses it to drive automatic retries (#354/#355), but it is not exposed
-   to callers. Should the connector expose it as a field on `UnknownOutcome`
-   (e.g. `UnknownOutcome { retryable: bool }`) or as a separate accessor that
-   takes the original request? Either way the transport outcome and the retry
-   decision should remain independent, so callers keep control of
-   reconciliation.
+8. **Idempotency metadata semantics.** The retry policy still keys off the
+   source variant via `is_retryable`; attaching an `is_idempotent()` hint to
+   `SendFailure` was not part of Option B and can be added later without
+   changing the `outcome` semantics.
 
-## 7. Implementation touch points (for Options A + C2 + E)
+## 7. Implementation touch points (Option B done; C2 outstanding)
 
-Option E's automatic retry is already merged; its remaining "surface the hint"
-step and Options A/C2 are still to do.
+Option B (typed send failure) is implemented. The touch points were:
 
-- `src/error.rs`: add `RequestOutcome`, `UnknownOutcome`, `request_outcome()`
-  and the `ResultOutcomeExt` helper.
-- `src/clients/reqwest.rs`: map `is_connect()` → `NotSent`, 
-  `is_timeout()`/`is_body()`/`is_decode()` → `UnknownOutcome`; map
-  `response.bytes()` failures to `UnknownOutcome`.
-- `src/clients/iris.rs`: keep `NotSent(TimedOut)` for the pre-send timeout;
-  ensure post-send failures are not wrapped as `NotSent`; route the wait-phase
-  `TimedOut` in `send_wait` to `UnknownOutcome`.
-- `src/connector.rs`: `send_wait` returns `UnknownOutcome(TimedOut)` on waiter
-  timeout; consider wrapping the pre-flight clock/rate-limit/signing errors
-  where appropriate; keep the `on_send_error` refund logic refunding on
-  `NotSent` only (as it does today) and not on `UnknownOutcome` (the request may
-  have consumed weight).
-- `src/connector.rs`: `Request::is_idempotent()` is already read before the
-  request is cloned into `try_into_http` / `try_into_websocket` and drives the
-  merged bounded retry loop (`max_retry_attempts`, `is_retryable`); the
-  constructors take `max_retry_attempts: u8` and the send methods require
-  `Clone`. For the remaining Option E work, attach the retry-safety hint to any
-  `UnknownOutcome` returned from the send path (or expose a companion accessor).
-  Keep the outcome classification and the retry decision independent, and do not
-  use `is_idempotent()` to refund rate-limit weight.
+- `src/error.rs`: added `RequestOutcome`, `SendFailure`, `SendResult` and
+  `EGError::Send(#[from] SendFailure)`; removed `EGError::NotSent`.
+- `src/clients/client.rs`: `HttpClient::send` / `WebsocketClient::send` now
+  return `SendResult`.
+- `src/clients/reqwest.rs`: maps `is_connect()` / `is_builder()` to
+  `NotSent`; a timeout or body/decode error after the connection is mapped to
+  `Unknown`; `response.bytes()` failures are `Unknown`.
+- `src/clients/iris.rs`: the pre-send timeout and `ConnectionClosed` /
+  `SendMessage` are `NotSent`; other send errors are `Unknown`.
+- `src/connector.rs`: `send_wait` returns `Unknown` on a waiter timeout;
+  `handle_http_response` returns `Failed` for non-2xx/429 and `Unknown` for
+  parse and `Retry-After` cases; pre-flight failures are `NotSent`;
+  `on_send_failure` refunds rate-limit capacity on `NotSent` only, and
+  `is_retryable` still guards the idempotent retry loop.
+- `src/auto_resync_connector.rs`: the `send_http` / `send_websocket` wrappers
+  propagate `SendResult`.
+- `src/lib.rs`: the prelude re-exports `RequestOutcome`, `SendFailure` and
+  `SendResult`.
+
+Still to do for the second half of the issue:
+
 - `src/websocket_listener.rs`: for C2, add a way for a waiter to survive its
   timeout (e.g. an owner-held registration or an explicit `release`/`wait_late`
   path) instead of `Drop` always removing the handler; keep `Drop` as the final
   cleanup.
-- `src/auto_resync_connector.rs`: propagate the new outcome accessor to the
-  auto-resync wrapper's `send_http` / `send_websocket` (the merged retry loop's
-  `Clone` bound is already forwarded).
-- Tests: unit tests for the `reqwest` error mapping (connect vs timeout vs body),
-  `EGError::request_outcome()` for every variant, and an `is_idempotent()`
-  propagation test that an unknown outcome from an idempotent request carries
-  the retry hint while a non-idempotent one does not, plus a
-  `websocket_listener` test that a late matching message reaches `wait_late`
-  after a timeout rather than being dropped.
+- Tests: the implemented behaviour is covered by unit tests for the `reqwest`
+  connect mapping, `SendFailure` construction/Display/source/`EGError::Send`
+  conversion, and `is_retryable`; a `websocket_listener` test that a late
+  matching message reaches `wait_late` after a timeout is still needed once C2
+  lands.
 
 ## 8. Risks and edge cases
 
@@ -517,16 +544,16 @@ step and Options A/C2 are still to do.
   check `is_connect()` first so a connection that never opened is `NotSent`.
 - **Partial writes.** A write error after part of the request was flushed is
   technically unknown, but `reqwest` does not distinguish it from a
-  before-write error; the conservative mapping (`is_request()` → `NotSent`) is a
-  small risk that should be documented.
+  before-write error; the implementation treats a builder error as `NotSent`
+  and every other non-connect send error as `Unknown`, which is deliberately
+  conservative and should be documented.
 - **Body-read errors after a non-2xx status.** Headers carry the status, so a
   body error on a 4xx could be classified `Failed` rather than `Unknown`; the
   current signature reads headers and body separately, so this is possible but
   not required for the first cut.
-- **Rate-limit refunds.** `Connector::on_send_error` refunds on `NotSent` only,
-  and pre-flight failures refund explicitly before returning. With the new
-  taxonomy this is the desired behaviour: `UnknownOutcome` must **not** refund,
-  because the exchange may have consumed the weight.
+- **Rate-limit refunds.** `Connector::on_send_failure` refunds on the
+  `NotSent` outcome only. `Unknown` and `Failed` must **not** refund, because
+  the exchange may have consumed the weight.
 - **Waiter lifetime for C2.** The handle must own the waiter and keep it
   registered until the caller drops it or the TTL expires; a second `wait()` on
   the same handle must be defined (probably returns an error or is consumed).
@@ -537,17 +564,16 @@ step and Options A/C2 are still to do.
   decision from the send-and-wait design.
 - **Memory growth.** Any late-response retention (C1–C3) must be bounded and
   TTL-reaped; an unbounded list of expired matchers is a denial-of-service risk.
-- **Semver.** Splitting `TimedOut` and wrapping existing errors changes the
-  observable error values even though `EGError` is `#[non_exhaustive]`; call this
-  out in the release notes.
+- **Semver.** Returning `SendResult` from the send methods and replacing
+  `EGError::NotSent` with `SendFailure` / `EGError::Send` changes the observable
+  public surface even though `EGError` is `#[non_exhaustive]`; call this out in
+  the release notes.
 - **Idempotency is not a licence to retry blindly.** `is_idempotent()` describes
   the request's semantics, not the transport, and defaults to `false`; it says
   nothing about whether the exchange has capacity, whether a rate-limit budget
-  was already consumed, or whether a retry will race a late response. Master now
-  applies a bounded automatic retry (`max_retry_attempts`) to idempotent
-  requests via `is_retryable`, with no backoff, so retry should still be treated
-  as a policy input (bound the attempts, add backoff, reconcile non-idempotent
-  requests). Because `is_retryable` currently treats `TimedOut` and `External`
-  (overloaded "unknown outcome" variants) as retryable, an unknown outcome is
-  retried automatically for idempotent requests; once Option A lands, that
-  decision should be expressed per-outcome.
+  was already consumed, or whether a retry will race a late response. The
+  bounded automatic retry (`max_retry_attempts`) still uses the variant-based
+  `is_retryable` filter, with no backoff, so retry should still be treated as a
+  policy input (bound the attempts, add backoff, reconcile non-idempotent
+  requests). With Option B in place the retry policy can be expressed per
+  outcome later without changing the send return type.

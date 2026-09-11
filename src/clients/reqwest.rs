@@ -1,6 +1,6 @@
 use crate::{
     clients::client::HttpClient,
-    error::{EGError, EGResult},
+    error::{EGError, SendFailure, SendResult},
 };
 use async_trait::async_trait;
 use exchange_types::http::{HttpMethod, HttpRequest, HttpResponse};
@@ -45,7 +45,7 @@ impl ReqwestHttpClient {
 
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
-    async fn send(&self, request: HttpRequest, timeout: Duration) -> EGResult<HttpResponse> {
+    async fn send(&self, request: HttpRequest, timeout: Duration) -> SendResult<HttpResponse> {
         let url = self.build_url(request.query.as_deref());
         let mut request_builder = self
             .client
@@ -58,10 +58,15 @@ impl HttpClient for ReqwestHttpClient {
             request_builder = request_builder.body(body);
         }
         let response = request_builder.send().await.map_err(|error| {
-            if error.is_connect() {
-                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+            // A connect error proves the request never reached the wire, so it is
+            // definitely not sent. Everything else (including a timeout after the
+            // connection was established, or a body/decode error) may have reached
+            // the exchange, so the outcome is unknown. `is_connect()` is checked
+            // first because a connect timeout satisfies both predicates.
+            if error.is_connect() || error.is_builder() {
+                SendFailure::not_sent(EGError::External(Box::new(error)))
             } else {
-                EGError::External(Box::new(error))
+                SendFailure::unknown(EGError::External(Box::new(error)))
             }
         })?;
         let status = response.status();
@@ -78,7 +83,7 @@ impl HttpClient for ReqwestHttpClient {
         let body = response
             .bytes()
             .await
-            .map_err(|e| EGError::External(Box::new(e)))?
+            .map_err(|error| SendFailure::unknown(EGError::External(Box::new(error))))?
             .to_vec();
         Ok(HttpResponse {
             status: status.as_u16(),
@@ -94,5 +99,28 @@ impl std::fmt::Debug for ReqwestHttpClient {
             .field("client", &"<reqwest::Client>")
             .field("base_url", &self.base_url)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::RequestOutcome;
+
+    #[tokio::test]
+    async fn a_connection_that_never_opens_is_not_sent() {
+        // Port 1 has no listener, so the request never reaches a wire.
+        let client = ReqwestHttpClient::new("http://127.0.0.1:1");
+        let request = HttpRequest {
+            method: HttpMethod::GET,
+            query: None,
+            headers: Vec::new(),
+            body: None,
+        };
+        let failure = client
+            .send(request, Duration::from_millis(500))
+            .await
+            .expect_err("connection to port 1 should fail");
+        assert_eq!(failure.outcome, RequestOutcome::NotSent);
     }
 }

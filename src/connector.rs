@@ -1,7 +1,7 @@
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
-    error::{EGError, EGResult},
+    error::{EGError, EGResult, RequestOutcome, SendFailure, SendResult},
     functions::BoxTryCreateOnce,
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
@@ -53,6 +53,17 @@ pub struct Connector<Exchange, Client> {
     request_timeout: Duration,
     max_retry_attempts: u8,
     websocket_listener: Option<Arc<WebsocketListener>>,
+}
+
+/// Whether a failed send is worth retrying. This is only consulted for
+/// idempotent requests, so a "not sent" or "unknown" transport failure is safe
+/// to repeat; a definite failure is only retried for transient HTTP statuses.
+fn is_retryable(failure: &SendFailure) -> bool {
+    match failure.source.as_ref() {
+        EGError::TimedOut | EGError::External(_) => true,
+        EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
+        _ => false,
+    }
 }
 
 impl Connector<(), ()> {
@@ -230,22 +241,15 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
-    fn on_send_error<T>(
+    fn on_send_failure(
         &self,
-        error: EGError,
+        failure: SendFailure,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<T> {
-        if matches!(&error, EGError::NotSent(..)) {
+    ) -> SendFailure {
+        if failure.outcome == RequestOutcome::NotSent {
             self.refund(costs);
         }
-        Err(error)
-    }
-    fn is_retryable(error: &EGError) -> bool {
-        match error {
-            EGError::NotSent(_) | EGError::TimedOut | EGError::External(_) => true,
-            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
-            _ => false,
-        }
+        failure
     }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
@@ -278,7 +282,7 @@ where
         let start = Instant::now();
         let http_response = match self.client.send(http_request, self.request_timeout).await {
             Ok(http_response) => http_response,
-            Err(error) => return self.on_send_error(error, costs),
+            Err(failure) => return Err(self.on_send_failure(failure, costs).into()),
         };
         let round_trip_time = start.elapsed();
         let response =
@@ -290,11 +294,13 @@ where
     pub async fn send_http<Response>(
         &self,
         mut request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
-    ) -> EGResult<Response>
+    ) -> SendResult<Response>
     where
         Response: ETHttpResponse,
     {
-        let costs = self.validate_rate_limits(&request)?;
+        let costs = self
+            .validate_rate_limits(&request)
+            .map_err(SendFailure::not_sent)?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -310,54 +316,59 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    self.refund(costs);
-                    return Err(error);
+                    return Err(self.on_send_failure(SendFailure::not_sent(error), costs));
                 }
             };
             request.set_timestamp(timestamp);
             let http_request = match request.clone().try_into_http(&self.signer) {
                 Ok(http_request) => http_request,
                 Err(error) => {
-                    self.refund(costs);
-                    return Err(EGError::External(Box::new(error)));
+                    let failure = SendFailure::not_sent(EGError::External(Box::new(error)));
+                    return Err(self.on_send_failure(failure, costs));
                 }
             };
-            let error = match self.client.send(http_request, self.request_timeout).await {
+            let failure = match self.client.send(http_request, self.request_timeout).await {
                 Ok(http_response) => match self.handle_http_response::<Response>(http_response) {
                     Ok(response) => return Ok(response),
-                    Err(error) => error,
+                    Err(failure) => failure,
                 },
-                Err(error) => error,
+                Err(failure) => failure,
             };
-            if retries_remaining == 0 || !Self::is_retryable(&error) {
-                return self.on_send_error(error, costs);
+            if retries_remaining == 0 || !is_retryable(&failure) {
+                return Err(self.on_send_failure(failure, costs));
             }
             retries_remaining -= 1;
-            if !matches!(error, EGError::NotSent(..)) {
-                self.rate_limiters.did_acquire(&costs)?;
+            if failure.outcome != RequestOutcome::NotSent {
+                self.rate_limiters
+                    .did_acquire(&costs)
+                    .map_err(SendFailure::unknown)?;
             }
         }
     }
-    fn handle_http_response<Response>(&self, http_response: HttpResponse) -> EGResult<Response>
+    fn handle_http_response<Response>(&self, http_response: HttpResponse) -> SendResult<Response>
     where
         Response: ETHttpResponse,
     {
         if let Some(retry_after) = RetryAfter::from_headers(&http_response.headers) {
             let _ = self.rate_limiters.set_retry_after(retry_after);
-            return Err(EGError::RateLimited);
+            // The exchange responded but is throttling us. The request reached the
+            // exchange, so it cannot be reported as not sent; a 2xx carrying a
+            // Retry-After may even have succeeded, so the outcome is unknown.
+            return Err(SendFailure::unknown(EGError::RateLimited));
         }
         if http_response.status == 429 {
-            return Err(EGError::RateLimited);
+            return Err(SendFailure::failed(EGError::RateLimited));
         }
         if !(200..300).contains(&http_response.status) {
-            return Err(EGError::HttpError {
+            return Err(SendFailure::failed(EGError::HttpError {
                 status: http_response.status,
                 body: http_response.body,
-            });
+            }));
         }
         let response = Response::try_from_http(http_response)
-            .map_err(|source| EGError::HttpParseError { source })?;
-        self.set_rate_limits(&response)?;
+            .map_err(|source| SendFailure::unknown(EGError::HttpParseError { source }))?;
+        self.set_rate_limits(&response)
+            .map_err(SendFailure::unknown)?;
         Ok(response)
     }
 }
@@ -389,13 +400,11 @@ where
                 }
             };
         let start = Instant::now();
-        let response: Exchange::ServerTimeResponseWebsocket = match self
-            .send_wait(websocket_request, costs.clone(), response_matcher)
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => return self.on_send_error(error, costs),
-        };
+        let response: Exchange::ServerTimeResponseWebsocket =
+            match self.send_wait(websocket_request, response_matcher).await {
+                Ok(response) => response,
+                Err(failure) => return Err(self.on_send_failure(failure, costs).into()),
+            };
         let round_trip_time = start.elapsed();
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
@@ -404,11 +413,13 @@ where
     pub async fn send_websocket<Response>(
         &self,
         mut request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
-    ) -> EGResult<Response>
+    ) -> SendResult<Response>
     where
         Response: ETWebsocketResponse,
     {
-        let costs = self.validate_rate_limits(&request)?;
+        let costs = self
+            .validate_rate_limits(&request)
+            .map_err(SendFailure::not_sent)?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -424,8 +435,7 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    self.refund(costs);
-                    return Err(error);
+                    return Err(self.on_send_failure(SendFailure::not_sent(error), costs));
                 }
             };
             request.set_timestamp(timestamp);
@@ -434,48 +444,40 @@ where
                 match request.clone().try_into_websocket(&self.signer, id) {
                     Ok(request) => request,
                     Err(error) => {
-                        self.refund(costs);
-                        return Err(EGError::External(Box::new(error)));
+                        let failure = SendFailure::not_sent(EGError::External(Box::new(error)));
+                        return Err(self.on_send_failure(failure, costs));
                     }
                 };
-            let error = match self
-                .send_wait(websocket_request, costs.clone(), response_matcher)
-                .await
-            {
+            let failure = match self.send_wait(websocket_request, response_matcher).await {
                 Ok(response) => return Ok(response),
-                Err(error) => error,
+                Err(failure) => failure,
             };
-            if retries_remaining == 0 || !Self::is_retryable(&error) {
-                return self.on_send_error(error, costs);
+            if retries_remaining == 0 || !is_retryable(&failure) {
+                return Err(self.on_send_failure(failure, costs));
             }
             retries_remaining -= 1;
-            if !matches!(error, EGError::NotSent(..)) {
-                self.rate_limiters.did_acquire(&costs)?;
+            if failure.outcome != RequestOutcome::NotSent {
+                self.rate_limiters
+                    .did_acquire(&costs)
+                    .map_err(SendFailure::unknown)?;
             }
         }
     }
     async fn send_wait<Response>(
         &self,
         message: String,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
         response_matcher: Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>,
-    ) -> EGResult<Response>
+    ) -> SendResult<Response>
     where
         Response: ETWebsocketResponse,
     {
         let listener = match self.websocket_listener.as_ref() {
             Some(listener) => listener,
-            None => {
-                self.refund(costs);
-                return Err(EGError::WebsocketListenerMissing);
-            }
+            None => return Err(SendFailure::not_sent(EGError::WebsocketListenerMissing)),
         };
         let waiter = match listener.waiter_for_filtered_response(response_matcher) {
             Ok(waiter) => waiter,
-            Err(error) => {
-                self.refund(costs);
-                return Err(error);
-            }
+            Err(error) => return Err(SendFailure::not_sent(error)),
         };
         let start = Instant::now();
         self.client.send(message, self.request_timeout).await?;
@@ -483,16 +485,17 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(result),
+            Poll::Ready(result) => Poll::Ready(result.map_err(SendFailure::unknown)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Ready(()) => Poll::Ready(Err(SendFailure::unknown(EGError::TimedOut))),
                 Poll::Pending => Poll::Pending,
             },
         })
         .await?;
         let response = Response::try_from_websocket(response_value)
-            .map_err(|source| EGError::WebsocketParseError { source })?;
-        self.set_rate_limits(&response)?;
+            .map_err(|source| SendFailure::unknown(EGError::WebsocketParseError { source }))?;
+        self.set_rate_limits(&response)
+            .map_err(SendFailure::unknown)?;
         Ok(response)
     }
 }
@@ -505,5 +508,68 @@ impl<Exchange, Client> std::fmt::Debug for Connector<Exchange, Client> {
             .field("signer", &"<signer>")
             .field("client", &"<client>")
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failure(outcome: RequestOutcome, source: EGError) -> SendFailure {
+        SendFailure::new(outcome, source)
+    }
+
+    fn external() -> EGError {
+        EGError::External(Box::new(std::io::Error::other("connection reset")))
+    }
+
+    #[test]
+    fn retries_transport_failures_that_may_be_safe_to_repeat() {
+        assert!(is_retryable(&failure(
+            RequestOutcome::NotSent,
+            EGError::TimedOut
+        )));
+        assert!(is_retryable(&failure(RequestOutcome::Unknown, external())));
+    }
+
+    #[test]
+    fn retries_only_transient_http_statuses() {
+        assert!(is_retryable(&failure(
+            RequestOutcome::Failed,
+            EGError::HttpError {
+                status: 500,
+                body: Vec::new(),
+            },
+        )));
+        assert!(is_retryable(&failure(
+            RequestOutcome::Failed,
+            EGError::HttpError {
+                status: 408,
+                body: Vec::new(),
+            },
+        )));
+        assert!(!is_retryable(&failure(
+            RequestOutcome::Failed,
+            EGError::HttpError {
+                status: 400,
+                body: Vec::new(),
+            },
+        )));
+    }
+
+    #[test]
+    fn does_not_retry_rate_limit_or_internal_failures() {
+        assert!(!is_retryable(&failure(
+            RequestOutcome::Unknown,
+            EGError::RateLimited
+        )));
+        assert!(!is_retryable(&failure(
+            RequestOutcome::Unknown,
+            EGError::MutexPoisoned
+        )));
+        assert!(!is_retryable(&failure(
+            RequestOutcome::NotSent,
+            EGError::ClockNotSynced
+        )));
     }
 }

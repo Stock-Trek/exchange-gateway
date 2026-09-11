@@ -1,6 +1,6 @@
 use crate::{
     clients::client::WebsocketClient,
-    error::{EGError, EGResult},
+    error::{EGError, EGResult, SendFailure, SendResult},
     panic_guard::PanicUtils,
     websocket_listener::WebsocketListener,
 };
@@ -27,7 +27,7 @@ impl IrisWebsocketClient {
         );
         Self { client }
     }
-    async fn send_message_with_delay<D>(&self, message: String, delay: D) -> EGResult<()>
+    async fn send_message_with_delay<D>(&self, message: String, delay: D) -> SendResult<()>
     where
         D: Future<Output = ()> + Send + 'static,
     {
@@ -36,18 +36,18 @@ impl IrisWebsocketClient {
         poll_fn(move |cx| match send.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.map_err(Self::map_send_error)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::NotSent(Box::new(EGError::TimedOut)))),
+                Poll::Ready(()) => Poll::Ready(Err(SendFailure::not_sent(EGError::TimedOut))),
                 Poll::Pending => Poll::Pending,
             },
         })
         .await
     }
-    fn map_send_error(error: ConnectionError) -> EGError {
+    fn map_send_error(error: ConnectionError) -> SendFailure {
         match error {
             ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => {
-                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+                SendFailure::not_sent(EGError::External(Box::new(error)))
             }
-            error => EGError::External(Box::new(error)),
+            error => SendFailure::unknown(EGError::External(Box::new(error))),
         }
     }
 }
@@ -63,7 +63,7 @@ impl WebsocketClient for IrisWebsocketClient {
     fn is_connected(&self) -> bool {
         self.client.is_connected()
     }
-    async fn send(&self, message: String, timeout: Duration) -> EGResult<()> {
+    async fn send(&self, message: String, timeout: Duration) -> SendResult<()> {
         self.send_message_with_delay(message, Delay::new(timeout))
             .await
     }

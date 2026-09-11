@@ -1,7 +1,7 @@
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     connector::Connector,
-    error::{EGError, EGResult},
+    error::{EGError, EGResult, SendResult},
 };
 use exchange_types::{
     exchange::ETExchange,
@@ -210,7 +210,7 @@ where
     pub async fn send_http<Response>(
         &self,
         request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
-    ) -> EGResult<Response>
+    ) -> SendResult<Response>
     where
         Response: ETHttpResponse,
     {
@@ -251,7 +251,7 @@ where
     pub async fn send_websocket<Response>(
         &self,
         request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
-    ) -> EGResult<Response>
+    ) -> SendResult<Response>
     where
         Response: ETWebsocketResponse,
     {
