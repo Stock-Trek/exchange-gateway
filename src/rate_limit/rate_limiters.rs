@@ -47,11 +47,11 @@ impl RateLimiters {
             .map_err(|_| EGError::MutexPoisoned)?;
         let mut acquired = Vec::with_capacity(costs.len());
         for &(restriction, cost) in costs {
-            let result = match self.limiters.get(&restriction) {
+            let did_acquire_result = match self.limiters.get(&restriction) {
                 Some(limiter) => limiter.did_acquire(cost),
                 None => Ok(()),
             };
-            match result {
+            match did_acquire_result {
                 Ok(()) => acquired.push((restriction, cost)),
                 Err(error) => {
                     self.refund_acquired(&acquired);

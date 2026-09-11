@@ -28,12 +28,12 @@ impl RateLimiter {
             .rate_limiters
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
-        let exceeded_capacity = limiters_guard
+        let lowest_exceeded_limit = limiters_guard
             .iter()
             .filter(|limiter| limiter.cost_exceeds_capacity(cost))
             .min_by_key(|limiter| limiter.capacity_per_interval())
             .map(|limiter| (limiter.capacity_per_interval(), limiter.interval_nanos()));
-        if let Some((capacity, interval_nanos)) = exceeded_capacity {
+        if let Some((capacity, interval_nanos)) = lowest_exceeded_limit {
             return Err(EGError::RequestExceedsRateLimit {
                 cost,
                 capacity,
