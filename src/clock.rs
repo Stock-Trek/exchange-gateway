@@ -40,7 +40,7 @@ impl Clock {
         Ok(last_sync.is_some())
     }
     pub fn sync(&self, server_time: Milliseconds, round_trip_duration: Duration) -> EGResult<()> {
-        let system_time = Self::system_time();
+        let system_time = Self::system_time()?;
         let round_trip_time = Milliseconds(round_trip_duration.as_millis() as i64);
         let system_time_estimate = system_time - (round_trip_time / 2);
         let offset_estimate = system_time_estimate - server_time;
@@ -54,17 +54,17 @@ impl Clock {
         if !self.is_synced()? {
             return Err(EGError::ClockNotSynced);
         }
-        Ok(self.server_time_estimate_unchecked())
+        self.server_time_estimate_unchecked()
     }
-    pub fn server_time_estimate_unchecked(&self) -> Milliseconds {
-        Self::system_time() - self.server_offset()
+    pub fn server_time_estimate_unchecked(&self) -> EGResult<Milliseconds> {
+        Ok(Self::system_time()? - self.server_offset())
     }
 
-    fn system_time() -> Milliseconds {
+    fn system_time() -> EGResult<Milliseconds> {
         let system_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("SystemTime is before UNIX_EPOCH");
-        Milliseconds(system_time.as_millis() as i64)
+            .map_err(|_| EGError::SystemTimeBeforeUnixEpoch)?;
+        Ok(Milliseconds(system_time.as_millis() as i64))
     }
     fn server_offset(&self) -> Milliseconds {
         Milliseconds(self.server_offset_millis.load(Ordering::Relaxed))

@@ -68,7 +68,7 @@ impl Connector<(), ()> {
             .urls()
             .env_var_or_default(exchange.name(), Protocol::Http, trading_mode);
         let client = client_creator(url)?;
-        let rate_limiters = Self::rate_limiters(exchange.default_capacity());
+        let rate_limiters = Self::rate_limiters(exchange.default_capacity())?;
         Ok(Connector {
             exchange,
             rate_limiters,
@@ -116,7 +116,7 @@ impl Connector<(), ()> {
                 .urls()
                 .env_var_or_default(exchange.name(), Protocol::Websocket, trading_mode);
         let client = client_creator((url, websocket_listener.clone()))?;
-        let rate_limiters = Self::rate_limiters(exchange.default_capacity());
+        let rate_limiters = Self::rate_limiters(exchange.default_capacity())?;
         Ok(Connector {
             exchange,
             rate_limiters,
@@ -158,7 +158,7 @@ impl Connector<(), ()> {
             request_timeout,
         )
     }
-    fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> RateLimiters {
+    fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> EGResult<RateLimiters> {
         let mut limiter_states = HashMap::new();
         for (rate_limit, capacity) in default_capacity {
             let RateLimit {
@@ -166,14 +166,14 @@ impl Connector<(), ()> {
                 interval_nanos,
             } = rate_limit;
             let states = limiter_states.entry(restriction).or_insert_with(Vec::new);
-            let state = RateLimiterState::new(interval_nanos, capacity);
+            let state = RateLimiterState::new(interval_nanos, capacity)?;
             states.push(state);
         }
         let limiters = limiter_states
             .iter()
             .map(|(restriction, states)| (*restriction, RateLimiter::new(states)))
             .collect::<HashMap<RateLimitRestriction, RateLimiter>>();
-        RateLimiters::new(limiters)
+        Ok(RateLimiters::new(limiters))
     }
 }
 
@@ -287,7 +287,7 @@ where
         let timestamp = if request.is_signed() {
             self.clock.server_time_estimate()?
         } else {
-            self.clock.server_time_estimate_unchecked()
+            self.clock.server_time_estimate_unchecked()?
         };
         request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
@@ -380,7 +380,7 @@ where
         let timestamp = if request.is_signed() {
             self.clock.server_time_estimate()?
         } else {
-            self.clock.server_time_estimate_unchecked()
+            self.clock.server_time_estimate_unchecked()?
         };
         request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
@@ -408,7 +408,7 @@ where
         let waiter = self
             .websocket_listener
             .as_ref()
-            .expect("Error getting websocket listener")
+            .ok_or(EGError::WebsocketListenerMissing)?
             .waiter_for_filtered_response(response_matcher)?;
         let start = Instant::now();
         match self.client.send(message, self.request_timeout).await {

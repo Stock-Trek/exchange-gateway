@@ -27,6 +27,10 @@ pub enum EGError {
         #[source]
         source: ETError,
     },
+    #[error("Rate limiter capacity must be greater than zero")]
+    InvalidRateLimitCapacity,
+    #[error("Rate limiter interval must be greater than zero")]
+    InvalidRateLimitInterval,
     #[cfg(feature = "auto-resync")]
     #[error("Clock sync frequency must be at least 1 minute")]
     InvalidSyncFrequency,
@@ -40,6 +44,10 @@ pub enum EGError {
     NotSent(Box<EGError>),
     #[error("Rate limit exceeded")]
     RateLimited,
+    #[error("The system time is before the UNIX epoch")]
+    SystemTimeBeforeUnixEpoch,
     #[error("Request timed out waiting for a response")]
     TimedOut,
+    #[error("Connector was not initialised with a websocket listener")]
+    WebsocketListenerMissing,
 }
