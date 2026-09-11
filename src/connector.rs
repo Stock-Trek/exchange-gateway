@@ -407,9 +407,13 @@ where
                 }
             };
         let start = Instant::now();
-        let response: Exchange::ServerTimeResponseWebsocket = self
-            .send_wait(websocket_request, costs, response_matcher)
-            .await?;
+        let response: Exchange::ServerTimeResponseWebsocket = match self
+            .send_wait(websocket_request, costs.clone(), response_matcher)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return self.on_send_error(error, costs),
+        };
         let round_trip_time = start.elapsed();
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
@@ -439,13 +443,26 @@ where
                     return Err(EGError::External(Box::new(error)));
                 }
             };
+        self.send_wait_with_retries(websocket_request, costs, response_matcher, is_idempotent)
+            .await
+    }
+    async fn send_wait_with_retries<Response>(
+        &self,
+        websocket_request: String,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
+        response_matcher: Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>,
+        is_idempotent: bool,
+    ) -> EGResult<Response>
+    where
+        Response: ETWebsocketResponse,
+    {
         let mut retries_remaining = if is_idempotent {
             self.max_retry_attempts
         } else {
             0
         };
         loop {
-            match self
+            let error = match self
                 .send_wait(
                     websocket_request.clone(),
                     costs.clone(),
@@ -454,13 +471,14 @@ where
                 .await
             {
                 Ok(response) => return Ok(response),
-                Err(error) => {
-                    if retries_remaining == 0 || !Self::is_retryable(&error) {
-                        return Err(error);
-                    }
-                    retries_remaining -= 1;
-                    self.rate_limiters.did_acquire(&costs)?;
-                }
+                Err(error) => error,
+            };
+            if retries_remaining == 0 || !Self::is_retryable(&error) {
+                return self.on_send_error(error, costs);
+            }
+            retries_remaining -= 1;
+            if !matches!(error, EGError::NotSent(..)) {
+                self.rate_limiters.did_acquire(&costs)?;
             }
         }
     }
@@ -488,9 +506,7 @@ where
             }
         };
         let start = Instant::now();
-        if let Err(error) = self.client.send(message, self.request_timeout).await {
-            return self.on_send_error(error, costs);
-        }
+        self.client.send(message, self.request_timeout).await?;
         let remaining = self.request_timeout.saturating_sub(start.elapsed());
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
