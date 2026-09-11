@@ -120,4 +120,14 @@ impl EGError {
             source: Box::new(EGError::external(source)),
         }
     }
+    pub(crate) fn is_retryable(&self) -> bool {
+        let EGError::Send { source, .. } = self else {
+            return false;
+        };
+        match source.as_ref() {
+            EGError::TimedOut | EGError::External(_) => true,
+            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
+            _ => false,
+        }
+    }
 }

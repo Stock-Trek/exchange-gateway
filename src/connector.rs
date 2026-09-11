@@ -230,16 +230,6 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
-    fn is_retryable(error: &EGError) -> bool {
-        let EGError::Send { source, .. } = error else {
-            return false;
-        };
-        match source.as_ref() {
-            EGError::TimedOut | EGError::External(_) => true,
-            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
-            _ => false,
-        }
-    }
     fn send_failure(error: &EGError) -> Option<SendFailure> {
         match error {
             EGError::Send {
@@ -340,7 +330,7 @@ where
                 },
                 Err(error) => error,
             };
-            if retries_remaining == 0 || !Self::is_retryable(&error) {
+            if retries_remaining == 0 || !error.is_retryable() {
                 return Err(self.on_send_failure(error, costs));
             }
             retries_remaining -= 1;
@@ -457,7 +447,7 @@ where
                 Ok(response) => return Ok(response),
                 Err(error) => error,
             };
-            if retries_remaining == 0 || !Self::is_retryable(&error) {
+            if retries_remaining == 0 || !error.is_retryable() {
                 return Err(self.on_send_failure(error, costs));
             }
             retries_remaining -= 1;
