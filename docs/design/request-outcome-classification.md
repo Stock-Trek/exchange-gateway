@@ -83,7 +83,8 @@ Two important observations frame the whole design:
 | `ReqwestHttpClient::send`, other error incl. timeout | `External` | **unknown** (classification bug) |
 | `response.bytes()` fails after headers | `External` | **unknown** (server responded) |
 | `handle_retry_after` sees `Retry-After` | `RateLimited` | sent; exchange throttled |
-| `validate_http_status` non-2xx | `HttpError { status, body }` | failed (server responded) |
+| `validate_http_status` sees 429 | `RateLimited` | failed (server responded; throttled) |
+| `validate_http_status` other non-2xx | `HttpError { status, body }` | failed (server responded) |
 | `parse_http_response` fails | `HttpParseError { source }` | response received; semantics unclear |
 | `set_rate_limits` sees `Retry-After` | `RateLimited` | sent; exchange throttled |
 | success | `Ok(response)` | succeeded |
@@ -104,13 +105,13 @@ connect error into `External`.
 | `IrisWebsocketClient::send`, `ConnectionClosed` / `SendMessage` | `NotSent(External)` | not sent (assumed) |
 | `IrisWebsocketClient::send`, other error | `External` | unknown (assumed) |
 | `send_wait` waiter times out after a successful send | `TimedOut` | **unknown** (may have executed) |
-| `Response::try_from_websocket` fails | `External` | response received; semantics unclear |
+| `Response::try_from_websocket` fails | `WebsocketParseError { source }` | response received; semantics unclear |
 | `set_rate_limits` sees `Retry-After` | `RateLimited` | sent; throttled |
 | success | `Ok(response)` | succeeded |
 
-The third-to-last row is the second defect: `TimedOut` here means "sent with
-unknown outcome", but it shares a variant with the send-phase timeout that means
-"definitely not sent".
+The `send_wait` waiter-timeout row is the second defect: `TimedOut` here means
+"sent with unknown outcome", but it shares a variant with the send-phase timeout
+that means "definitely not sent".
 
 ### 3.3 Late responses
 
@@ -169,12 +170,13 @@ and make the classification correct at the point each error is created.
    the cause inside the wrapper.
 
 3. Classify the variants that are genuinely ambiguous (`RateLimited`,
-   `External`, `BadResponse`, `HttpParseError`) explicitly and document them.
-   Where a variant is overloaded, split it:
+   `External`, `HttpParseError`, `WebsocketParseError`) explicitly and document
+   them. Where a variant is overloaded, split it:
    - `TimedOut` becomes `NotSent(TimedOut)` for the send phase and
      `UnknownOutcome(TimedOut)` for the wait phase;
    - `RateLimited` produced by a local pre-flight check is not sent, while
-     `RateLimited` produced from a response header is sent (arguably unknown).
+     `RateLimited` produced from a response (an HTTP 429 or a `Retry-After`
+     header) is sent (arguably unknown).
 
 4. Map `reqwest` errors at the boundary in `src/clients/reqwest.rs`:
 
@@ -382,8 +384,9 @@ misclassifying errors in practice.
   `TimedOut` in `send_wait` to `UnknownOutcome`.
 - `src/connector.rs`: `send_wait` returns `UnknownOutcome(TimedOut)` on waiter
   timeout; consider wrapping the pre-flight clock/rate-limit/signing errors
-  where appropriate; extend the `on_error` refund logic so it still refunds on
-  `NotSent` and not on `UnknownOutcome` (the request may have consumed weight).
+  where appropriate; keep the `on_send_error` refund logic refunding on
+  `NotSent` only (as it does today) and not on `UnknownOutcome` (the request may
+  have consumed weight).
 - `src/websocket_listener.rs`: for C2, add a way for a waiter to survive its
   timeout (e.g. an owner-held registration or an explicit `release`/`wait_late`
   path) instead of `Drop` always removing the handler; keep `Drop` as the final
@@ -407,8 +410,9 @@ misclassifying errors in practice.
   body error on a 4xx could be classified `Failed` rather than `Unknown`; the
   current signature reads headers and body separately, so this is possible but
   not required for the first cut.
-- **Rate-limit refunds.** `Connector::on_error` refunds on `RateLimited` and
-  `NotSent`. With the new taxonomy, `UnknownOutcome` must **not** refund,
+- **Rate-limit refunds.** `Connector::on_send_error` refunds on `NotSent` only,
+  and pre-flight failures refund explicitly before returning. With the new
+  taxonomy this is the desired behaviour: `UnknownOutcome` must **not** refund,
   because the exchange may have consumed the weight.
 - **Waiter lifetime for C2.** The handle must own the waiter and keep it
   registered until the caller drops it or the TTL expires; a second `wait()` on
