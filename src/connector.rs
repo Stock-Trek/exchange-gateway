@@ -6,7 +6,8 @@ use crate::{
     error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
     rate_limit::{
-        rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState, rate_limiters::RateLimiters,
+        rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
+        rate_limiters::RateLimiters,
     },
     retry_after::RetryAfter,
     websocket_listener::WebsocketListener,

@@ -40,10 +40,7 @@ impl RateLimiters {
         }
         Ok(capacities)
     }
-    pub fn did_acquire(
-        &self,
-        costs: &[(RateLimitRestriction, UsageCount)],
-    ) -> EGResult<()> {
+    pub fn did_acquire(&self, costs: &[(RateLimitRestriction, UsageCount)]) -> EGResult<()> {
         let _guard = self
             .acquisition_lock
             .lock()
