@@ -9,6 +9,7 @@ use crate::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
         rate_limiters::RateLimiters,
     },
+    retry_after::RetryAfter,
     websocket_listener::WebsocketListener,
 };
 use exchange_types::{
@@ -270,6 +271,7 @@ where
             Err(error) => return self.on_error(error, costs),
         };
         let round_trip_time = start.elapsed();
+        self.handle_retry_after(&response)?;
         let response = self.validate_http_status(response)?;
         let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
@@ -302,6 +304,7 @@ where
             Ok(response) => response,
             Err(error) => return self.on_error(error, costs),
         };
+        self.handle_retry_after(&response)?;
         let response = self.validate_http_status(response)?;
         let response = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
@@ -313,20 +316,16 @@ where
     {
         Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source })
     }
+    fn handle_retry_after(&self, response: &HttpResponse) -> EGResult<()> {
+        if let Some(retry_after) = RetryAfter::from_headers(&response.headers) {
+            let _ = self.rate_limiters.set_retry_after(retry_after);
+            return Err(EGError::RateLimited);
+        }
+        Ok(())
+    }
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
             return Ok(response);
-        }
-        if let Some(retry_after_seconds) = response
-            .headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("Retry-After"))
-            .and_then(|(_, value)| value.parse::<u64>().ok())
-        {
-            let _ = self
-                .rate_limiters
-                .set_retry_after(Duration::from_secs(retry_after_seconds));
-            return Err(EGError::RateLimited);
         }
         Err(EGError::HttpError {
             status: response.status,
