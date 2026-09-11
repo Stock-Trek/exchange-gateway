@@ -349,9 +349,9 @@ where
         let (websocket_request, response_matcher) =
             match server_time_request.try_into_websocket(&self.signer, id) {
                 Ok(request) => request,
-                Err(_) => {
+                Err(error) => {
                     self.refund(costs);
-                    return Err(EGError::BadResponse);
+                    return Err(EGError::External(Box::new(error)));
                 }
             };
         let start = Instant::now();
