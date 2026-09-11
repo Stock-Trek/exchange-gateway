@@ -221,12 +221,12 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
-    fn on_error<T>(
+    fn on_send_error<T>(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<T> {
-        if matches!(&error, EGError::RateLimited | EGError::NotSent(..)) {
+        if matches!(&error, EGError::NotSent(..)) {
             self.refund(costs);
         }
         Err(error)
@@ -262,7 +262,7 @@ where
         let start = Instant::now();
         let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
-            Err(error) => return self.on_error(error, costs),
+            Err(error) => return self.on_send_error(error, costs),
         };
         let round_trip_time = start.elapsed();
         self.handle_retry_after(&response)?;
@@ -296,7 +296,7 @@ where
         };
         let response = match self.client.send(http_request, self.request_timeout).await {
             Ok(response) => response,
-            Err(error) => return self.on_error(error, costs),
+            Err(error) => return self.on_send_error(error, costs),
         };
         self.handle_retry_after(&response)?;
         let response = self.validate_http_status(response)?;
@@ -320,6 +320,9 @@ where
     fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
         if (200..300).contains(&response.status) {
             return Ok(response);
+        }
+        if response.status == 429 {
+            return Err(EGError::RateLimited);
         }
         Err(EGError::HttpError {
             status: response.status,
@@ -398,16 +401,24 @@ where
     where
         Response: ETWebsocketResponse,
     {
-        let waiter = self
-            .websocket_listener
-            .as_ref()
-            .ok_or(EGError::WebsocketListenerMissing)?
-            .waiter_for_filtered_response(response_matcher)?;
-        let start = Instant::now();
-        match self.client.send(message, self.request_timeout).await {
-            Ok(response) => response,
-            Err(error) => return self.on_error(error, costs),
+        let listener = match self.websocket_listener.as_ref() {
+            Some(listener) => listener,
+            None => {
+                self.refund(costs);
+                return Err(EGError::WebsocketListenerMissing);
+            }
         };
+        let waiter = match listener.waiter_for_filtered_response(response_matcher) {
+            Ok(waiter) => waiter,
+            Err(error) => {
+                self.refund(costs);
+                return Err(error);
+            }
+        };
+        let start = Instant::now();
+        if let Err(error) = self.client.send(message, self.request_timeout).await {
+            return self.on_send_error(error, costs);
+        }
         let remaining = self.request_timeout.saturating_sub(start.elapsed());
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
@@ -420,7 +431,7 @@ where
         })
         .await?;
         let response = Response::try_from_websocket(response_value)
-            .map_err(|e| EGError::External(Box::new(e)))?;
+            .map_err(|source| EGError::WebsocketParseError { source })?;
         self.set_rate_limits(&response)?;
         Ok(response)
     }

@@ -9,13 +9,11 @@ pub type EGResult<T> = Result<T, EGError>;
 #[non_exhaustive]
 pub enum EGError {
     #[cfg(feature = "auto-resync")]
-    #[error("Auto resync clock thread panicked")]
+    #[error("Auto resync clock task panicked")]
     AutoResyncClockPanicked,
     #[cfg(feature = "auto-resync")]
     #[error("Auto resync clock task is no longer running")]
     AutoResyncClockStopped,
-    #[error("Received unrecognised response")]
-    BadResponse,
     #[error("A user callback panicked: {0}")]
     CallbackPanicked(String),
     #[error(
@@ -31,6 +29,11 @@ pub enum EGError {
     HttpError { status: u16, body: Vec<u8> },
     #[error("Failed to parse HTTP response: {source}")]
     HttpParseError {
+        #[source]
+        source: ETError,
+    },
+    #[error("Failed to parse websocket response: {source}")]
+    WebsocketParseError {
         #[source]
         source: ETError,
     },
