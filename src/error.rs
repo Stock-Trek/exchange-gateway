@@ -4,7 +4,6 @@ use exchange_types::{
 };
 
 pub type EGResult<T> = Result<T, EGError>;
-pub type SendResult<T> = Result<T, SendFailure>;
 
 /// What happened to a request that was handed to a send path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

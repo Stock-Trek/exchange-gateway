@@ -49,10 +49,11 @@ the behaviour before the change and is retained as the rationale.
 
 > **Update — Option B implemented.** Following the issue discussion, Option B
 > (`SendFailure { outcome, source }`) was chosen and implemented. `send_http` /
-> `send_websocket` now return `SendResult<Response>` and the transport assigns
-> the outcome where the information is still available. The option sections
-> below are kept for context; §5–§7 record the decisions taken and what
-> remains.
+> `send_websocket` keep the crate's single `EGResult<Response>` return type and
+> carry the outcome inside `EGError::Send(SendFailure)`, which the transport
+> assigns where the information is still available. There is no separate
+> `SendResult` alias. The option sections below are kept for context; §5–§7
+> record the decisions taken and what remains.
 
 ## 2. Desired outcome taxonomy
 
@@ -289,9 +290,10 @@ pub enum EGError {
 
 Every `send_http` / `send_websocket` error is funnelled through constructors
 that require an outcome; non-send operations (`connect`, clock sync, rate-limit
-introspection) keep the existing variants. A variant of this option changes the
-public send signature to return `Result<Response, SendFailure>` instead of
-`EGResult<Response>`, keeping the two error types separate.
+introspection) keep the existing variants. The implemented form keeps the
+`EGResult<Response>` return type and carries `SendFailure` inside
+`EGError::Send` (see §5) rather than introducing a separate error type for
+sends.
 
 **Pros:** compiler-enforced and impossible for a caller to misread; no reliance
 on a derived mapping; the source error is preserved.
@@ -428,21 +430,29 @@ pub struct SendFailure {
     pub outcome: RequestOutcome, // Failed | NotSent | Unknown
     pub source: Box<EGError>,
 }
-pub type SendResult<T> = Result<T, SendFailure>;
+
+pub enum EGError {
+    // ...
+    #[error(transparent)]
+    Send(#[from] SendFailure),
+}
 ```
 
-What was implemented:
+There is deliberately no separate `SendResult` type: send paths return the
+crate's normal `EGResult`, and the outcome is reached through
+`EGError::Send`. What was implemented:
 
 - `Connector::send_http` / `Connector::send_websocket` (and the
-  `AutoResyncConnector` wrappers) return `SendResult<Response>`.
-- `HttpClient::send` / `WebsocketClient::send` return `SendResult`, so the
+  `AutoResyncConnector` wrappers) return `EGResult<Response>`, with the outcome
+  inside `EGError::Send`.
+- `HttpClient::send` / `WebsocketClient::send` return `EGResult`, so the
   outcome is assigned at the transport boundary where `reqwest`'s
   `is_connect()` / `is_timeout()` / `is_body()` / `is_decode()` and the IRIS
   pre-send vs post-send distinction are still available.
-- `EGError::Send(#[from] SendFailure)` preserves the outcome when a failure is
-  converted back into `EGError`, so `?` in `EGResult`-returning code (for
-  example the clock-sync helpers) keeps working and callers can still match
-  `EGError::Send(failure).outcome`.
+- `EGError::Send(#[from] SendFailure)` makes the outcome structural: a send
+  failure cannot be observed without the classification, while `?` in
+  `EGResult`-returning code (for example the clock-sync helpers) keeps working.
+  Callers match `EGError::Send(failure)` and read `failure.outcome`.
 - Pre-flight failures (clock, signing, rate limit) are `NotSent`. Once the
   connection is established, a timeout or body/decode error is `Unknown`. A
   non-2xx response is `Failed`, a parse failure is `Unknown`, and a post-send
@@ -470,10 +480,11 @@ Option A is no longer needed: keeping both the typed failure and a derived
 
 Resolved by the Option B implementation:
 
-1. **Typed vs additive (B vs A).** Option B was chosen. The outcome is part of
-   the send return type (`SendResult<T> = Result<T, SendFailure>`) instead of
-   being derived on demand, and `EGError::Send` preserves it for callers that
-   convert back to `EGError`.
+1. **Typed vs additive (B vs A).** Option B was chosen, but the send methods
+   keep returning `EGResult` rather than introducing a `SendResult` alias. The
+   outcome is carried structurally in `EGError::Send(SendFailure)` instead of
+   being derived on demand, so a send failure cannot be observed without its
+   classification.
 2. **`HttpParseError` classification.** A response was received but could not be
    interpreted, so it is `Unknown` (conservative: a 2xx could be a successful
    order with an unexpected body).
@@ -485,10 +496,10 @@ Resolved by the Option B implementation:
    rate limit) is surfaced as `NotSent` in the typed send failure; the return
    type requires an outcome for every send error, so the distinction is now
    explicit rather than inferred.
-5. **Versioning.** This is a breaking change: the send return type changes, the
-   `EGError::NotSent` variant is removed in favour of `SendFailure` /
-   `EGError::Send`, and callers matching on the old shape must be updated. It
-   needs a semver-major release note.
+5. **Versioning.** This is a breaking change: the `EGError::NotSent` variant is
+   removed in favour of `SendFailure` / `EGError::Send`, and callers matching on
+   the old shape must be updated. The send methods keep the `EGResult` return
+   type, so only error matching changes. It needs a semver-major release note.
 
 Still open:
 
@@ -507,10 +518,12 @@ Still open:
 
 Option B (typed send failure) is implemented. The touch points were:
 
-- `src/error.rs`: added `RequestOutcome`, `SendFailure`, `SendResult` and
-  `EGError::Send(#[from] SendFailure)`; removed `EGError::NotSent`.
+- `src/error.rs`: added `RequestOutcome`, `SendFailure` and
+  `EGError::Send(#[from] SendFailure)`; removed `EGError::NotSent` and did not
+  add a separate `SendResult` alias, so send paths return `EGResult` with the
+  outcome inside `EGError::Send`.
 - `src/clients/client.rs`: `HttpClient::send` / `WebsocketClient::send` now
-  return `SendResult`.
+  return `EGResult`, wrapping the outcome in `EGError::Send`.
 - `src/clients/reqwest.rs`: maps `is_connect()` / `is_builder()` to
   `NotSent`; a timeout or body/decode error after the connection is mapped to
   `Unknown`; `response.bytes()` failures are `Unknown`.
@@ -522,9 +535,9 @@ Option B (typed send failure) is implemented. The touch points were:
   `on_send_failure` refunds rate-limit capacity on `NotSent` only, and
   `is_retryable` still guards the idempotent retry loop.
 - `src/auto_resync_connector.rs`: the `send_http` / `send_websocket` wrappers
-  propagate `SendResult`.
-- `src/lib.rs`: the prelude re-exports `RequestOutcome`, `SendFailure` and
-  `SendResult`.
+  propagate `EGResult`.
+- `src/lib.rs`: the prelude re-exports `RequestOutcome` and `SendFailure`
+  (`EGError` / `EGResult` are already exported); there is no `SendResult` export.
 
 Still to do for the second half of the issue:
 
@@ -564,10 +577,11 @@ Still to do for the second half of the issue:
   decision from the send-and-wait design.
 - **Memory growth.** Any late-response retention (C1–C3) must be bounded and
   TTL-reaped; an unbounded list of expired matchers is a denial-of-service risk.
-- **Semver.** Returning `SendResult` from the send methods and replacing
-  `EGError::NotSent` with `SendFailure` / `EGError::Send` changes the observable
-  public surface even though `EGError` is `#[non_exhaustive]`; call this out in
-  the release notes.
+- **Semver.** Replacing `EGError::NotSent` with `EGError::Send(SendFailure)`
+  changes the observable public surface even though `EGError` is
+  `#[non_exhaustive]`. The send methods keep the `EGResult` return type, but
+  callers matching on the old `NotSent` variant must be updated; call this out
+  in the release notes.
 - **Idempotency is not a licence to retry blindly.** `is_idempotent()` describes
   the request's semantics, not the transport, and defaults to `false`; it says
   nothing about whether the exchange has capacity, whether a rate-limit budget

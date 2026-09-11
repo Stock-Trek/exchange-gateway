@@ -1,6 +1,6 @@
 use crate::{
     clients::client::HttpClient,
-    error::{EGError, SendFailure, SendResult},
+    error::{EGError, EGResult, SendFailure},
 };
 use async_trait::async_trait;
 use exchange_types::http::{HttpMethod, HttpRequest, HttpResponse};
@@ -45,7 +45,7 @@ impl ReqwestHttpClient {
 
 #[async_trait]
 impl HttpClient for ReqwestHttpClient {
-    async fn send(&self, request: HttpRequest, timeout: Duration) -> SendResult<HttpResponse> {
+    async fn send(&self, request: HttpRequest, timeout: Duration) -> EGResult<HttpResponse> {
         let url = self.build_url(request.query.as_deref());
         let mut request_builder = self
             .client
@@ -64,9 +64,9 @@ impl HttpClient for ReqwestHttpClient {
             // the exchange, so the outcome is unknown. `is_connect()` is checked
             // first because a connect timeout satisfies both predicates.
             if error.is_connect() || error.is_builder() {
-                SendFailure::not_sent(EGError::External(Box::new(error)))
+                EGError::Send(SendFailure::not_sent(EGError::External(Box::new(error))))
             } else {
-                SendFailure::unknown(EGError::External(Box::new(error)))
+                EGError::Send(SendFailure::unknown(EGError::External(Box::new(error))))
             }
         })?;
         let status = response.status();
@@ -117,10 +117,13 @@ mod tests {
             headers: Vec::new(),
             body: None,
         };
-        let failure = client
+        let error = client
             .send(request, Duration::from_millis(500))
             .await
             .expect_err("connection to port 1 should fail");
-        assert_eq!(failure.outcome, RequestOutcome::NotSent);
+        match error {
+            EGError::Send(failure) => assert_eq!(failure.outcome, RequestOutcome::NotSent),
+            other => panic!("expected EGError::Send, got {other:?}"),
+        }
     }
 }
