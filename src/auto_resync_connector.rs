@@ -32,30 +32,32 @@ enum ClockSyncCommand {
     Stop,
 }
 
-async fn clock_sync_loop<F, Fut>(
-    mut frequency: Duration,
-    first_sync_sender: tokio::sync::oneshot::Sender<()>,
-    mut receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
-    sync_clock_fn: F,
-) where
-    F: Fn() -> Fut + Send + 'static,
-    Fut: Future<Output = EGResult<()>> + Send + 'static,
-{
-    let _ = sync_clock_fn().await;
-    let _ = first_sync_sender.send(());
-    let mut last_sync = tokio::time::Instant::now();
-    loop {
-        let deadline = last_sync + frequency;
-        tokio::select! {
-            cmd = receiver.recv() => match cmd {
-                Some(ClockSyncCommand::SetFrequency(new_frequency)) => {
-                    frequency = new_frequency;
+impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
+    async fn clock_sync_loop<F, Fut>(
+        mut frequency: Duration,
+        first_sync_sender: tokio::sync::oneshot::Sender<()>,
+        mut receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
+        sync_clock_fn: F,
+    ) where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: Future<Output = EGResult<()>> + Send + 'static,
+    {
+        let _ = sync_clock_fn().await;
+        let _ = first_sync_sender.send(());
+        let mut last_sync = tokio::time::Instant::now();
+        loop {
+            let deadline = last_sync + frequency;
+            tokio::select! {
+                cmd = receiver.recv() => match cmd {
+                    Some(ClockSyncCommand::SetFrequency(new_frequency)) => {
+                        frequency = new_frequency;
+                    }
+                    Some(ClockSyncCommand::Stop) | None => break,
+                },
+                _ = tokio::time::sleep_until(deadline) => {
+                    let _ = sync_clock_fn().await;
+                    last_sync = tokio::time::Instant::now();
                 }
-                Some(ClockSyncCommand::Stop) | None => break,
-            },
-            _ = tokio::time::sleep_until(deadline) => {
-                let _ = sync_clock_fn().await;
-                last_sync = tokio::time::Instant::now();
             }
         }
     }
@@ -127,7 +129,7 @@ where
                 return Ok(());
             }
             let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-            let join = tokio::spawn(clock_sync_loop(
+            let join = tokio::spawn(Self::clock_sync_loop(
                 frequency,
                 first_sync_sender,
                 receiver,
@@ -258,7 +260,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let (first_sync_sender, _) = tokio::sync::oneshot::channel();
         let start = tokio::time::Instant::now();
-        let join = tokio::spawn(clock_sync_loop(
+        let join = tokio::spawn(AutoResyncConnector::<(), ()>::clock_sync_loop(
             Duration::from_hours(3),
             first_sync_sender,
             command_receiver,
@@ -286,7 +288,7 @@ mod tests {
         let counter = Arc::new(AtomicUsize::new(0));
         let (first_sync_sender, _) = tokio::sync::oneshot::channel();
         let start = tokio::time::Instant::now();
-        let join = tokio::spawn(clock_sync_loop(
+        let join = tokio::spawn(AutoResyncConnector::<(), ()>::clock_sync_loop(
             Duration::from_hours(4),
             first_sync_sender,
             command_receiver,
