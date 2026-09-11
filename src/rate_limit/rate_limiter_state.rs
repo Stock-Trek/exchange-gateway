@@ -1,3 +1,4 @@
+use crate::error::{EGError, EGResult};
 use exchange_types::new_types::{Nanoseconds, UsageCount};
 use std::{
     sync::Arc,
@@ -18,7 +19,10 @@ pub struct RateLimiterState {
 }
 
 impl RateLimiterState {
-    pub fn new(interval_nanos: Nanoseconds, capacity_per_interval: UsageCount) -> Self {
+    pub fn try_new(
+        interval_nanos: Nanoseconds,
+        capacity_per_interval: UsageCount,
+    ) -> EGResult<Self> {
         Self::with_clock(
             interval_nanos,
             capacity_per_interval,
@@ -29,16 +33,14 @@ impl RateLimiterState {
         interval_nanos: Nanoseconds,
         capacity_per_interval: UsageCount,
         now: Arc<dyn Fn() -> Instant + Send + Sync>,
-    ) -> Self {
-        assert!(
-            interval_nanos > Nanoseconds::ZERO,
-            "interval_nanos cannot be zero"
-        );
-        assert!(
-            capacity_per_interval > UsageCount::ZERO,
-            "capacity_per_interval cannot be zero"
-        );
-        Self {
+    ) -> EGResult<Self> {
+        if interval_nanos <= Nanoseconds::ZERO {
+            return Err(EGError::InvalidRateLimitInterval);
+        }
+        if capacity_per_interval <= UsageCount::ZERO {
+            return Err(EGError::InvalidRateLimitCapacity);
+        }
+        Ok(Self {
             interval_nanos,
             capacity_per_interval,
             current_capacity: capacity_per_interval,
@@ -46,7 +48,7 @@ impl RateLimiterState {
             excess_interval_nanos: Nanoseconds::ZERO,
             throttled_until: None,
             now,
-        }
+        })
     }
     pub fn interval_nanos(&self) -> Nanoseconds {
         self.interval_nanos
