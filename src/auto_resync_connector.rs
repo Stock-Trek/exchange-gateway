@@ -17,9 +17,13 @@ use std::{
 };
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 
+type ClockSyncFailureCallback = Arc<dyn Fn(&EGError) + Send + Sync>;
+type SharedClockSyncFailureCallback = Arc<Mutex<Option<ClockSyncFailureCallback>>>;
+
 pub struct AutoResyncConnector<Exchange, Client> {
     connector: Arc<Connector<Exchange, Client>>,
     resync_handle: Mutex<Option<AutoResyncHandle>>,
+    failure_callback: SharedClockSyncFailureCallback,
 }
 
 struct AutoResyncHandle {
@@ -37,12 +41,15 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
         mut frequency: Duration,
         first_sync_sender: tokio::sync::oneshot::Sender<()>,
         mut receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
+        failure_callback: SharedClockSyncFailureCallback,
         sync_clock_fn: F,
     ) where
         F: Fn() -> Fut + Send + 'static,
         Fut: Future<Output = EGResult<()>> + Send + 'static,
     {
-        let _ = sync_clock_fn().await;
+        if let Err(error) = sync_clock_fn().await {
+            Self::report_failure(&failure_callback, &error);
+        }
         let _ = first_sync_sender.send(());
         let mut last_sync = tokio::time::Instant::now();
         loop {
@@ -55,10 +62,22 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
                     Some(ClockSyncCommand::Stop) | None => break,
                 },
                 _ = tokio::time::sleep_until(deadline) => {
-                    let _ = sync_clock_fn().await;
+                    if let Err(error) = sync_clock_fn().await {
+                        Self::report_failure(&failure_callback, &error);
+                    }
                     last_sync = tokio::time::Instant::now();
                 }
             }
+        }
+    }
+
+    fn report_failure(failure_callback: &SharedClockSyncFailureCallback, error: &EGError) {
+        let callback = match failure_callback.lock() {
+            Ok(callback) => callback.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        if let Some(callback) = callback.as_ref() {
+            callback(error);
         }
     }
 }
@@ -72,6 +91,7 @@ where
         Self {
             connector,
             resync_handle: Mutex::new(None),
+            failure_callback: Arc::new(Mutex::new(None)),
         }
     }
     pub fn duration_since_last_sync(&self) -> EGResult<Option<Duration>> {
@@ -82,6 +102,16 @@ where
     }
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.connector.server_time_estimate()
+    }
+    pub fn on_clock_sync_failure<F>(&self, callback: F)
+    where
+        F: Fn(&EGError) + Send + Sync + 'static,
+    {
+        let mut guard = match self.failure_callback.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = Some(Arc::new(callback));
     }
     pub async fn stop_clock_sync(&self) -> EGResult<()> {
         let handle = self
@@ -124,7 +154,7 @@ where
                         .is_err()
                 {
                     *resync_handle = None;
-                    return Err(EGError::AutoResyncClockPanicked);
+                    return Err(EGError::AutoResyncClockStopped);
                 }
                 return Ok(());
             }
@@ -133,6 +163,7 @@ where
                 frequency,
                 first_sync_sender,
                 receiver,
+                self.failure_callback.clone(),
                 sync_clock_fn,
             ));
             *resync_handle = Some(AutoResyncHandle { sender, join });
@@ -253,6 +284,10 @@ mod tests {
         }
     }
 
+    fn no_failure_callback() -> SharedClockSyncFailureCallback {
+        Arc::new(Mutex::new(None))
+    }
+
     #[tokio::test(start_paused = true)]
     async fn shrinking_frequency_triggers_immediate_sync() {
         let (command_sender, command_receiver) = unbounded_channel();
@@ -264,6 +299,7 @@ mod tests {
             Duration::from_hours(3),
             first_sync_sender,
             command_receiver,
+            no_failure_callback(),
             sync_counter(counter.clone(), notify_sender),
         ));
 
@@ -292,6 +328,7 @@ mod tests {
             Duration::from_hours(4),
             first_sync_sender,
             command_receiver,
+            no_failure_callback(),
             sync_counter(counter.clone(), notify_sender),
         ));
 
@@ -306,6 +343,38 @@ mod tests {
         notify_receiver.recv().await.unwrap();
         assert_eq!(counter.load(Ordering::SeqCst), 2);
         assert_eq!(start.elapsed(), Duration::from_hours(3));
+
+        join.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_syncs_are_reported_to_failure_callback() {
+        let (_command_sender, command_receiver) = unbounded_channel();
+        let (failure_sender, mut failure_receiver) = unbounded_channel();
+        let failure_callback: SharedClockSyncFailureCallback =
+            Arc::new(Mutex::new(Some(Arc::new(move |error: &EGError| {
+                let _ = failure_sender.send(error.to_string());
+            }))));
+        let (first_sync_sender, first_sync_receiver) = tokio::sync::oneshot::channel();
+        let join = tokio::spawn(AutoResyncConnector::<(), ()>::clock_sync_loop(
+            Duration::from_mins(30),
+            first_sync_sender,
+            command_receiver,
+            failure_callback,
+            || std::future::ready(Err(EGError::NotConnected)),
+        ));
+
+        first_sync_receiver.await.unwrap();
+        assert_eq!(
+            failure_receiver.recv().await.unwrap(),
+            EGError::NotConnected.to_string()
+        );
+
+        tokio::time::advance(Duration::from_mins(30)).await;
+        assert_eq!(
+            failure_receiver.recv().await.unwrap(),
+            EGError::NotConnected.to_string()
+        );
 
         join.abort();
     }
