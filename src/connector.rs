@@ -1,7 +1,7 @@
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
-    error::{EGError, EGResult, RequestOutcome, SendFailure},
+    error::{EGError, EGResult, RequestOutcome},
     functions::BoxTryCreateOnce,
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
@@ -58,7 +58,7 @@ pub struct Connector<Exchange, Client> {
 /// The classification attached to a send error, if it came from a send path.
 fn send_outcome(error: &EGError) -> Option<RequestOutcome> {
     match error {
-        EGError::Send(failure) => Some(failure.outcome),
+        EGError::Send { outcome, .. } => Some(*outcome),
         _ => None,
     }
 }
@@ -67,10 +67,10 @@ fn send_outcome(error: &EGError) -> Option<RequestOutcome> {
 /// idempotent requests, so a "not sent" or "unknown" transport failure is safe
 /// to repeat; a definite failure is only retried for transient HTTP statuses.
 fn is_retryable(error: &EGError) -> bool {
-    let EGError::Send(failure) = error else {
+    let EGError::Send { source, .. } = error else {
         return false;
     };
-    match failure.source.as_ref() {
+    match source.as_ref() {
         EGError::TimedOut | EGError::External(_) => true,
         EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
         _ => false,
@@ -311,7 +311,10 @@ where
     {
         let costs = self
             .validate_rate_limits(&request)
-            .map_err(SendFailure::not_sent)?;
+            .map_err(|error| EGError::Send {
+                outcome: RequestOutcome::NotSent,
+                source: Box::new(error),
+            })?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -327,15 +330,26 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return Err(self.on_send_failure(SendFailure::not_sent(error).into(), costs));
+                    return Err(self.on_send_failure(
+                        EGError::Send {
+                            outcome: RequestOutcome::NotSent,
+                            source: Box::new(error),
+                        },
+                        costs,
+                    ));
                 }
             };
             request.set_timestamp(timestamp);
             let http_request = match request.clone().try_into_http(&self.signer) {
                 Ok(http_request) => http_request,
                 Err(error) => {
-                    let failure = SendFailure::not_sent(EGError::External(Box::new(error)));
-                    return Err(self.on_send_failure(failure.into(), costs));
+                    return Err(self.on_send_failure(
+                        EGError::Send {
+                            outcome: RequestOutcome::NotSent,
+                            source: Box::new(EGError::External(Box::new(error))),
+                        },
+                        costs,
+                    ));
                 }
             };
             let error = match self.client.send(http_request, self.request_timeout).await {
@@ -363,22 +377,35 @@ where
             // The exchange responded but is throttling us. The request reached the
             // exchange, so it cannot be reported as not sent; a 2xx carrying a
             // Retry-After may even have succeeded, so the outcome is unknown.
-            return Err(SendFailure::unknown(EGError::RateLimited).into());
+            return Err(EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(EGError::RateLimited),
+            });
         }
         if http_response.status == 429 {
-            return Err(SendFailure::failed(EGError::RateLimited).into());
+            return Err(EGError::Send {
+                outcome: RequestOutcome::Failed,
+                source: Box::new(EGError::RateLimited),
+            });
         }
         if !(200..300).contains(&http_response.status) {
-            return Err(SendFailure::failed(EGError::HttpError {
-                status: http_response.status,
-                body: http_response.body,
-            })
-            .into());
+            return Err(EGError::Send {
+                outcome: RequestOutcome::Failed,
+                source: Box::new(EGError::HttpError {
+                    status: http_response.status,
+                    body: http_response.body,
+                }),
+            });
         }
-        let response = Response::try_from_http(http_response)
-            .map_err(|source| SendFailure::unknown(EGError::HttpParseError { source }))?;
+        let response = Response::try_from_http(http_response).map_err(|source| EGError::Send {
+            outcome: RequestOutcome::Unknown,
+            source: Box::new(EGError::HttpParseError { source }),
+        })?;
         self.set_rate_limits(&response)
-            .map_err(SendFailure::unknown)?;
+            .map_err(|error| EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(error),
+            })?;
         Ok(response)
     }
 }
@@ -429,7 +456,10 @@ where
     {
         let costs = self
             .validate_rate_limits(&request)
-            .map_err(SendFailure::not_sent)?;
+            .map_err(|error| EGError::Send {
+                outcome: RequestOutcome::NotSent,
+                source: Box::new(error),
+            })?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -445,7 +475,13 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return Err(self.on_send_failure(SendFailure::not_sent(error).into(), costs));
+                    return Err(self.on_send_failure(
+                        EGError::Send {
+                            outcome: RequestOutcome::NotSent,
+                            source: Box::new(error),
+                        },
+                        costs,
+                    ));
                 }
             };
             request.set_timestamp(timestamp);
@@ -454,8 +490,13 @@ where
                 match request.clone().try_into_websocket(&self.signer, id) {
                     Ok(request) => request,
                     Err(error) => {
-                        let failure = SendFailure::not_sent(EGError::External(Box::new(error)));
-                        return Err(self.on_send_failure(failure.into(), costs));
+                        return Err(self.on_send_failure(
+                            EGError::Send {
+                                outcome: RequestOutcome::NotSent,
+                                source: Box::new(EGError::External(Box::new(error))),
+                            },
+                            costs,
+                        ));
                     }
                 };
             let error = match self.send_wait(websocket_request, response_matcher).await {
@@ -481,11 +522,21 @@ where
     {
         let listener = match self.websocket_listener.as_ref() {
             Some(listener) => listener,
-            None => return Err(SendFailure::not_sent(EGError::WebsocketListenerMissing).into()),
+            None => {
+                return Err(EGError::Send {
+                    outcome: RequestOutcome::NotSent,
+                    source: Box::new(EGError::WebsocketListenerMissing),
+                });
+            }
         };
         let waiter = match listener.waiter_for_filtered_response(response_matcher) {
             Ok(waiter) => waiter,
-            Err(error) => return Err(SendFailure::not_sent(error).into()),
+            Err(error) => {
+                return Err(EGError::Send {
+                    outcome: RequestOutcome::NotSent,
+                    source: Box::new(error),
+                });
+            }
         };
         let start = Instant::now();
         self.client.send(message, self.request_timeout).await?;
@@ -493,21 +544,29 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
-            Poll::Ready(result) => {
-                Poll::Ready(result.map_err(|error| EGError::Send(SendFailure::unknown(error))))
-            }
+            Poll::Ready(result) => Poll::Ready(result.map_err(|error| EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(error),
+            })),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => {
-                    Poll::Ready(Err(EGError::Send(SendFailure::unknown(EGError::TimedOut))))
-                }
+                Poll::Ready(()) => Poll::Ready(Err(EGError::Send {
+                    outcome: RequestOutcome::Unknown,
+                    source: Box::new(EGError::TimedOut),
+                })),
                 Poll::Pending => Poll::Pending,
             },
         })
         .await?;
-        let response = Response::try_from_websocket(response_value)
-            .map_err(|source| SendFailure::unknown(EGError::WebsocketParseError { source }))?;
+        let response =
+            Response::try_from_websocket(response_value).map_err(|source| EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(EGError::WebsocketParseError { source }),
+            })?;
         self.set_rate_limits(&response)
-            .map_err(SendFailure::unknown)?;
+            .map_err(|error| EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(error),
+            })?;
         Ok(response)
     }
 }
@@ -528,7 +587,10 @@ mod tests {
     use super::*;
 
     fn failure(outcome: RequestOutcome, source: EGError) -> EGError {
-        SendFailure::new(outcome, source).into()
+        EGError::Send {
+            outcome,
+            source: Box::new(source),
+        }
     }
 
     fn external() -> EGError {

@@ -1,6 +1,6 @@
 use crate::{
     clients::client::HttpClient,
-    error::{EGError, EGResult, SendFailure},
+    error::{EGError, EGResult, RequestOutcome},
 };
 use async_trait::async_trait;
 use exchange_types::http::{HttpMethod, HttpRequest, HttpResponse};
@@ -64,9 +64,15 @@ impl HttpClient for ReqwestHttpClient {
             // the exchange, so the outcome is unknown. `is_connect()` is checked
             // first because a connect timeout satisfies both predicates.
             if error.is_connect() || error.is_builder() {
-                EGError::Send(SendFailure::not_sent(EGError::External(Box::new(error))))
+                EGError::Send {
+                    outcome: RequestOutcome::NotSent,
+                    source: Box::new(EGError::External(Box::new(error))),
+                }
             } else {
-                EGError::Send(SendFailure::unknown(EGError::External(Box::new(error))))
+                EGError::Send {
+                    outcome: RequestOutcome::Unknown,
+                    source: Box::new(EGError::External(Box::new(error))),
+                }
             }
         })?;
         let status = response.status();
@@ -83,7 +89,10 @@ impl HttpClient for ReqwestHttpClient {
         let body = response
             .bytes()
             .await
-            .map_err(|error| SendFailure::unknown(EGError::External(Box::new(error))))?
+            .map_err(|error| EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(EGError::External(Box::new(error))),
+            })?
             .to_vec();
         Ok(HttpResponse {
             status: status.as_u16(),
@@ -105,7 +114,6 @@ impl std::fmt::Debug for ReqwestHttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::RequestOutcome;
 
     #[tokio::test]
     async fn a_connection_that_never_opens_is_not_sent() {
@@ -122,7 +130,7 @@ mod tests {
             .await
             .expect_err("connection to port 1 should fail");
         match error {
-            EGError::Send(failure) => assert_eq!(failure.outcome, RequestOutcome::NotSent),
+            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::NotSent),
             other => panic!("expected EGError::Send, got {other:?}"),
         }
     }

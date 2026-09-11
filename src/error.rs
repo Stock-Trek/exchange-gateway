@@ -19,47 +19,6 @@ pub enum RequestOutcome {
     Unknown,
 }
 
-/// A send failure with the transport outcome attached, so callers never have
-/// to infer "definitely not sent" vs "possibly executed" from an error variant.
-#[derive(Debug)]
-pub struct SendFailure {
-    pub outcome: RequestOutcome,
-    pub source: Box<EGError>,
-}
-
-impl SendFailure {
-    pub fn new(outcome: RequestOutcome, source: EGError) -> Self {
-        Self {
-            outcome,
-            source: Box::new(source),
-        }
-    }
-    pub fn failed(source: EGError) -> Self {
-        Self::new(RequestOutcome::Failed, source)
-    }
-    pub fn not_sent(source: EGError) -> Self {
-        Self::new(RequestOutcome::NotSent, source)
-    }
-    pub fn unknown(source: EGError) -> Self {
-        Self::new(RequestOutcome::Unknown, source)
-    }
-    pub fn into_source(self) -> EGError {
-        *self.source
-    }
-}
-
-impl std::fmt::Display for SendFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.source)
-    }
-}
-
-impl std::error::Error for SendFailure {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source.as_ref())
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EGError {
@@ -105,8 +64,12 @@ pub enum EGError {
     MutexPoisoned,
     #[error("Connector is not connected")]
     NotConnected,
-    #[error(transparent)]
-    Send(#[from] SendFailure),
+    #[error("{source}")]
+    Send {
+        outcome: RequestOutcome,
+        #[source]
+        source: Box<EGError>,
+    },
     #[error("Rate limit exceeded")]
     RateLimited,
     #[error("The system time is before the UNIX epoch")]
@@ -133,35 +96,33 @@ mod tests {
         EGError::External(Box::new(std::io::Error::other("boom")))
     }
 
-    #[test]
-    fn send_failure_constructors_set_the_outcome() {
-        assert_eq!(
-            SendFailure::not_sent(io_error()).outcome,
-            RequestOutcome::NotSent
-        );
-        assert_eq!(
-            SendFailure::failed(io_error()).outcome,
-            RequestOutcome::Failed
-        );
-        assert_eq!(
-            SendFailure::unknown(io_error()).outcome,
-            RequestOutcome::Unknown
-        );
+    fn send(outcome: RequestOutcome, source: EGError) -> EGError {
+        EGError::Send {
+            outcome,
+            source: Box::new(source),
+        }
     }
 
     #[test]
-    fn send_failure_proxies_display_and_source_to_the_cause() {
-        let failure = SendFailure::not_sent(io_error());
-        assert_eq!(failure.to_string(), io_error().to_string());
-        assert!(std::error::Error::source(&failure).is_some());
-    }
-
-    #[test]
-    fn converting_a_send_failure_preserves_the_outcome() {
-        let error: EGError = SendFailure::failed(EGError::RateLimited).into();
-        match error {
-            EGError::Send(failure) => assert_eq!(failure.outcome, RequestOutcome::Failed),
+    fn send_errors_carry_their_outcome() {
+        match send(RequestOutcome::NotSent, io_error()) {
+            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::NotSent),
             other => panic!("expected EGError::Send, got {other:?}"),
         }
+        match send(RequestOutcome::Failed, io_error()) {
+            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::Failed),
+            other => panic!("expected EGError::Send, got {other:?}"),
+        }
+        match send(RequestOutcome::Unknown, io_error()) {
+            EGError::Send { outcome, .. } => assert_eq!(outcome, RequestOutcome::Unknown),
+            other => panic!("expected EGError::Send, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_errors_proxy_display_and_source_to_the_cause() {
+        let error = send(RequestOutcome::NotSent, io_error());
+        assert_eq!(error.to_string(), io_error().to_string());
+        assert!(std::error::Error::source(&error).is_some());
     }
 }

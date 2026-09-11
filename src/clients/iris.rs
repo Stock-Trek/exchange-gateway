@@ -1,6 +1,6 @@
 use crate::{
     clients::client::WebsocketClient,
-    error::{EGError, EGResult, SendFailure},
+    error::{EGError, EGResult, RequestOutcome},
     panic_guard::PanicUtils,
     websocket_listener::WebsocketListener,
 };
@@ -36,9 +36,10 @@ impl IrisWebsocketClient {
         poll_fn(move |cx| match send.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.map_err(Self::map_send_error)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => {
-                    Poll::Ready(Err(SendFailure::not_sent(EGError::TimedOut).into()))
-                }
+                Poll::Ready(()) => Poll::Ready(Err(EGError::Send {
+                    outcome: RequestOutcome::NotSent,
+                    source: Box::new(EGError::TimedOut),
+                })),
                 Poll::Pending => Poll::Pending,
             },
         })
@@ -46,10 +47,14 @@ impl IrisWebsocketClient {
     }
     fn map_send_error(error: ConnectionError) -> EGError {
         match error {
-            ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => {
-                SendFailure::not_sent(EGError::External(Box::new(error))).into()
-            }
-            error => SendFailure::unknown(EGError::External(Box::new(error))).into(),
+            ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => EGError::Send {
+                outcome: RequestOutcome::NotSent,
+                source: Box::new(EGError::External(Box::new(error))),
+            },
+            error => EGError::Send {
+                outcome: RequestOutcome::Unknown,
+                source: Box::new(EGError::External(Box::new(error))),
+            },
         }
     }
 }
