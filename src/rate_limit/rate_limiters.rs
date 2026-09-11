@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use strum::IntoEnumIterator;
 
 #[derive(Debug, Clone)]
 pub struct RateLimiters {
@@ -19,7 +20,12 @@ pub struct RateLimiters {
 }
 
 impl RateLimiters {
-    pub fn new(limiters: HashMap<RateLimitRestriction, RateLimiter>) -> Self {
+    pub fn new(mut limiters: HashMap<RateLimitRestriction, RateLimiter>) -> Self {
+        for restriction in RateLimitRestriction::iter() {
+            limiters
+                .entry(restriction)
+                .or_insert_with(|| RateLimiter::new(&[]));
+        }
         Self {
             limiters,
             acquisition_lock: Arc::new(Mutex::new(())),

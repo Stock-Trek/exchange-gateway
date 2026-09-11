@@ -76,11 +76,23 @@ impl RateLimiter {
             .rate_limiters
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
-        for (interval_nanos, rate_limit_usage) in interval_usage {
+        for (interval_nanos, rate_usage) in interval_usage {
+            let mut matched_existing = false;
             for limiter in limiters_guard.iter_mut() {
                 if limiter.interval_nanos() == *interval_nanos {
-                    limiter.sync_usage(rate_limit_usage.used, rate_limit_usage.limit);
+                    limiter.sync_usage(rate_usage.used, rate_usage.limit);
+                    matched_existing = true;
                 }
+            }
+            if matched_existing {
+                continue;
+            }
+            let Some(new_limit) = rate_usage.limit else {
+                continue;
+            };
+            if let Ok(mut limiter) = RateLimiterState::try_new(*interval_nanos, new_limit) {
+                limiter.sync_usage(rate_usage.used, Some(new_limit));
+                limiters_guard.push(limiter);
             }
         }
         Ok(())
