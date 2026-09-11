@@ -7,17 +7,6 @@ use std::{
 
 const MAX_THROTTLE_AFTER: Duration = Duration::from_secs(u32::MAX as u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AcquireResult {
-    Acquired,
-    RateLimited,
-    ExceedsCapacity {
-        cost: UsageCount,
-        capacity: UsageCount,
-        interval_nanos: Nanoseconds,
-    },
-}
-
 #[derive(Clone)]
 pub struct RateLimiterState {
     interval_nanos: Nanoseconds,
@@ -74,26 +63,25 @@ impl RateLimiterState {
         self.update_capacity();
         self.current_capacity
     }
-    #[must_use]
-    pub fn did_consume(&mut self, cost: UsageCount) -> AcquireResult {
+    pub fn did_consume(&mut self, cost: UsageCount) -> EGResult<()> {
         if self.cost_exceeds_capacity(cost) {
-            return AcquireResult::ExceedsCapacity {
+            return Err(EGError::RequestExceedsRateLimit {
                 cost,
                 capacity: self.capacity_per_interval,
                 interval_nanos: self.interval_nanos,
-            };
+            });
         }
         if self.is_throttled() {
-            return AcquireResult::RateLimited;
+            return Err(EGError::RateLimited);
         }
         if self.did_quick_consume(cost) {
-            AcquireResult::Acquired
+            Ok(())
         } else {
             self.update_capacity();
             if self.did_quick_consume(cost) {
-                AcquireResult::Acquired
+                Ok(())
             } else {
-                AcquireResult::RateLimited
+                Err(EGError::RateLimited)
             }
         }
     }

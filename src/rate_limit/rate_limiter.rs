@@ -1,6 +1,6 @@
 use crate::{
     error::{EGError, EGResult},
-    rate_limit::rate_limiter_state::{AcquireResult, RateLimiterState},
+    rate_limit::rate_limiter_state::RateLimiterState,
 };
 use exchange_types::{
     new_types::{Nanoseconds, UsageCount},
@@ -23,7 +23,7 @@ impl RateLimiter {
             rate_limiters: Arc::new(Mutex::new(states.to_vec())),
         }
     }
-    pub fn did_acquire(&self, cost: UsageCount) -> EGResult<AcquireResult> {
+    pub fn did_acquire(&self, cost: UsageCount) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
             .lock()
@@ -34,22 +34,22 @@ impl RateLimiter {
             .min_by_key(|limiter| limiter.capacity_per_interval())
             .map(|limiter| (limiter.capacity_per_interval(), limiter.interval_nanos()));
         if let Some((capacity, interval_nanos)) = exceeded_capacity {
-            return Ok(AcquireResult::ExceedsCapacity {
+            return Err(EGError::RequestExceedsRateLimit {
                 cost,
                 capacity,
                 interval_nanos,
             });
         }
         for (index, limiter) in limiters_guard.iter_mut().enumerate() {
-            if limiter.did_consume(cost) != AcquireResult::Acquired {
+            if let Err(error) = limiter.did_consume(cost) {
                 for i in 0..index {
                     let limiter = &mut limiters_guard[i];
                     limiter.refund(cost);
                 }
-                return Ok(AcquireResult::RateLimited);
+                return Err(error);
             }
         }
-        Ok(AcquireResult::Acquired)
+        Ok(())
     }
     pub fn remaining_capacity(&self) -> EGResult<HashMap<Nanoseconds, UsageCount>> {
         let mut limiters_guard = self

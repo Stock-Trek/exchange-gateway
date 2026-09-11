@@ -6,8 +6,7 @@ use crate::{
     error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
     rate_limit::{
-        AcquireResult, rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
-        rate_limiters::RateLimiters,
+        rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState, rate_limiters::RateLimiters,
     },
     retry_after::RetryAfter,
     websocket_listener::WebsocketListener,
@@ -212,19 +211,8 @@ where
                 (cost > UsageCount::ZERO).then_some((restriction, cost))
             })
             .collect::<Vec<_>>();
-        match self.rate_limiters.did_acquire(&costs)? {
-            AcquireResult::Acquired => Ok(costs),
-            AcquireResult::RateLimited => Err(EGError::RateLimited),
-            AcquireResult::ExceedsCapacity {
-                cost,
-                capacity,
-                interval_nanos,
-            } => Err(EGError::RequestExceedsRateLimit {
-                cost,
-                capacity,
-                interval_nanos,
-            }),
-        }
+        self.rate_limiters.did_acquire(&costs)?;
+        Ok(costs)
     }
     fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) {
         for (restriction, cost) in costs {
