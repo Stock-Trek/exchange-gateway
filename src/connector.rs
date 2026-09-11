@@ -276,15 +276,19 @@ where
             }
         };
         let start = Instant::now();
-        let response = match self.client.send(http_request, self.request_timeout).await {
-            Ok(response) => response,
+
+        let http_response = match self.client.send(http_request, self.request_timeout).await {
+            Ok(http_response) => http_response,
             Err(error) => return self.on_send_error(error, costs),
         };
         let round_trip_time = start.elapsed();
-        self.handle_retry_after(&response)?;
-        let response = self.validate_http_status(response)?;
-        let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
+
+        self.handle_retry_after(&http_response)?;
+        let http_response = self.validate_http_status(http_response)?;
+        let response = Exchange::ServerTimeResponseHttp::try_from_http(http_response)
+            .map_err(|source| EGError::HttpParseError { source })?;
         self.set_rate_limits(&response)?;
+
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
@@ -325,11 +329,12 @@ where
                 }
             };
             let error = match self.client.send(http_request, self.request_timeout).await {
-                Ok(response) => {
-                    self.handle_retry_after(&response)?;
-                    match self.validate_http_status(response) {
-                        Ok(response) => {
-                            let response = Self::parse_http_response(response)?;
+                Ok(http_response) => {
+                    self.handle_retry_after(&http_response)?;
+                    match self.validate_http_status(http_response) {
+                        Ok(http_response) => {
+                            let response = Response::try_from_http(http_response)
+                                .map_err(|source| EGError::HttpParseError { source })?;
                             self.set_rate_limits(&response)?;
                             return Ok(response);
                         }
@@ -346,12 +351,6 @@ where
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
-    }
-    fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
-    where
-        Response: ETHttpResponse,
-    {
-        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source })
     }
     fn handle_retry_after(&self, response: &HttpResponse) -> EGResult<()> {
         if let Some(retry_after) = RetryAfter::from_headers(&response.headers) {
