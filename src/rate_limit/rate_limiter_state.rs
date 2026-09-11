@@ -53,20 +53,36 @@ impl RateLimiterState {
     pub fn interval_nanos(&self) -> Nanoseconds {
         self.interval_nanos
     }
+    pub fn capacity_per_interval(&self) -> UsageCount {
+        self.capacity_per_interval
+    }
+    pub fn cost_exceeds_capacity(&self, cost: UsageCount) -> bool {
+        cost > self.capacity_per_interval
+    }
     pub fn remaining_capacity(&mut self) -> UsageCount {
         self.update_capacity();
         self.current_capacity
     }
-    #[must_use]
-    pub fn did_consume(&mut self, cost: UsageCount) -> bool {
+    pub fn did_consume(&mut self, cost: UsageCount) -> EGResult<()> {
+        if self.cost_exceeds_capacity(cost) {
+            return Err(EGError::RequestExceedsRateLimit {
+                cost,
+                capacity: self.capacity_per_interval,
+                interval_nanos: self.interval_nanos,
+            });
+        }
         if self.is_throttled() {
-            return false;
+            return Err(EGError::RateLimited);
         }
         if self.did_quick_consume(cost) {
-            true
+            Ok(())
         } else {
             self.update_capacity();
-            self.did_quick_consume(cost)
+            if self.did_quick_consume(cost) {
+                Ok(())
+            } else {
+                Err(EGError::RateLimited)
+            }
         }
     }
     pub fn refund(&mut self, cost: UsageCount) {

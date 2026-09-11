@@ -212,11 +212,8 @@ where
                 (cost > UsageCount::ZERO).then_some((restriction, cost))
             })
             .collect::<Vec<_>>();
-        if self.rate_limiters.did_acquire(&costs)? {
-            Ok(costs)
-        } else {
-            Err(EGError::RateLimited)
-        }
+        self.rate_limiters.did_acquire(&costs)?;
+        Ok(costs)
     }
     fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) {
         for (restriction, cost) in costs {

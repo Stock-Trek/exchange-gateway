@@ -23,21 +23,33 @@ impl RateLimiter {
             rate_limiters: Arc::new(Mutex::new(states.to_vec())),
         }
     }
-    pub fn did_acquire(&self, cost: UsageCount) -> EGResult<bool> {
+    pub fn did_acquire(&self, cost: UsageCount) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
+        let lowest_exceeded_limit = limiters_guard
+            .iter()
+            .filter(|limiter| limiter.cost_exceeds_capacity(cost))
+            .min_by_key(|limiter| limiter.capacity_per_interval())
+            .map(|limiter| (limiter.capacity_per_interval(), limiter.interval_nanos()));
+        if let Some((capacity, interval_nanos)) = lowest_exceeded_limit {
+            return Err(EGError::RequestExceedsRateLimit {
+                cost,
+                capacity,
+                interval_nanos,
+            });
+        }
         for (index, limiter) in limiters_guard.iter_mut().enumerate() {
-            if !limiter.did_consume(cost) {
+            if let Err(error) = limiter.did_consume(cost) {
                 for i in 0..index {
                     let limiter = &mut limiters_guard[i];
                     limiter.refund(cost);
                 }
-                return Ok(false);
+                return Err(error);
             }
         }
-        Ok(true)
+        Ok(())
     }
     pub fn remaining_capacity(&self) -> EGResult<HashMap<Nanoseconds, UsageCount>> {
         let mut limiters_guard = self
