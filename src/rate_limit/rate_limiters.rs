@@ -1,18 +1,29 @@
-use crate::{error::EGResult, rate_limit::rate_limiter::RateLimiter};
+use crate::{
+    error::{EGError, EGResult},
+    rate_limit::rate_limiter::RateLimiter,
+};
 use exchange_types::{
     new_types::{Nanoseconds, UsageCount},
     rate_limited::{RateLimit, RateLimitRestriction, RateUsage},
 };
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 #[derive(Debug, Clone)]
 pub struct RateLimiters {
     limiters: HashMap<RateLimitRestriction, RateLimiter>,
+    acquisition_lock: Arc<Mutex<()>>,
 }
 
 impl RateLimiters {
     pub fn new(limiters: HashMap<RateLimitRestriction, RateLimiter>) -> Self {
-        Self { limiters }
+        Self {
+            limiters,
+            acquisition_lock: Arc::new(Mutex::new(())),
+        }
     }
     pub fn remaining_capacity(&self) -> EGResult<HashMap<RateLimit, UsageCount>> {
         let mut capacities = HashMap::new();
@@ -29,15 +40,34 @@ impl RateLimiters {
         }
         Ok(capacities)
     }
-    pub fn did_acquire(
-        &self,
-        restriction: RateLimitRestriction,
-        cost: UsageCount,
-    ) -> EGResult<bool> {
-        if let Some(limiter) = self.limiters.get(&restriction) {
-            limiter.did_acquire(cost)
-        } else {
-            Ok(true)
+    pub fn did_acquire(&self, costs: &[(RateLimitRestriction, UsageCount)]) -> EGResult<bool> {
+        let _guard = self
+            .acquisition_lock
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        let mut acquired = Vec::with_capacity(costs.len());
+        for &(restriction, cost) in costs {
+            let did_acquire = match self.limiters.get(&restriction) {
+                Some(limiter) => match limiter.did_acquire(cost) {
+                    Ok(did_acquire) => did_acquire,
+                    Err(error) => {
+                        self.refund_acquired(&acquired);
+                        return Err(error);
+                    }
+                },
+                None => true,
+            };
+            if !did_acquire {
+                self.refund_acquired(&acquired);
+                return Ok(false);
+            }
+            acquired.push((restriction, cost));
+        }
+        Ok(true)
+    }
+    fn refund_acquired(&self, acquired: &[(RateLimitRestriction, UsageCount)]) {
+        for &(restriction, cost) in acquired {
+            let _ = self.refund(restriction, cost);
         }
     }
     pub fn refund(&self, restriction: RateLimitRestriction, cost: UsageCount) -> EGResult<()> {

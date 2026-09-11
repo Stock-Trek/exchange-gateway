@@ -206,21 +206,17 @@ where
     where
         Request: ETRequest,
     {
-        let mut acquired = Vec::new();
-        for restriction in RateLimitRestriction::iter() {
-            let cost = request.rate_limit_usage(restriction);
-            if cost > UsageCount::ZERO {
-                if self.rate_limiters.did_acquire(restriction, cost)? {
-                    acquired.push((restriction, cost));
-                } else {
-                    for (restriction, cost) in acquired {
-                        let _ = self.rate_limiters.refund(restriction, cost);
-                    }
-                    return Err(EGError::RateLimited);
-                }
-            }
+        let costs = RateLimitRestriction::iter()
+            .filter_map(|restriction| {
+                let cost = request.rate_limit_usage(restriction);
+                (cost > UsageCount::ZERO).then_some((restriction, cost))
+            })
+            .collect::<Vec<_>>();
+        if self.rate_limiters.did_acquire(&costs)? {
+            Ok(costs)
+        } else {
+            Err(EGError::RateLimited)
         }
-        Ok(acquired)
     }
     fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) {
         for (restriction, cost) in costs {
