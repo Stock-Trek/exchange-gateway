@@ -276,16 +276,13 @@ where
             }
         };
         let start = Instant::now();
-
         let http_response = match self.client.send(http_request, self.request_timeout).await {
             Ok(http_response) => http_response,
             Err(error) => return self.on_send_error(error, costs),
         };
         let round_trip_time = start.elapsed();
-
         let response =
             self.handle_http_response::<Exchange::ServerTimeResponseHttp>(http_response)?;
-
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
@@ -345,31 +342,23 @@ where
     where
         Response: ETHttpResponse,
     {
-        self.handle_retry_after(&http_response)?;
-        let http_response = self.validate_http_status(http_response)?;
+        if let Some(retry_after) = RetryAfter::from_headers(&http_response.headers) {
+            let _ = self.rate_limiters.set_retry_after(retry_after);
+            return Err(EGError::RateLimited);
+        }
+        if http_response.status == 429 {
+            return Err(EGError::RateLimited);
+        }
+        if !(200..300).contains(&http_response.status) {
+            return Err(EGError::HttpError {
+                status: http_response.status,
+                body: http_response.body,
+            });
+        }
         let response = Response::try_from_http(http_response)
             .map_err(|source| EGError::HttpParseError { source })?;
         self.set_rate_limits(&response)?;
         Ok(response)
-    }
-    fn handle_retry_after(&self, response: &HttpResponse) -> EGResult<()> {
-        if let Some(retry_after) = RetryAfter::from_headers(&response.headers) {
-            let _ = self.rate_limiters.set_retry_after(retry_after);
-            return Err(EGError::RateLimited);
-        }
-        Ok(())
-    }
-    fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
-        if (200..300).contains(&response.status) {
-            return Ok(response);
-        }
-        if response.status == 429 {
-            return Err(EGError::RateLimited);
-        }
-        Err(EGError::HttpError {
-            status: response.status,
-            body: response.body,
-        })
     }
 }
 
@@ -427,7 +416,6 @@ where
         } else {
             0
         };
-        let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         loop {
             let timestamp = match if is_signed {
                 self.clock.server_time_estimate()
@@ -441,8 +429,9 @@ where
                 }
             };
             request.set_timestamp(timestamp);
+            let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
             let (websocket_request, response_matcher) =
-                match request.clone().try_into_websocket(&self.signer, id.clone()) {
+                match request.clone().try_into_websocket(&self.signer, id) {
                     Ok(request) => request,
                     Err(error) => {
                         self.refund(costs);
