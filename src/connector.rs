@@ -51,6 +51,7 @@ pub struct Connector<Exchange, Client> {
     signer: Signer,
     client: Client,
     request_timeout: Duration,
+    max_retry_attempts: u8,
     websocket_listener: Option<Arc<WebsocketListener>>,
 }
 
@@ -61,6 +62,7 @@ impl Connector<(), ()> {
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, Client>,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, Client>>
     where
         Exchange: ETExchange,
@@ -78,6 +80,7 @@ impl Connector<(), ()> {
             signer,
             client,
             request_timeout,
+            max_retry_attempts,
             websocket_listener: None,
         })
     }
@@ -87,6 +90,7 @@ impl Connector<(), ()> {
         exchange: Exchange,
         signer: Signer,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, ReqwestHttpClient>>
     where
         Exchange: ETExchange,
@@ -98,6 +102,7 @@ impl Connector<(), ()> {
             signer,
             client_creator,
             request_timeout,
+            max_retry_attempts,
         )
     }
     #[allow(clippy::type_complexity)]
@@ -107,6 +112,7 @@ impl Connector<(), ()> {
         signer: Signer,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, Client>>
     where
         Exchange: ETExchange,
@@ -126,6 +132,7 @@ impl Connector<(), ()> {
             signer,
             client,
             request_timeout,
+            max_retry_attempts,
             websocket_listener: Some(websocket_listener),
         })
     }
@@ -137,6 +144,7 @@ impl Connector<(), ()> {
         signer: Signer,
         mut iris_config: IrisConfig,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, IrisWebsocketClient>>
     where
         Exchange: ETExchange,
@@ -158,6 +166,7 @@ impl Connector<(), ()> {
             signer,
             client_creator,
             request_timeout,
+            max_retry_attempts,
         )
     }
     fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> EGResult<RateLimiters> {
@@ -231,6 +240,13 @@ where
         }
         Err(error)
     }
+    fn is_retryable(error: &EGError) -> bool {
+        match error {
+            EGError::NotSent(_) | EGError::TimedOut | EGError::External(_) => true,
+            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
+            _ => false,
+        }
+    }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
             let _ = self.rate_limiters.set_usage(usage);
@@ -260,74 +276,89 @@ where
             }
         };
         let start = Instant::now();
-        let response = match self.client.send(http_request, self.request_timeout).await {
-            Ok(response) => response,
+        let http_response = match self.client.send(http_request, self.request_timeout).await {
+            Ok(http_response) => http_response,
             Err(error) => return self.on_send_error(error, costs),
         };
         let round_trip_time = start.elapsed();
-        self.handle_retry_after(&response)?;
-        let response = self.validate_http_status(response)?;
-        let response: Exchange::ServerTimeResponseHttp = Self::parse_http_response(response)?;
-        self.set_rate_limits(&response)?;
+        let response =
+            self.handle_http_response::<Exchange::ServerTimeResponseHttp>(http_response)?;
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
     pub async fn send_http<Response>(
         &self,
-        mut request: impl ETHttpRequest<Exchange = Exchange, Response = Response>,
+        mut request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
     ) -> EGResult<Response>
     where
         Response: ETHttpResponse,
     {
-        let timestamp = if request.is_signed() {
-            self.clock.server_time_estimate()?
-        } else {
-            self.clock.server_time_estimate_unchecked()?
-        };
-        request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
-        let http_request = match request.try_into_http(&self.signer) {
-            Ok(http_request) => http_request,
-            Err(error) => {
-                self.refund(costs);
-                return Err(EGError::External(Box::new(error)));
+        let is_idempotent = request.is_idempotent();
+        let is_signed = request.is_signed();
+        let mut retries_remaining = if is_idempotent {
+            self.max_retry_attempts
+        } else {
+            0
+        };
+        loop {
+            let timestamp = match if is_signed {
+                self.clock.server_time_estimate()
+            } else {
+                self.clock.server_time_estimate_unchecked()
+            } {
+                Ok(timestamp) => timestamp,
+                Err(error) => {
+                    self.refund(costs);
+                    return Err(error);
+                }
+            };
+            request.set_timestamp(timestamp);
+            let http_request = match request.clone().try_into_http(&self.signer) {
+                Ok(http_request) => http_request,
+                Err(error) => {
+                    self.refund(costs);
+                    return Err(EGError::External(Box::new(error)));
+                }
+            };
+            let error = match self.client.send(http_request, self.request_timeout).await {
+                Ok(http_response) => match self.handle_http_response::<Response>(http_response) {
+                    Ok(response) => return Ok(response),
+                    Err(error) => error,
+                },
+                Err(error) => error,
+            };
+            if retries_remaining == 0 || !Self::is_retryable(&error) {
+                return self.on_send_error(error, costs);
             }
-        };
-        let response = match self.client.send(http_request, self.request_timeout).await {
-            Ok(response) => response,
-            Err(error) => return self.on_send_error(error, costs),
-        };
-        self.handle_retry_after(&response)?;
-        let response = self.validate_http_status(response)?;
-        let response = Self::parse_http_response(response)?;
-        self.set_rate_limits(&response)?;
-        Ok(response)
+            retries_remaining -= 1;
+            if !matches!(error, EGError::NotSent(..)) {
+                self.rate_limiters.did_acquire(&costs)?;
+            }
+        }
     }
-    fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
+    fn handle_http_response<Response>(&self, http_response: HttpResponse) -> EGResult<Response>
     where
         Response: ETHttpResponse,
     {
-        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source })
-    }
-    fn handle_retry_after(&self, response: &HttpResponse) -> EGResult<()> {
-        if let Some(retry_after) = RetryAfter::from_headers(&response.headers) {
+        if let Some(retry_after) = RetryAfter::from_headers(&http_response.headers) {
             let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
-        Ok(())
-    }
-    fn validate_http_status(&self, response: HttpResponse) -> EGResult<HttpResponse> {
-        if (200..300).contains(&response.status) {
-            return Ok(response);
-        }
-        if response.status == 429 {
+        if http_response.status == 429 {
             return Err(EGError::RateLimited);
         }
-        Err(EGError::HttpError {
-            status: response.status,
-            body: response.body,
-        })
+        if !(200..300).contains(&http_response.status) {
+            return Err(EGError::HttpError {
+                status: http_response.status,
+                body: http_response.body,
+            });
+        }
+        let response = Response::try_from_http(http_response)
+            .map_err(|source| EGError::HttpParseError { source })?;
+        self.set_rate_limits(&response)?;
+        Ok(response)
     }
 }
 
@@ -358,9 +389,13 @@ where
                 }
             };
         let start = Instant::now();
-        let response: Exchange::ServerTimeResponseWebsocket = self
-            .send_wait(websocket_request, costs, response_matcher)
-            .await?;
+        let response: Exchange::ServerTimeResponseWebsocket = match self
+            .send_wait(websocket_request, costs.clone(), response_matcher)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return self.on_send_error(error, costs),
+        };
         let round_trip_time = start.elapsed();
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
@@ -368,29 +403,56 @@ where
     }
     pub async fn send_websocket<Response>(
         &self,
-        mut request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response>,
+        mut request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
     ) -> EGResult<Response>
     where
         Response: ETWebsocketResponse,
     {
-        let timestamp = if request.is_signed() {
-            self.clock.server_time_estimate()?
-        } else {
-            self.clock.server_time_estimate_unchecked()?
-        };
-        request.set_timestamp(timestamp);
         let costs = self.validate_rate_limits(&request)?;
-        let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-        let (websocket_request, response_matcher) =
-            match request.try_into_websocket(&self.signer, id) {
-                Ok(request) => request,
+        let is_idempotent = request.is_idempotent();
+        let is_signed = request.is_signed();
+        let mut retries_remaining = if is_idempotent {
+            self.max_retry_attempts
+        } else {
+            0
+        };
+        loop {
+            let timestamp = match if is_signed {
+                self.clock.server_time_estimate()
+            } else {
+                self.clock.server_time_estimate_unchecked()
+            } {
+                Ok(timestamp) => timestamp,
                 Err(error) => {
                     self.refund(costs);
-                    return Err(EGError::External(Box::new(error)));
+                    return Err(error);
                 }
             };
-        self.send_wait(websocket_request, costs, response_matcher)
-            .await
+            request.set_timestamp(timestamp);
+            let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
+            let (websocket_request, response_matcher) =
+                match request.clone().try_into_websocket(&self.signer, id) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        self.refund(costs);
+                        return Err(EGError::External(Box::new(error)));
+                    }
+                };
+            let error = match self
+                .send_wait(websocket_request, costs.clone(), response_matcher)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error) => error,
+            };
+            if retries_remaining == 0 || !Self::is_retryable(&error) {
+                return self.on_send_error(error, costs);
+            }
+            retries_remaining -= 1;
+            if !matches!(error, EGError::NotSent(..)) {
+                self.rate_limiters.did_acquire(&costs)?;
+            }
+        }
     }
     async fn send_wait<Response>(
         &self,
@@ -416,9 +478,7 @@ where
             }
         };
         let start = Instant::now();
-        if let Err(error) = self.client.send(message, self.request_timeout).await {
-            return self.on_send_error(error, costs);
-        }
+        self.client.send(message, self.request_timeout).await?;
         let remaining = self.request_timeout.saturating_sub(start.elapsed());
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));

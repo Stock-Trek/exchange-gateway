@@ -209,7 +209,7 @@ where
     }
     pub async fn send_http<Response>(
         &self,
-        request: impl ETHttpRequest<Exchange = Exchange, Response = Response>,
+        request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
     ) -> EGResult<Response>
     where
         Response: ETHttpResponse,
@@ -250,7 +250,7 @@ where
     }
     pub async fn send_websocket<Response>(
         &self,
-        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response>,
+        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
     ) -> EGResult<Response>
     where
         Response: ETWebsocketResponse,
