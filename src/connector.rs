@@ -314,8 +314,7 @@ where
     where
         Response: ETHttpResponse,
     {
-        let body = response.body.clone();
-        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source, body })
+        Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source })
     }
     fn handle_retry_after(&self, response: &HttpResponse) -> EGResult<()> {
         if let Some(retry_after) = retry_after(&response.headers) {

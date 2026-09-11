@@ -79,42 +79,48 @@ where
         if frequency < Duration::from_mins(1) {
             return Err(EGError::InvalidSyncFrequency);
         }
-        let mut resync_handle = self
-            .resync_handle
-            .lock()
-            .map_err(|_| EGError::MutexPoisoned)?;
-        if let Some(handle) = resync_handle.as_ref() {
-            if handle.join.is_finished()
-                || handle
-                    .sender
-                    .send(ClockSyncCommand::SetFrequency(frequency))
-                    .is_err()
-            {
-                *resync_handle = None;
-                return Err(EGError::AutoResyncClockPanicked);
+        let (first_sync_sender, first_sync_receiver) = tokio::sync::oneshot::channel();
+        {
+            let mut resync_handle = self
+                .resync_handle
+                .lock()
+                .map_err(|_| EGError::MutexPoisoned)?;
+            if let Some(handle) = resync_handle.as_ref() {
+                if handle.join.is_finished()
+                    || handle
+                        .sender
+                        .send(ClockSyncCommand::SetFrequency(frequency))
+                        .is_err()
+                {
+                    *resync_handle = None;
+                    return Err(EGError::AutoResyncClockPanicked);
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
-        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let connector = self.connector.clone();
-        let join = tokio::spawn(async move {
-            let mut current = frequency;
-            loop {
-                tokio::select! {
-                    cmd = receiver.recv() => match cmd {
-                        Some(ClockSyncCommand::SetFrequency(new_freq)) => {
-                            current = new_freq;
-                            continue;
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            let connector = self.connector.clone();
+            let join = tokio::spawn(async move {
+                let mut current = frequency;
+                let _ = sync_clock_fn(connector.clone()).await;
+                let _ = first_sync_sender.send(());
+                loop {
+                    tokio::select! {
+                        cmd = receiver.recv() => match cmd {
+                            Some(ClockSyncCommand::SetFrequency(new_freq)) => {
+                                current = new_freq;
+                                continue;
+                            }
+                            Some(ClockSyncCommand::Stop) | None => break,
+                        },
+                        _ = tokio::time::sleep(current) => {
+                            let _ = sync_clock_fn(connector.clone()).await;
                         }
-                        Some(ClockSyncCommand::Stop) | None => break,
-                    },
-                    _ = tokio::time::sleep(current) => {
-                        let _ = sync_clock_fn(connector.clone()).await;
                     }
                 }
-            }
-        });
-        *resync_handle = Some(AutoResyncHandle { sender, join });
+            });
+            *resync_handle = Some(AutoResyncHandle { sender, join });
+        }
+        let _ = first_sync_receiver.await;
         Ok(())
     }
 }
