@@ -209,9 +209,6 @@ where
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.clock.server_time_estimate()
     }
-    pub fn max_retry_attempts(&self) -> u8 {
-        self.max_retry_attempts
-    }
     fn validate_rate_limits<Request>(
         &self,
         request: &Request,
