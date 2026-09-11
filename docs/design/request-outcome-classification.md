@@ -56,7 +56,7 @@ pub enum RequestOutcome {
 }
 ```
 
-Two important observations frame the whole design:
+Three important observations frame the whole design:
 
 - **"Definitely not sent" and "unknown" cannot always be decided from the HTTP
   client's error alone.** `reqwest` exposes `Error::is_connect()`,
@@ -69,6 +69,12 @@ Two important observations frame the whole design:
   placement the only authoritative answer is to reconcile with the exchange
   (e.g. query by client order id). Classification tells the caller *when* to
   reconcile; it cannot tell them the result. This is addressed as Option D.
+- **Whether an unknown outcome is safe to retry depends on the request, not the
+  error.** The `exchange-types` version this crate depends on now exposes
+  `ETRequest::is_idempotent()` (defaulting to `false`), so the connector can
+  attach a retry-safety hint to an unknown outcome without inventing new
+  per-request metadata. Classifying the outcome (Option A) and deciding whether
+  to retry (Option E) stay separate concerns.
 
 ## 3. Audit of current behaviour
 
@@ -310,17 +316,36 @@ recovery path regardless of which of A–C is chosen.
 
 ### Option E — Split by request safety instead of by error
 
+The request metadata this option needs now exists. `exchange-types` provides it
+on the request trait itself, so no new flag or exchange-specific extension is
+required:
+
+```rust
+pub trait ETRequest: Serialize {
+    // ... existing methods ...
+    /// Whether a request whose outcome is unknown is safe to retry.
+    /// Defaults to `false`, so requests are presumed unsafe unless an
+    /// exchange integration opts in.
+    fn is_idempotent(&self) -> bool {
+        false
+    }
+}
+```
+
 Instead of (or in addition to) classifying errors, expose the distinction
-through request metadata: mark requests as *idempotent/safe to retry* or *not
-safe to retry*, and have the connector return a "retryable" classification for
+through this metadata: mark requests as *idempotent/safe to retry* or *not safe
+to retry*, and have the connector return a "retryable" classification for
 `UnknownOutcome`. This makes the actionable decision explicit for callers who do
 not want to reason about transport phases.
 
 - *Pros:* directly supports automatic retry logic; connects the outcome to the
-  request type where safety is actually known.
-- *Cons:* requires the request trait/specs to carry safety metadata (or a
-  per-request flag); does not replace A/B because it does not classify
-  not-sent vs failed.
+  request type where safety is actually known; the trait already carries the
+  metadata (default `false`), so the only work is surfacing it on the outcome —
+  no request-spec or trait changes are needed.
+- *Cons:* the `false` default means read-only requests will be treated as
+  unsafe unless each request overrides it; it does not replace A/B because it
+  does not classify not-sent vs failed, and it says nothing about the
+  late-response problem in Option C.
 
 ## 5. Recommendation
 
@@ -337,8 +362,13 @@ not want to reason about transport phases.
   fit if the caller needs to persist correlation ids for reconciliation.
 - **Document Option D as the operational answer for orders.** Classification
   plus reconciliation is what actually resolves "did the order land?".
-- **Consider Option E as a later ergonomic layer** once the outcome taxonomy is
-  stable.
+- **Surface Option E (`ETRequest::is_idempotent()`) as the retry-safety layer.**
+  Once Option A provides `RequestOutcome::Unknown`, the connector can pair that
+  outcome with the request's `is_idempotent()` value (either as a field on the
+  unknown variant or a companion accessor) so callers can distinguish "unknown
+  and safe to retry" from "unknown and must be reconciled". Because the default
+  is `false`, exchange integrations opt read-only requests in explicitly; this
+  is a recommendation, not an automatic retry.
 
 Option B is the most robust long-term shape but is a semver-major change to
 every call site; it is worth revisiting if callers are found to be
@@ -371,8 +401,14 @@ misclassifying errors in practice.
 7. **Versioning.** Option A is additive; any change that renames `TimedOut` or
    changes the meaning of existing variants is a breaking change even though the
    enum is `#[non_exhaustive]`, and needs a release note.
+8. **Idempotency metadata semantics.** `ETRequest::is_idempotent()` defaults to
+   `false`, so an unannotated request is treated as unsafe to retry. Should the
+   connector expose it as a field on `UnknownOutcome` (e.g.
+   `UnknownOutcome { retryable: bool }`) or as a separate accessor that takes
+   the original request? Either way the transport outcome and the retry decision
+   should remain independent, so callers keep control of reconciliation.
 
-## 7. Implementation touch points (for Options A + C2)
+## 7. Implementation touch points (for Options A + C2 + E)
 
 - `src/error.rs`: add `RequestOutcome`, `UnknownOutcome`, `request_outcome()`
   and the `ResultOutcomeExt` helper.
@@ -387,6 +423,10 @@ misclassifying errors in practice.
   where appropriate; keep the `on_send_error` refund logic refunding on
   `NotSent` only (as it does today) and not on `UnknownOutcome` (the request may
   have consumed weight).
+- `src/connector.rs`: read `Request::is_idempotent()` before the request is
+  consumed by `try_into_http` / `try_into_websocket`, and attach it to any
+  `UnknownOutcome` returned from the send path (Option E). Do not use it to
+  auto-retry or to refund rate-limit weight; it is only a hint for the caller.
 - `src/websocket_listener.rs`: for C2, add a way for a waiter to survive its
   timeout (e.g. an owner-held registration or an explicit `release`/`wait_late`
   path) instead of `Drop` always removing the handler; keep `Drop` as the final
@@ -394,7 +434,9 @@ misclassifying errors in practice.
 - `src/auto_resync_connector.rs`: propagate the new outcome accessor to the
   auto-resync wrapper's `send_http` / `send_websocket`.
 - Tests: unit tests for the `reqwest` error mapping (connect vs timeout vs body),
-  `EGError::request_outcome()` for every variant, and a
+  `EGError::request_outcome()` for every variant, and an `is_idempotent()`
+  propagation test that an unknown outcome from an idempotent request carries
+  the retry hint while a non-idempotent one does not, plus a
   `websocket_listener` test that a late matching message reaches `wait_late`
   after a timeout rather than being dropped.
 
@@ -427,3 +469,9 @@ misclassifying errors in practice.
 - **Semver.** Splitting `TimedOut` and wrapping existing errors changes the
   observable error values even though `EGError` is `#[non_exhaustive]`; call this
   out in the release notes.
+- **Idempotency is not a licence to retry blindly.** `is_idempotent()` describes
+  the request's semantics, not the transport, and defaults to `false`; it says
+  nothing about whether the exchange has capacity, whether a rate-limit budget
+  was already consumed, or whether a retry will race a late response. Treat it
+  as an input to a caller-owned retry policy (bounded attempts, backoff, and
+  reconciliation for non-idempotent requests), not as automatic retry.
