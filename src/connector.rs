@@ -1,5 +1,3 @@
-#[cfg(feature = "auto-resync")]
-use crate::auto_resync_connector::AutoResyncConnector;
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
@@ -33,6 +31,9 @@ use std::{
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
+
+#[cfg(feature = "auto-resync")]
+use crate::auto_resync_connector::AutoResyncConnector;
 
 #[cfg(feature = "iris")]
 use {

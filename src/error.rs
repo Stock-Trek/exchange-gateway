@@ -6,6 +6,7 @@ use exchange_types::{
 pub type EGResult<T> = Result<T, EGError>;
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EGError {
     #[cfg(feature = "auto-resync")]
     #[error("Auto resync clock thread panicked")]
