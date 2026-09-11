@@ -7,6 +7,9 @@ pub enum EGError {
     #[cfg(feature = "auto-resync")]
     #[error("Auto resync clock thread panicked")]
     AutoResyncClockPanicked,
+    #[cfg(feature = "auto-resync")]
+    #[error("Auto resync clock task is no longer running")]
+    AutoResyncClockStopped,
     #[error("Received unrecognised response")]
     BadResponse,
     #[error("A user callback panicked: {0}")]
