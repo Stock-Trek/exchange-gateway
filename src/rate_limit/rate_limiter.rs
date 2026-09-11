@@ -71,27 +71,27 @@ impl RateLimiter {
         }
         Ok(())
     }
-    pub fn set_usage(&self, new_interval_usage: &HashMap<Nanoseconds, RateUsage>) -> EGResult<()> {
+    pub fn set_usage(&self, interval_usage: &HashMap<Nanoseconds, RateUsage>) -> EGResult<()> {
         let mut limiters_guard = self
             .rate_limiters
             .lock()
             .map_err(|_| EGError::MutexPoisoned)?;
-        for (interval_nanos, new_rate_usage) in new_interval_usage {
-            let mut matched = false;
+        for (interval_nanos, rate_usage) in interval_usage {
+            let mut matched_existing = false;
             for limiter in limiters_guard.iter_mut() {
                 if limiter.interval_nanos() == *interval_nanos {
-                    limiter.sync_usage(new_rate_usage.used, new_rate_usage.limit);
-                    matched = true;
+                    limiter.sync_usage(rate_usage.used, rate_usage.limit);
+                    matched_existing = true;
                 }
             }
-            if matched {
+            if matched_existing {
                 continue;
             }
-            let Some(new_limit) = new_rate_usage.limit else {
+            let Some(new_limit) = rate_usage.limit else {
                 continue;
             };
             if let Ok(mut limiter) = RateLimiterState::try_new(*interval_nanos, new_limit) {
-                limiter.sync_usage(new_rate_usage.used, Some(new_limit));
+                limiter.sync_usage(rate_usage.used, Some(new_limit));
                 limiters_guard.push(limiter);
             }
         }
