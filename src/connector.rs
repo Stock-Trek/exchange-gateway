@@ -9,7 +9,7 @@ use crate::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
         rate_limiters::RateLimiters,
     },
-    retry_after::retry_after,
+    retry_after::RetryAfter,
     websocket_listener::WebsocketListener,
 };
 use exchange_types::{
@@ -317,7 +317,7 @@ where
         Response::try_from_http(response).map_err(|source| EGError::HttpParseError { source })
     }
     fn handle_retry_after(&self, response: &HttpResponse) -> EGResult<()> {
-        if let Some(retry_after) = retry_after(&response.headers) {
+        if let Some(retry_after) = RetryAfter::from_headers(&response.headers) {
             let _ = self.rate_limiters.set_retry_after(retry_after);
             return Err(EGError::RateLimited);
         }
