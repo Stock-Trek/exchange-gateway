@@ -296,11 +296,7 @@ where
     where
         Response: ETHttpResponse,
     {
-        let is_idempotent = request.is_idempotent();
-        let costs = self.validate_rate_limits(&request)?;
-        let response = self
-            .send_http_with_retries(request, costs, is_idempotent)
-            .await?;
+        let response = self.send_http_with_retries(request).await?;
         let response = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         Ok(response)
@@ -308,20 +304,21 @@ where
     async fn send_http_with_retries<Request, Response>(
         &self,
         mut request: Request,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
-        is_idempotent: bool,
     ) -> EGResult<HttpResponse>
     where
         Request: ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
         Response: ETHttpResponse,
     {
+        let costs = self.validate_rate_limits(&request)?;
+        let is_idempotent = request.is_idempotent();
+        let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
             self.max_retry_attempts
         } else {
             0
         };
         loop {
-            let timestamp = match if request.is_signed() {
+            let timestamp = match if is_signed {
                 self.clock.server_time_estimate()
             } else {
                 self.clock.server_time_estimate_unchecked()
@@ -427,26 +424,14 @@ where
     }
     pub async fn send_websocket<Response>(
         &self,
-        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
+        mut request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
     ) -> EGResult<Response>
     where
         Response: ETWebsocketResponse,
     {
-        let is_idempotent = request.is_idempotent();
         let costs = self.validate_rate_limits(&request)?;
-        self.send_wait_with_retries(request, costs, is_idempotent)
-            .await
-    }
-    async fn send_wait_with_retries<Request, Response>(
-        &self,
-        mut request: Request,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
-        is_idempotent: bool,
-    ) -> EGResult<Response>
-    where
-        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
-        Response: ETWebsocketResponse,
-    {
+        let is_idempotent = request.is_idempotent();
+        let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
             self.max_retry_attempts
         } else {
@@ -454,7 +439,7 @@ where
         };
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         loop {
-            let timestamp = match if request.is_signed() {
+            let timestamp = match if is_signed {
                 self.clock.server_time_estimate()
             } else {
                 self.clock.server_time_estimate_unchecked()
