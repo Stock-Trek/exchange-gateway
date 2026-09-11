@@ -291,22 +291,9 @@ where
     }
     pub async fn send_http<Response>(
         &self,
-        request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
+        mut request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
     ) -> EGResult<Response>
     where
-        Response: ETHttpResponse,
-    {
-        let response = self.send_http_with_retries(request).await?;
-        let response = Self::parse_http_response(response)?;
-        self.set_rate_limits(&response)?;
-        Ok(response)
-    }
-    async fn send_http_with_retries<Request, Response>(
-        &self,
-        mut request: Request,
-    ) -> EGResult<HttpResponse>
-    where
-        Request: ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
         Response: ETHttpResponse,
     {
         let costs = self.validate_rate_limits(&request)?;
@@ -341,7 +328,11 @@ where
                 Ok(response) => {
                     self.handle_retry_after(&response)?;
                     match self.validate_http_status(response) {
-                        Ok(response) => return Ok(response),
+                        Ok(response) => {
+                            let response = Self::parse_http_response(response)?;
+                            self.set_rate_limits(&response)?;
+                            return Ok(response);
+                        }
                         Err(error) => error,
                     }
                 }
