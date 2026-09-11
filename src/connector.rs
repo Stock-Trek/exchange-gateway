@@ -12,7 +12,7 @@ use crate::{
 };
 use exchange_types::{
     exchange::ETExchange,
-    http::HttpResponse,
+    http::{HttpRequest, HttpResponse},
     new_types::{Milliseconds, UsageCount},
     rate_limited::{RateLimit, RateLimitRestriction},
     request::{ETHttpRequest, ETRequest, ETWebsocketRequest},
@@ -51,6 +51,7 @@ pub struct Connector<Exchange, Client> {
     signer: Signer,
     client: Client,
     request_timeout: Duration,
+    max_retry_attempts: u8,
     websocket_listener: Option<Arc<WebsocketListener>>,
 }
 
@@ -61,6 +62,7 @@ impl Connector<(), ()> {
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, Client>,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, Client>>
     where
         Exchange: ETExchange,
@@ -78,6 +80,7 @@ impl Connector<(), ()> {
             signer,
             client,
             request_timeout,
+            max_retry_attempts,
             websocket_listener: None,
         })
     }
@@ -87,6 +90,7 @@ impl Connector<(), ()> {
         exchange: Exchange,
         signer: Signer,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, ReqwestHttpClient>>
     where
         Exchange: ETExchange,
@@ -98,6 +102,7 @@ impl Connector<(), ()> {
             signer,
             client_creator,
             request_timeout,
+            max_retry_attempts,
         )
     }
     #[allow(clippy::type_complexity)]
@@ -107,6 +112,7 @@ impl Connector<(), ()> {
         signer: Signer,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, Client>>
     where
         Exchange: ETExchange,
@@ -126,6 +132,7 @@ impl Connector<(), ()> {
             signer,
             client,
             request_timeout,
+            max_retry_attempts,
             websocket_listener: Some(websocket_listener),
         })
     }
@@ -137,6 +144,7 @@ impl Connector<(), ()> {
         signer: Signer,
         mut iris_config: IrisConfig,
         request_timeout: Duration,
+        max_retry_attempts: u8,
     ) -> EGResult<Connector<Exchange, IrisWebsocketClient>>
     where
         Exchange: ETExchange,
@@ -158,6 +166,7 @@ impl Connector<(), ()> {
             signer,
             client_creator,
             request_timeout,
+            max_retry_attempts,
         )
     }
     fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> EGResult<RateLimiters> {
@@ -200,6 +209,9 @@ where
     pub fn server_time_estimate(&self) -> EGResult<Milliseconds> {
         self.clock.server_time_estimate()
     }
+    pub fn max_retry_attempts(&self) -> u8 {
+        self.max_retry_attempts
+    }
     fn validate_rate_limits<Request>(
         &self,
         request: &Request,
@@ -230,6 +242,13 @@ where
             self.refund(costs);
         }
         Err(error)
+    }
+    fn is_retryable(error: &EGError) -> bool {
+        match error {
+            EGError::NotSent(_) | EGError::TimedOut | EGError::External(_) => true,
+            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
+            _ => false,
+        }
     }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
@@ -286,6 +305,7 @@ where
             self.clock.server_time_estimate_unchecked()?
         };
         request.set_timestamp(timestamp);
+        let is_idempotent = request.is_idempotent();
         let costs = self.validate_rate_limits(&request)?;
         let http_request = match request.try_into_http(&self.signer) {
             Ok(http_request) => http_request,
@@ -294,15 +314,48 @@ where
                 return Err(EGError::External(Box::new(error)));
             }
         };
-        let response = match self.client.send(http_request, self.request_timeout).await {
-            Ok(response) => response,
-            Err(error) => return self.on_send_error(error, costs),
-        };
-        self.handle_retry_after(&response)?;
-        let response = self.validate_http_status(response)?;
+        let response = self
+            .send_http_with_retries(http_request, costs, is_idempotent)
+            .await?;
         let response = Self::parse_http_response(response)?;
         self.set_rate_limits(&response)?;
         Ok(response)
+    }
+    async fn send_http_with_retries(
+        &self,
+        http_request: HttpRequest,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
+        is_idempotent: bool,
+    ) -> EGResult<HttpResponse> {
+        let mut retries_remaining = if is_idempotent {
+            self.max_retry_attempts
+        } else {
+            0
+        };
+        loop {
+            let error = match self
+                .client
+                .send(http_request.clone(), self.request_timeout)
+                .await
+            {
+                Ok(response) => {
+                    self.handle_retry_after(&response)?;
+                    match self.validate_http_status(response) {
+                        Ok(response) => return Ok(response),
+                        Err(error) => error,
+                    }
+                }
+                Err(error) => error,
+            };
+            if retries_remaining == 0 || !Self::is_retryable(&error) {
+                return self.on_send_error(error, costs);
+            }
+            retries_remaining -= 1;
+            if matches!(error, EGError::NotSent(..)) {
+                self.refund(costs.clone());
+            }
+            self.rate_limiters.did_acquire(&costs)?;
+        }
     }
     fn parse_http_response<Response>(response: HttpResponse) -> EGResult<Response>
     where
@@ -379,6 +432,7 @@ where
             self.clock.server_time_estimate_unchecked()?
         };
         request.set_timestamp(timestamp);
+        let is_idempotent = request.is_idempotent();
         let costs = self.validate_rate_limits(&request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
         let (websocket_request, response_matcher) =
@@ -389,8 +443,30 @@ where
                     return Err(EGError::External(Box::new(error)));
                 }
             };
-        self.send_wait(websocket_request, costs, response_matcher)
-            .await
+        let mut retries_remaining = if is_idempotent {
+            self.max_retry_attempts
+        } else {
+            0
+        };
+        loop {
+            match self
+                .send_wait(
+                    websocket_request.clone(),
+                    costs.clone(),
+                    response_matcher.clone(),
+                )
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if retries_remaining == 0 || !Self::is_retryable(&error) {
+                        return Err(error);
+                    }
+                    retries_remaining -= 1;
+                    self.rate_limiters.did_acquire(&costs)?;
+                }
+            }
+        }
     }
     async fn send_wait<Response>(
         &self,
