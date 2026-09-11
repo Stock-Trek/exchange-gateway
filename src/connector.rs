@@ -55,30 +55,6 @@ pub struct Connector<Exchange, Client> {
     websocket_listener: Option<Arc<WebsocketListener>>,
 }
 
-/// The classification attached to a send error, if it came from a send path.
-fn send_outcome(error: &EGError) -> Option<SendFailure> {
-    match error {
-        EGError::Send {
-            failure: outcome, ..
-        } => Some(*outcome),
-        _ => None,
-    }
-}
-
-/// Whether a failed send is worth retrying. This is only consulted for
-/// idempotent requests, so a "not sent" or "unknown" transport failure is safe
-/// to repeat; a definite failure is only retried for transient HTTP statuses.
-fn is_retryable(error: &EGError) -> bool {
-    let EGError::Send { source, .. } = error else {
-        return false;
-    };
-    match source.as_ref() {
-        EGError::TimedOut | EGError::External(_) => true,
-        EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
-        _ => false,
-    }
-}
-
 impl Connector<(), ()> {
     pub fn try_new_http<Exchange, Client>(
         trading_mode: TradingMode,
@@ -254,12 +230,30 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
+    fn is_retryable(error: &EGError) -> bool {
+        let EGError::Send { source, .. } = error else {
+            return false;
+        };
+        match source.as_ref() {
+            EGError::TimedOut | EGError::External(_) => true,
+            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
+            _ => false,
+        }
+    }
+    fn send_failure(error: &EGError) -> Option<SendFailure> {
+        match error {
+            EGError::Send {
+                failure: outcome, ..
+            } => Some(*outcome),
+            _ => None,
+        }
+    }
     fn on_send_failure(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGError {
-        if send_outcome(&error) == Some(SendFailure::NotSent) {
+        if Self::send_failure(&error) == Some(SendFailure::NotSent) {
             self.refund(costs);
         }
         error
@@ -346,11 +340,11 @@ where
                 },
                 Err(error) => error,
             };
-            if retries_remaining == 0 || !is_retryable(&error) {
+            if retries_remaining == 0 || !Self::is_retryable(&error) {
                 return Err(self.on_send_failure(error, costs));
             }
             retries_remaining -= 1;
-            if send_outcome(&error) != Some(SendFailure::NotSent) {
+            if Self::send_failure(&error) != Some(SendFailure::NotSent) {
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
@@ -463,11 +457,11 @@ where
                 Ok(response) => return Ok(response),
                 Err(error) => error,
             };
-            if retries_remaining == 0 || !is_retryable(&error) {
+            if retries_remaining == 0 || !Self::is_retryable(&error) {
                 return Err(self.on_send_failure(error, costs));
             }
             retries_remaining -= 1;
-            if send_outcome(&error) != Some(SendFailure::NotSent) {
+            if Self::send_failure(&error) != Some(SendFailure::NotSent) {
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
