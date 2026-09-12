@@ -83,7 +83,7 @@ impl HttpClient for ReqwestHttpClient {
         let body = response
             .bytes()
             .await
-            .map_err(|error| EGError::send_unknown_external(error))?
+            .map_err(EGError::send_unknown_external)?
             .to_vec();
         Ok(HttpResponse {
             status: status.as_u16(),

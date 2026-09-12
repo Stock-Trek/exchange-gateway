@@ -297,7 +297,7 @@ where
     {
         let costs = self
             .validate_rate_limits(&request)
-            .map_err(|error| EGError::send_not_sent(error))?;
+            .map_err(EGError::send_not_sent)?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -362,7 +362,7 @@ where
         let response = Response::try_from_http(http_response)
             .map_err(|source| EGError::send_unknown(EGError::HttpParseError { source }))?;
         self.set_rate_limits(&response)
-            .map_err(|error| EGError::send_unknown(error))?;
+            .map_err(EGError::send_unknown)?;
         Ok(response)
     }
 }
@@ -413,7 +413,7 @@ where
     {
         let costs = self
             .validate_rate_limits(&request)
-            .map_err(|error| EGError::send_not_sent(error))?;
+            .map_err(EGError::send_not_sent)?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -482,9 +482,7 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
-            Poll::Ready(result) => {
-                Poll::Ready(result.map_err(|error| EGError::send_unknown(error)))
-            }
+            Poll::Ready(result) => Poll::Ready(result.map_err(EGError::send_unknown)),
             Poll::Pending => match delay.as_mut().poll(cx) {
                 Poll::Ready(()) => Poll::Ready(Err(EGError::send_unknown(EGError::TimedOut))),
                 Poll::Pending => Poll::Pending,
@@ -494,7 +492,7 @@ where
         let response = Response::try_from_websocket(response_value)
             .map_err(|source| EGError::send_unknown(EGError::WebsocketParseError { source }))?;
         self.set_rate_limits(&response)
-            .map_err(|error| EGError::send_unknown_external(error))?;
+            .map_err(EGError::send_unknown)?;
         Ok(response)
     }
 }

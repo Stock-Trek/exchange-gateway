@@ -55,10 +55,7 @@ impl IrisWebsocketClient {
 #[async_trait]
 impl WebsocketClient for IrisWebsocketClient {
     async fn connect(&self) -> EGResult<()> {
-        self.client
-            .connect()
-            .await
-            .map_err(|e| EGError::external(e))
+        self.client.connect().await.map_err(EGError::external)
     }
     fn is_connected(&self) -> bool {
         self.client.is_connected()
@@ -68,10 +65,7 @@ impl WebsocketClient for IrisWebsocketClient {
             .await
     }
     async fn disconnect(&self) -> EGResult<()> {
-        self.client
-            .disconnect()
-            .await
-            .map_err(|e| EGError::external(e))
+        self.client.disconnect().await.map_err(EGError::external)
     }
 }
 
