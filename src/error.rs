@@ -139,7 +139,7 @@ impl EGError {
             }
         )
     }
-    pub fn is_unknown(&self) -> bool {
+    pub fn has_unknown_response(&self) -> bool {
         matches!(
             self,
             EGError::Send {

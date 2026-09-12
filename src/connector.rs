@@ -247,7 +247,7 @@ where
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<SubmissionOutcome<Response>> {
-        if error.is_unknown() {
+        if error.has_unknown_response() {
             Ok(SubmissionOutcome::Indeterminate(id.clone()))
         } else {
             self.on_send_failure(error, costs)
