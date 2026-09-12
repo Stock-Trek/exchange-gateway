@@ -130,4 +130,13 @@ impl EGError {
             _ => false,
         }
     }
+    pub(crate) fn was_not_sent(&self) -> bool {
+        matches!(
+            self,
+            EGError::Send {
+                failure: SendFailure::NotSent,
+                ..
+            }
+        )
+    }
 }

@@ -230,20 +230,12 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
-    fn send_failure(error: &EGError) -> Option<SendFailure> {
-        match error {
-            EGError::Send {
-                failure: outcome, ..
-            } => Some(*outcome),
-            _ => None,
-        }
-    }
     fn on_send_failure(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGError {
-        if Self::send_failure(&error) == Some(SendFailure::NotSent) {
+        if error.was_not_sent() {
             self.refund(costs);
         }
         error
@@ -334,7 +326,7 @@ where
                 return Err(self.on_send_failure(error, costs));
             }
             retries_remaining -= 1;
-            if Self::send_failure(&error) != Some(SendFailure::NotSent) {
+            if error.was_not_sent() {
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
@@ -451,7 +443,7 @@ where
                 return Err(self.on_send_failure(error, costs));
             }
             retries_remaining -= 1;
-            if Self::send_failure(&error) != Some(SendFailure::NotSent) {
+            if error.was_not_sent() {
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
