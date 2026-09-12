@@ -2,14 +2,14 @@ use crate::error::EGResult;
 use std::{fmt, future::Future, pin::Pin};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SubmissionId {
-    Int(i64),
-    Str(String),
-}
+pub struct SubmissionId(String);
 
 impl SubmissionId {
     pub fn new() -> Self {
-        Self::Str(uuid::Uuid::new_v4().to_string())
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -21,10 +21,31 @@ impl Default for SubmissionId {
 
 impl fmt::Display for SubmissionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Int(id) => write!(f, "{id}"),
-            Self::Str(id) => write!(f, "{id}"),
-        }
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for SubmissionId {
+    fn from(id: String) -> Self {
+        Self(id)
+    }
+}
+
+impl From<&str> for SubmissionId {
+    fn from(id: &str) -> Self {
+        Self(id.to_owned())
+    }
+}
+
+impl From<SubmissionId> for String {
+    fn from(id: SubmissionId) -> Self {
+        id.0
+    }
+}
+
+impl AsRef<str> for SubmissionId {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -92,5 +113,14 @@ mod tests {
             SubmissionOutcome::Confirmed(()) => panic!("expected an indeterminate outcome"),
             SubmissionOutcome::Indeterminate(id) => assert_eq!(id, expected),
         }
+    }
+
+    #[test]
+    fn submission_id_is_a_string_new_type() {
+        let id = SubmissionId::from("abc-123".to_owned());
+        assert_eq!(id.as_str(), "abc-123");
+        assert_eq!(id.to_string(), "abc-123");
+        assert_eq!(String::from(id.clone()), "abc-123");
+        assert_eq!(SubmissionId::from("abc-123"), id);
     }
 }
