@@ -19,10 +19,8 @@ ergonomic, and recommends a staged design:
 1. a per-submission id that is stable across internal retries and is exposed to
    the caller;
 2. a `submit`-style API that hands the id back *before* the response is awaited;
-3. a bounded, TTL'd late-response store so a response that arrives after the
-   caller has given up is retained instead of discarded;
-4. an explicit indeterminate outcome that always carries the submission id; and
-5. exchange reconciliation as the way to actually resolve an indeterminate
+3. an explicit indeterminate outcome that always carries the submission id; and
+4. exchange reconciliation as the way to actually resolve an indeterminate
    outcome.
 
 No code changes are made by this task; this is an investigation and design
@@ -109,12 +107,10 @@ execute, and if so, what was the response?* Today they cannot, and the natural
 reaction (retry) can execute a non-idempotent request twice. Any solution must:
 
 1. expose a **submission id** to the caller, including in the error case;
-2. either **retain the late response** for later collection, or make
-   **reconciliation by id** possible;
-3. remain **bounded** in memory and time (a late response may never arrive);
-4. keep the happy path ergonomic — callers who only want the response should not
+2. make **reconciliation by id** possible;
+3. keep the happy path ergonomic — callers who only want the response should not
    pay for the machinery;
-5. work for both transports, without forcing exchange-specific concepts into
+4. work for both transports, without forcing exchange-specific concepts into
    `Connector` (which is generic over `ETExchange`).
 
 ## 4. Requirements
@@ -124,10 +120,9 @@ reaction (retry) can execute a non-idempotent request twice. Any solution must:
 | R1 | A submission id is assigned once per logical request and exposed to the caller. |
 | R2 | The id is stable across internal retries so retries can be idempotent. |
 | R3 | An indeterminate outcome always surfaces the id. |
-| R4 | A late response can be observed, with bounded memory and a TTL. |
-| R5 | Existing `send_*` ergonomics are preserved for the simple case. |
-| R6 | The design stays transport- and exchange-agnostic. |
-| R7 | Rate-limit accounting and refund semantics are unchanged. |
+| R4 | Existing `send_*` ergonomics are preserved for the simple case. |
+| R5 | The design stays transport- and exchange-agnostic. |
+| R6 | Rate-limit accounting and refund semantics are unchanged. |
 
 ## 5. Options
 
@@ -143,7 +138,7 @@ pub struct Submission<Response> {
 
 impl<Response> Submission<Response> {
     pub fn id(&self) -> &SubmissionId;
-    pub async fn wait(self) -> EGResult<Response>;
+    pub async fn wait(self) -> EGResult<SubmissionOutcome<Response>>;
 }
 
 // on Connector:
@@ -157,34 +152,6 @@ pub fn submit_http<Response>(&self, request: impl ETHttpRequest<...> + Clone)
   clock, signing, retries) is inside the returned future, the id cannot be known
   until the loop starts; so the id must be generated eagerly and passed in. The
   handle must also be `Send` and own the retry loop.
-
-### Option C — Bounded late-response store
-
-Keep orphaned responses instead of discarding them. When the caller's wait
-deadline elapses, hand the outstanding waiter to a `LateResponseStore` keyed by
-submission id, with a TTL (e.g. the request timeout, or a configurable grace
-period) and a capacity cap (LRU/FIFO eviction). Provide collection APIs:
-
-```rust
-pub fn take_late_response<Response>(&self, id: &SubmissionId)
-    -> Option<EGResult<Response>>;
-pub fn poll_late_response(...);
-```
-
-plus an optional push callback:
-
-```rust
-pub fn on_late_response<F>(&self, callback: F)
-where F: Fn(&SubmissionId, EGResult<serde_json::Value>) + Send + Sync + 'static;
-```
-
-- Pros: directly solves the "response arrives later" case for WebSocket; the
-  caller can recover the actual response without an exchange round trip.
-- Cons: needs a store, eviction policy, and a decision about the raw-vs-typed
-  response (the store sits at the transport/JSON level, but `take_late_response`
-  wants a typed `Response`, which requires keeping the conversion function
-  alongside the waiter). HTTP requires keeping the request alive in a background
-  task after the caller's deadline (see §6).
 
 ### Option E — Reconciliation by id (query what happened)
 
@@ -216,46 +183,20 @@ pub enum SubmissionOutcome<Response> {
 ```
 
 - Pros: makes the indeterminate state impossible to ignore; always carries the
-  id (R3); definitive failures keep `?` ergonomics; pairs naturally with B/C.
+  id (R3); definitive failures keep `?` ergonomics; pairs naturally with B.
 - Cons: a breaking, more verbose API.
 
-## 6. Transport-specific considerations
+## 6. Comparison
 
-### WebSocket
+| Option | Exposes id up front | Generic | Cost |
+|--------|--------------------|---------|------|
+| B — `submit` handle | yes | yes | medium API change |
+| E — reconcile by id | via B | no (exchange-specific) | high |
+| F — outcome enum | yes | yes | medium breaking |
 
-The machinery already exists and is close to what Option C needs. The waiter is
-registered before the send and removed on drop. To retain late responses we
-would:
+## 7. Recommendation
 
-- split the waiter lifetime from the caller future: when the deadline fires,
-  move the `WaiterForResponse` (or its state) into the store rather than
-  dropping it, and keep the response matcher alive;
-- keep the conversion closure (`Response::try_from_websocket`) with the stored
-  entry so `take_late_response` can return a typed value;
-- evict entries by TTL/capacity.
-
-### HTTP
-
-There is no push channel, so a late HTTP reply can only be observed if the
-request is *not* cancelled. `ReqwestHttpClient::send` cancels when its future is
-dropped. To make Option C work for HTTP, `send_http` would have to run the
-request in a `tokio::spawn`ed task and race the join handle against the
-deadline, keeping the join handle's result for the store on timeout. That adds
-`Send + 'static` bounds and a task per request; alternatively, HTTP callers rely
-on Option E (status query) and the store is WebSocket-only.
-
-## 7. Comparison
-
-| Option | Exposes id up front | Retains late response | Bounded | Generic | Cost |
-|--------|--------------------|-----------------------|---------|--------|------|
-| B — `submit` handle | yes | no | n/a | yes | medium API change |
-| C — late-response store | via B | yes | yes | mostly (HTTP caveat) | high |
-| E — reconcile by id | via B | no | n/a | no (exchange-specific) | high |
-| F — outcome enum | yes | no | n/a | yes | medium breaking |
-
-## 8. Recommendation
-
-Adopt **B + C + F as the core**, with **E** documented as the authoritative
+Adopt **B + F as the core**, with **E** documented as the authoritative
 fallback:
 
 1. **Introduce a `SubmissionId`** in the gateway, wrapping/serialising to
@@ -264,16 +205,11 @@ fallback:
 2. **Add `submit_http` / `submit_websocket`** returning a `Submission<Response>`
    handle that exposes `id()` immediately and is awaitable for the response.
    Keep `send_http` / `send_websocket` as thin convenience wrappers so existing
-   callers are unaffected (R5).
-3. **Add a bounded, TTL'd late-response store** keyed by `SubmissionId`. When a
-   wait deadline elapses, move the outstanding waiter into the store instead of
-   dropping it. Expose `take_late_response`/`poll_late_response` and an optional
-   `on_late_response` callback (R4). Start WebSocket-only; leave the WebSocket
-   path untouched otherwise.
-4. **Return `EGResult<SubmissionOutcome<Response>>`** from the handle's
+   callers are unaffected (R4).
+3. **Return `EGResult<SubmissionOutcome<Response>>`** from the handle's
    `wait()`, so indeterminate outcomes always carry the submission id while
    definitive rejections and not-sent errors stay ordinary `Err` values (R3).
-5. **Document reconciliation by id** as the way to resolve non-idempotent
+4. **Document reconciliation by id** as the way to resolve non-idempotent
    operations whose response was truly lost (E).
 
 This preserves the current happy path while giving a clear, low-ceremony path
@@ -286,48 +222,32 @@ match submission.wait().await {
     Ok(SubmissionOutcome::Confirmed(response)) => { /* confirmed */ }
     Ok(SubmissionOutcome::Indeterminate(id)) => {
         // later, possibly after a reconnect:
-        if let Some(late) = connector.take_late_response::<Response>(&id) { /* ... */ }
-        // or: connector.reconcile(id).await
+        connector.reconcile(id).await
     }
     Err(other) => { /* rejected / NotSent */ }
 }
 ```
 
-## 9. Risks and edge cases
+## 8. Risks and edge cases
 
-- **Race at the deadline**: a response can arrive between the timeout firing and
-  the waiter being moved into the store. The move must be atomic with respect to
-  `WebsocketListener::on_message` (both take the `handlers` lock), or the store
-  must be checked after registration. Mitigation: perform the "retain" under the
-  same lock, or register with the store and the listener as one operation.
-- **Unbounded growth**: a store of never-answered ids leaks memory. Must enforce
-  both a capacity cap with eviction and a TTL sweep.
-- **Typed vs raw responses**: the store must keep the conversion path so
-  `take_late_response` can return `Response`, not just `serde_json::Value`.
 - **Retry id stability**: today the connector regenerates a UUID per attempt and
   on retry; the id must move out of the loop and be assigned once.
-- **Rate-limit accounting**: a late response still carries rate-limit usage and
-  possibly `Retry-After`; the store path must still apply `set_rate_limits`, or
-  capacity accounting drifts. Refund semantics on `Unknown` stay as-is.
+- **Rate-limit accounting**: if a response does arrive before the deadline it
+  still carries rate-limit usage and possibly `Retry-After`, so the normal
+  `set_rate_limits` path must apply. Refund semantics on `Unknown` stay as-is.
 - **Multi-exchange ids**: `ETWebsocketId` is `Int | Str`; expose a
   `SubmissionId` that can represent both and convert losslessly.
-- **Backpressure / cancellation**: dropped `Submission` handles must not leave
-  waiters registered forever; dropping without calling `wait` should still hand
-  ownership to the store (or clean up if the store is full).
-- **HTTP cancellation**: capturing a late HTTP response requires backgrounding
-  the request; document that HTTP recovery is reconciliation-based unless this
-  cost is accepted.
+- **Cancellation**: dropping a `Submission` without calling `wait` must still
+  deregister its waiter; it cannot be left registered forever.
+- **Lost responses**: with no retention, an indeterminate outcome can only be
+  resolved by exchanging the submission id with the venue; callers must treat
+  reconciliation as authoritative and must not blindly retry.
 
-## 10. Open questions
+## 9. Open questions
 
-1. Should the late-response store be opt-in (constructed with a capacity/TTL) or
-   always present with a default? Opt-in keeps zero overhead for callers who do
-   not want it.
-2. Should `send_*` be deprecated in favour of `submit_*`, or kept indefinitely as
+1. Should `send_*` be deprecated in favour of `submit_*`, or kept indefinitely as
    the simple path?
-3. Should `SubmissionOutcome` be the primary return type, or an accessor on the
+2. Should `SubmissionOutcome` be the primary return type, or an accessor on the
    handle (with `wait()` returning `EGResult<Response>` for ergonomics)?
-4. Does `exchange-types` need a generic way to stamp a submission id on HTTP
+3. Does `exchange-types` need a generic way to stamp a submission id on HTTP
    requests, or is that left to each exchange spec?
-5. What is the default grace TTL for a late response, and should it be
-   configurable per connector or per call?
