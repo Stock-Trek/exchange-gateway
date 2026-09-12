@@ -120,7 +120,7 @@ impl EGError {
             source: Box::new(EGError::external(source)),
         }
     }
-    pub(crate) fn is_retryable(&self) -> bool {
+    pub fn is_retryable(&self) -> bool {
         let EGError::Send { source, .. } = self else {
             return false;
         };
@@ -130,7 +130,7 @@ impl EGError {
             _ => false,
         }
     }
-    pub(crate) fn was_not_sent(&self) -> bool {
+    pub fn was_not_sent(&self) -> bool {
         matches!(
             self,
             EGError::Send {
