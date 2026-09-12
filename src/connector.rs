@@ -1,7 +1,7 @@
 use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
-    error::{EGError, EGResult, SendFailure},
+    error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
     rate_limit::{
         rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
