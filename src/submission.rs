@@ -1,5 +1,4 @@
 use crate::error::EGResult;
-use exchange_types::websocket_id::ETWebsocketId;
 use std::{fmt, future::Future, pin::Pin};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -26,21 +25,6 @@ impl fmt::Display for SubmissionId {
             Self::Int(id) => write!(f, "{id}"),
             Self::Str(id) => write!(f, "{id}"),
         }
-    }
-}
-
-impl From<SubmissionId> for ETWebsocketId {
-    fn from(id: SubmissionId) -> Self {
-        match id {
-            SubmissionId::Int(id) => ETWebsocketId::Int(id),
-            SubmissionId::Str(id) => ETWebsocketId::Str(id),
-        }
-    }
-}
-
-impl From<&SubmissionId> for ETWebsocketId {
-    fn from(id: &SubmissionId) -> Self {
-        id.clone().into()
     }
 }
 
@@ -84,18 +68,6 @@ impl<Response> fmt::Debug for Submission<'_, Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn submission_id_converts_to_websocket_id() {
-        assert_eq!(
-            ETWebsocketId::from(SubmissionId::Int(5)),
-            ETWebsocketId::Int(5)
-        );
-        assert_eq!(
-            ETWebsocketId::from(SubmissionId::Str("abc".into())),
-            ETWebsocketId::Str("abc".into())
-        );
-    }
 
     #[tokio::test]
     async fn id_is_available_before_waiting() {

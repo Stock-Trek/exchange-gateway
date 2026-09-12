@@ -449,7 +449,6 @@ where
     where
         Response: ETWebsocketResponse,
     {
-        let websocket_id: ETWebsocketId = id.clone().into();
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -469,9 +468,10 @@ where
                 }
             };
             request.set_timestamp(timestamp);
+            let websocket_id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
             let (websocket_request, response_matcher) = match request
                 .clone()
-                .try_into_websocket(&self.signer, websocket_id.clone())
+                .try_into_websocket(&self.signer, websocket_id)
             {
                 Ok(request) => request,
                 Err(error) => {
