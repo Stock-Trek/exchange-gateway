@@ -293,12 +293,12 @@ where
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
-    pub fn submit_http<'a, Response>(
-        &'a self,
-        request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone + 'a,
-    ) -> EGResult<Submission<'a, Response>>
+    pub fn submit_http<'connector, Response>(
+        &'connector self,
+        request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone + 'connector,
+    ) -> EGResult<Submission<'connector, Response>>
     where
-        Response: ETHttpResponse + 'a,
+        Response: ETHttpResponse + 'connector,
     {
         let costs = self
             .validate_rate_limits(&request)
@@ -426,12 +426,12 @@ where
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
-    pub fn submit_websocket<'a, Response>(
-        &'a self,
-        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone + 'a,
-    ) -> EGResult<Submission<'a, Response>>
+    pub fn submit_websocket<'connector, Response>(
+        &'connector self,
+        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone + 'connector,
+    ) -> EGResult<Submission<'connector, Response>>
     where
-        Response: ETWebsocketResponse + 'a,
+        Response: ETWebsocketResponse + 'connector,
     {
         let costs = self
             .validate_rate_limits(&request)
