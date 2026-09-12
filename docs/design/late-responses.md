@@ -22,8 +22,8 @@ ergonomic, and recommends a staged design:
 3. a bounded, TTL'd late-response store so a response that arrives after the
    caller has given up is retained instead of discarded;
 4. an explicit indeterminate outcome that always carries the submission id; and
-5. stable-id retries / exchange reconciliation as the way to actually resolve an
-   indeterminate outcome.
+5. exchange reconciliation as the way to actually resolve an indeterminate
+   outcome.
 
 No code changes are made by this task; this is an investigation and design
 document.
@@ -131,18 +131,6 @@ reaction (retry) can execute a non-idempotent request twice. Any solution must:
 
 ## 5. Options
 
-### Option A — Carry the submission id on the error only
-
-Add an id field to `EGError::Send` (or a new `EGError::Indeterminate { id, .. }`).
-The caller learns the id when they get `Unknown` and can use it with a new
-reconciliation method.
-
-- Pros: tiny change; no new public types; direct mapping onto the existing
-  `SendFailure::Unknown`.
-- Cons: the id is only available *after* failure; on cancellation (the caller
-  drops the future) there is no error and no id; still no place for the late
-  response to land. Solves naming but not handling.
-
 ### Option B — `submit_*` handle that exposes the id up front
 
 Split the send API so the id is available before awaiting:
@@ -198,27 +186,6 @@ where F: Fn(&SubmissionId, EGResult<serde_json::Value>) + Send + Sync + 'static;
   alongside the waiter). HTTP requires keeping the request alive in a background
   task after the caller's deadline (see §6).
 
-### Option D — Stable caller-supplied ids + idempotent retry
-
-Allow the caller to supply the submission id and have both internal retries and
-caller-initiated retries reuse it:
-
-```rust
-pub struct SendOptions {
-    pub submission_id: Option<SubmissionId>,
-    // ...
-}
-```
-
-On `Unknown`, the caller retries with the *same* id. If the exchange dedupes by
-submission id (e.g. a client order id), the retry is safe.
-
-- Pros: turns an indeterminate request into a safely retryable one; lean, no new
-  background state; composes with A/B.
-- Cons: only as good as the exchange's dedupe support; the gateway cannot
-  guarantee it generically. Requires `exchange-types` to expose a way to stamp an
-  id on HTTP requests (today only WebSocket requests take an `ETWebsocketId`).
-
 ### Option E — Reconciliation by id (query what happened)
 
 After `Unknown`, the caller queries the exchange for the status of the
@@ -232,33 +199,25 @@ generic hook, but the actual query is exchange-specific.
 
 ### Option F — Explicit outcome enum
 
-Replace the "response or error" return with an explicit three/four-way outcome:
+Replace the "response or error" return with an explicit two-way outcome, leaving
+definitive failures as ordinary `Err` values and wrapping the whole thing in
+`EGResult`:
 
 ```rust
 pub enum SubmissionOutcome<Response> {
     Confirmed(Response),
-    Rejected(EGError),               // exchange definitively rejected
-    NotSent(EGError),                // never reached the exchange
-    Indeterminate(SubmissionId),     // unknown; reconcile or retry by id
+    Indeterminate(SubmissionId),     // unknown; reconcile by id
 }
+
+// callers receive EGResult<SubmissionOutcome<Response>>:
+//   Ok(Confirmed(response))   -> exchange definitively accepted
+//   Ok(Indeterminate(id))     -> outcome unknown; reconcile by id
+//   Err(EGError::Send { .. }) -> definitively rejected or never sent
 ```
 
-- Pros: makes the missing state impossible to ignore; always carries the id
-  (R3); pairs naturally with B/C/D.
-- Cons: a breaking, more verbose API; returning errors as values loses `?`
-  ergonomics unless a convenience `into_result()` is offered.
-
-### Option G — Keep waiters alive after caller timeout (no separate store)
-
-Instead of a store, change the timeout semantics: the caller's `send_*` keeps
-the waiter registered for a grace period and only then abandons it, delivering a
-late response to a callback if one is registered. This is a variant of C with
-lifetime tied to the caller's future rather than a central registry.
-
-- Pros: no global store; lifetime is scoped.
-- Cons: the caller has already been told the request failed; coupling the
-  handler lifetime to a dropped future is awkward, and the grace period is hard
-  to express ergonomically.
+- Pros: makes the indeterminate state impossible to ignore; always carries the
+  id (R3); definitive failures keep `?` ergonomics; pairs naturally with B/C.
+- Cons: a breaking, more verbose API.
 
 ## 6. Transport-specific considerations
 
@@ -283,23 +242,21 @@ dropped. To make Option C work for HTTP, `send_http` would have to run the
 request in a `tokio::spawn`ed task and race the join handle against the
 deadline, keeping the join handle's result for the store on timeout. That adds
 `Send + 'static` bounds and a task per request; alternatively, HTTP callers rely
-on Option D/E (safe retry or status query) and the store is WebSocket-only.
+on Option E (status query) and the store is WebSocket-only.
 
 ## 7. Comparison
 
 | Option | Exposes id up front | Retains late response | Bounded | Generic | Cost |
 |--------|--------------------|-----------------------|---------|--------|------|
-| A — id on error | no | no | n/a | yes | trivial |
 | B — `submit` handle | yes | no | n/a | yes | medium API change |
 | C — late-response store | via B | yes | yes | mostly (HTTP caveat) | high |
-| D — stable-id retry | via B/A | no | n/a | exchange-dependent | medium |
-| E — reconcile by id | via B/A | no | n/a | no (exchange-specific) | high |
+| E — reconcile by id | via B | no | n/a | no (exchange-specific) | high |
 | F — outcome enum | yes | no | n/a | yes | medium breaking |
 
 ## 8. Recommendation
 
-Adopt **A + B + C + F as the core**, with **D** as an opt-in and **E** documented
-as the authoritative fallback:
+Adopt **B + C + F as the core**, with **E** documented as the authoritative
+fallback:
 
 1. **Introduce a `SubmissionId`** in the gateway, wrapping/serialising to
    `ETWebsocketId` where needed. Generate it once per logical submission and
@@ -313,12 +270,11 @@ as the authoritative fallback:
    dropping it. Expose `take_late_response`/`poll_late_response` and an optional
    `on_late_response` callback (R4). Start WebSocket-only; leave the WebSocket
    path untouched otherwise.
-4. **Add the id to indeterminate errors** (`SendFailure::Unknown`) and/or expose
-   the explicit `SubmissionOutcome<Response>` from the handle, so no caller can
-   observe `Unknown` without the id (R3).
-5. **Allow caller-supplied ids and stable-id retries** (`SendOptions`) for
-   exchanges that dedupe, and document reconciliation by id as the way to
-   resolve non-idempotent operations (R2/D/E).
+4. **Return `EGResult<SubmissionOutcome<Response>>`** from the handle's
+   `wait()`, so indeterminate outcomes always carry the submission id while
+   definitive rejections and not-sent errors stay ordinary `Err` values (R3).
+5. **Document reconciliation by id** as the way to resolve non-idempotent
+   operations whose response was truly lost (E).
 
 This preserves the current happy path while giving a clear, low-ceremony path
 for the failure case:
@@ -327,14 +283,13 @@ for the failure case:
 let submission = connector.submit_websocket(request)?;
 let id = submission.id().clone();
 match submission.wait().await {
-    Ok(response) => { /* confirmed */ }
-    Err(error) if error.is_unknown() => {
+    Ok(SubmissionOutcome::Confirmed(response)) => { /* confirmed */ }
+    Ok(SubmissionOutcome::Indeterminate(id)) => {
         // later, possibly after a reconnect:
         if let Some(late) = connector.take_late_response::<Response>(&id) { /* ... */ }
-        // or: connector.retry_with_id(request, id).await
         // or: connector.reconcile(id).await
     }
-    Err(other) => { /* NotSent / Failed */ }
+    Err(other) => { /* rejected / NotSent */ }
 }
 ```
 
@@ -351,8 +306,6 @@ match submission.wait().await {
   `take_late_response` can return `Response`, not just `serde_json::Value`.
 - **Retry id stability**: today the connector regenerates a UUID per attempt and
   on retry; the id must move out of the loop and be assigned once.
-- **Duplicate in-flight ids**: caller-supplied ids must be rejected or deduped
-  to avoid two waiters matching one response.
 - **Rate-limit accounting**: a late response still carries rate-limit usage and
   possibly `Retry-After`; the store path must still apply `set_rate_limits`, or
   capacity accounting drifts. Refund semantics on `Unknown` stay as-is.
@@ -362,7 +315,7 @@ match submission.wait().await {
   waiters registered forever; dropping without calling `wait` should still hand
   ownership to the store (or clean up if the store is full).
 - **HTTP cancellation**: capturing a late HTTP response requires backgrounding
-  the request; document that HTTP recovery is retry/reconcile-based unless this
+  the request; document that HTTP recovery is reconciliation-based unless this
   cost is accepted.
 
 ## 10. Open questions
