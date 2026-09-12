@@ -8,6 +8,7 @@ pub mod functions;
 mod panic_guard;
 pub mod rate_limit;
 mod retry_after;
+pub mod submission;
 mod websocket_listener;
 
 pub use async_trait::async_trait;
@@ -20,6 +21,7 @@ pub mod prelude {
     pub use crate::{
         connector::Connector,
         error::{EGError, EGResult, SendFailure},
+        submission::{Submission, SubmissionId, SubmissionOutcome},
     };
     pub use exchange_types::urls::TradingMode;
 }

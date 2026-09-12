@@ -139,4 +139,13 @@ impl EGError {
             }
         )
     }
+    pub fn is_unknown(&self) -> bool {
+        matches!(
+            self,
+            EGError::Send {
+                failure: SendFailure::Unknown,
+                ..
+            }
+        )
+    }
 }
