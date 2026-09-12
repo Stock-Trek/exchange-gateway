@@ -345,16 +345,31 @@ where
         if http_response.status == 429 {
             return Err(EGError::send_failed(EGError::RateLimited));
         }
+        let rejection = EGError::rejected_by_exchange_body(&http_response.body);
         if !(200..300).contains(&http_response.status) {
+            let retryable = http_response.status == 408 || http_response.status >= 500;
+            if !retryable && let Some(error) = rejection {
+                return Err(EGError::send_failed(error));
+            }
             return Err(EGError::send_failed(EGError::HttpError {
                 status: http_response.status,
                 body: http_response.body,
             }));
         }
-        let response = Response::try_from_http(http_response)
-            .map_err(|source| EGError::send_unknown(EGError::HttpParseError { source }))?;
+        let response = match Response::try_from_http(http_response) {
+            Ok(response) => response,
+            Err(source) => {
+                return Err(match rejection {
+                    Some(error) => EGError::send_failed(error),
+                    None => EGError::send_unknown(EGError::HttpParseError { source }),
+                });
+            }
+        };
         self.set_rate_limits(&response)
             .map_err(EGError::send_unknown)?;
+        if let Some(error) = rejection {
+            return Err(EGError::send_failed(error));
+        }
         Ok(response)
     }
 }
@@ -479,10 +494,21 @@ where
             },
         })
         .await?;
-        let response = Response::try_from_websocket(response_value)
-            .map_err(|source| EGError::send_unknown(EGError::WebsocketParseError { source }))?;
+        let rejection = EGError::rejected_by_exchange_value(&response_value);
+        let response = match Response::try_from_websocket(response_value) {
+            Ok(response) => response,
+            Err(source) => {
+                return Err(match rejection {
+                    Some(error) => EGError::send_failed(error),
+                    None => EGError::send_unknown(EGError::WebsocketParseError { source }),
+                });
+            }
+        };
         self.set_rate_limits(&response)
             .map_err(EGError::send_unknown)?;
+        if let Some(error) = rejection {
+            return Err(EGError::send_failed(error));
+        }
         Ok(response)
     }
 }

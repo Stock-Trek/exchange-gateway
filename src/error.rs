@@ -58,6 +58,8 @@ pub enum EGError {
     MutexPoisoned,
     #[error("Connector is not connected")]
     NotConnected,
+    #[error("Exchange rejected the request with code {code}: {message}")]
+    RejectedByExchange { code: i64, message: String },
     #[error("{source}")]
     Send {
         failure: SendFailure,
@@ -119,6 +121,21 @@ impl EGError {
             failure: SendFailure::Unknown,
             source: Box::new(EGError::external(source)),
         }
+    }
+    pub(crate) fn rejected_by_exchange_body(body: &[u8]) -> Option<Self> {
+        Self::rejected_by_exchange_value(&serde_json::from_slice(body).ok()?)
+    }
+    pub(crate) fn rejected_by_exchange_value(value: &serde_json::Value) -> Option<Self> {
+        let error = value.get("error").unwrap_or(value);
+        let code = error.get("code")?.as_i64()?;
+        let message = error
+            .get("msg")
+            .or_else(|| error.get("message"))?
+            .as_str()?;
+        Some(EGError::RejectedByExchange {
+            code,
+            message: message.to_owned(),
+        })
     }
     pub fn is_retryable(&self) -> bool {
         let EGError::Send { source, .. } = self else {
