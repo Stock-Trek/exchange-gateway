@@ -5,6 +5,14 @@ use exchange_types::{
 
 pub type EGResult<T> = Result<T, EGError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SendFailure {
+    Failed,
+    NotSent,
+    Unknown,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum EGError {
@@ -50,8 +58,12 @@ pub enum EGError {
     MutexPoisoned,
     #[error("Connector is not connected")]
     NotConnected,
-    #[error("The request was not sent: {0}")]
-    NotSent(Box<EGError>),
+    #[error("{source}")]
+    Send {
+        failure: SendFailure,
+        #[source]
+        source: Box<EGError>,
+    },
     #[error("Rate limit exceeded")]
     RateLimited,
     #[error("The system time is before the UNIX epoch")]
@@ -68,4 +80,63 @@ pub enum EGError {
     TimedOut,
     #[error("Connector was not initialised with a websocket listener")]
     WebsocketListenerMissing,
+}
+
+impl EGError {
+    pub(crate) fn external(source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        EGError::External(Box::new(source))
+    }
+    pub(crate) fn send_not_sent(source: EGError) -> Self {
+        EGError::Send {
+            failure: SendFailure::NotSent,
+            source: Box::new(source),
+        }
+    }
+    pub(crate) fn send_not_sent_external(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        EGError::Send {
+            failure: SendFailure::NotSent,
+            source: Box::new(EGError::external(source)),
+        }
+    }
+    pub(crate) fn send_failed(source: EGError) -> Self {
+        EGError::Send {
+            failure: SendFailure::Failed,
+            source: Box::new(source),
+        }
+    }
+    pub(crate) fn send_unknown(source: EGError) -> Self {
+        EGError::Send {
+            failure: SendFailure::Unknown,
+            source: Box::new(source),
+        }
+    }
+    pub(crate) fn send_unknown_external(
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        EGError::Send {
+            failure: SendFailure::Unknown,
+            source: Box::new(EGError::external(source)),
+        }
+    }
+    pub(crate) fn is_retryable(&self) -> bool {
+        let EGError::Send { source, .. } = self else {
+            return false;
+        };
+        match source.as_ref() {
+            EGError::TimedOut | EGError::External(_) => true,
+            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
+            _ => false,
+        }
+    }
+    pub(crate) fn was_not_sent(&self) -> bool {
+        matches!(
+            self,
+            EGError::Send {
+                failure: SendFailure::NotSent,
+                ..
+            }
+        )
+    }
 }

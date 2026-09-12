@@ -58,10 +58,15 @@ impl HttpClient for ReqwestHttpClient {
             request_builder = request_builder.body(body);
         }
         let response = request_builder.send().await.map_err(|error| {
-            if error.is_connect() {
-                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+            // A connect error proves the request never reached the wire, so it is
+            // definitely not sent. Everything else (including a timeout after the
+            // connection was established, or a body/decode error) may have reached
+            // the exchange, so the outcome is unknown. `is_connect()` is checked
+            // first because a connect timeout satisfies both predicates.
+            if error.is_connect() || error.is_builder() {
+                EGError::send_not_sent_external(error)
             } else {
-                EGError::External(Box::new(error))
+                EGError::send_unknown_external(error)
             }
         })?;
         let status = response.status();
@@ -78,7 +83,7 @@ impl HttpClient for ReqwestHttpClient {
         let body = response
             .bytes()
             .await
-            .map_err(|e| EGError::External(Box::new(e)))?
+            .map_err(EGError::send_unknown_external)?
             .to_vec();
         Ok(HttpResponse {
             status: status.as_u16(),

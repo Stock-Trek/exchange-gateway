@@ -230,22 +230,15 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
-    fn on_send_error<T>(
+    fn on_send_failure<T>(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<T> {
-        if matches!(&error, EGError::NotSent(..)) {
+        if error.was_not_sent() {
             self.refund(costs);
         }
         Err(error)
-    }
-    fn is_retryable(error: &EGError) -> bool {
-        match error {
-            EGError::NotSent(_) | EGError::TimedOut | EGError::External(_) => true,
-            EGError::HttpError { status, .. } => *status == 408 || *status >= 500,
-            _ => false,
-        }
     }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
@@ -272,13 +265,13 @@ where
             Ok(http_request) => http_request,
             Err(error) => {
                 self.refund(costs);
-                return Err(EGError::External(Box::new(error)));
+                return Err(EGError::external(error));
             }
         };
         let start = Instant::now();
         let http_response = match self.client.send(http_request, self.request_timeout).await {
             Ok(http_response) => http_response,
-            Err(error) => return self.on_send_error(error, costs),
+            Err(error) => return self.on_send_failure(error, costs),
         };
         let round_trip_time = start.elapsed();
         let response =
@@ -294,7 +287,9 @@ where
     where
         Response: ETHttpResponse,
     {
-        let costs = self.validate_rate_limits(&request)?;
+        let costs = self
+            .validate_rate_limits(&request)
+            .map_err(EGError::send_not_sent)?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -310,16 +305,14 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    self.refund(costs);
-                    return Err(error);
+                    return self.on_send_failure(EGError::send_not_sent(error), costs);
                 }
             };
             request.set_timestamp(timestamp);
             let http_request = match request.clone().try_into_http(&self.signer) {
                 Ok(http_request) => http_request,
                 Err(error) => {
-                    self.refund(costs);
-                    return Err(EGError::External(Box::new(error)));
+                    return self.on_send_failure(EGError::send_not_sent_external(error), costs);
                 }
             };
             let error = match self.client.send(http_request, self.request_timeout).await {
@@ -329,11 +322,11 @@ where
                 },
                 Err(error) => error,
             };
-            if retries_remaining == 0 || !Self::is_retryable(&error) {
-                return self.on_send_error(error, costs);
+            if retries_remaining == 0 || !error.is_retryable() {
+                return self.on_send_failure(error, costs);
             }
             retries_remaining -= 1;
-            if !matches!(error, EGError::NotSent(..)) {
+            if error.was_not_sent() {
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
@@ -344,20 +337,24 @@ where
     {
         if let Some(retry_after) = RetryAfter::from_headers(&http_response.headers) {
             let _ = self.rate_limiters.set_retry_after(retry_after);
-            return Err(EGError::RateLimited);
+            // The exchange responded but is throttling us. The request reached the
+            // exchange, so it cannot be reported as not sent; a 2xx carrying a
+            // Retry-After may even have succeeded, so the outcome is unknown.
+            return Err(EGError::send_unknown(EGError::RateLimited));
         }
         if http_response.status == 429 {
-            return Err(EGError::RateLimited);
+            return Err(EGError::send_failed(EGError::RateLimited));
         }
         if !(200..300).contains(&http_response.status) {
-            return Err(EGError::HttpError {
+            return Err(EGError::send_failed(EGError::HttpError {
                 status: http_response.status,
                 body: http_response.body,
-            });
+            }));
         }
         let response = Response::try_from_http(http_response)
-            .map_err(|source| EGError::HttpParseError { source })?;
-        self.set_rate_limits(&response)?;
+            .map_err(|source| EGError::send_unknown(EGError::HttpParseError { source }))?;
+        self.set_rate_limits(&response)
+            .map_err(EGError::send_unknown)?;
         Ok(response)
     }
 }
@@ -385,17 +382,15 @@ where
                 Ok(request) => request,
                 Err(error) => {
                     self.refund(costs);
-                    return Err(EGError::External(Box::new(error)));
+                    return Err(EGError::external(error));
                 }
             };
         let start = Instant::now();
-        let response: Exchange::ServerTimeResponseWebsocket = match self
-            .send_wait(websocket_request, costs.clone(), response_matcher)
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => return self.on_send_error(error, costs),
-        };
+        let response: Exchange::ServerTimeResponseWebsocket =
+            match self.send_wait(websocket_request, response_matcher).await {
+                Ok(response) => response,
+                Err(error) => return self.on_send_failure(error, costs),
+            };
         let round_trip_time = start.elapsed();
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
@@ -408,7 +403,9 @@ where
     where
         Response: ETWebsocketResponse,
     {
-        let costs = self.validate_rate_limits(&request)?;
+        let costs = self
+            .validate_rate_limits(&request)
+            .map_err(EGError::send_not_sent)?;
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent {
@@ -424,8 +421,7 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    self.refund(costs);
-                    return Err(error);
+                    return self.on_send_failure(EGError::send_not_sent(error), costs);
                 }
             };
             request.set_timestamp(timestamp);
@@ -434,22 +430,18 @@ where
                 match request.clone().try_into_websocket(&self.signer, id) {
                     Ok(request) => request,
                     Err(error) => {
-                        self.refund(costs);
-                        return Err(EGError::External(Box::new(error)));
+                        return self.on_send_failure(EGError::send_not_sent_external(error), costs);
                     }
                 };
-            let error = match self
-                .send_wait(websocket_request, costs.clone(), response_matcher)
-                .await
-            {
+            let error = match self.send_wait(websocket_request, response_matcher).await {
                 Ok(response) => return Ok(response),
                 Err(error) => error,
             };
-            if retries_remaining == 0 || !Self::is_retryable(&error) {
-                return self.on_send_error(error, costs);
+            if retries_remaining == 0 || !error.is_retryable() {
+                return self.on_send_failure(error, costs);
             }
             retries_remaining -= 1;
-            if !matches!(error, EGError::NotSent(..)) {
+            if error.was_not_sent() {
                 self.rate_limiters.did_acquire(&costs)?;
             }
         }
@@ -457,7 +449,6 @@ where
     async fn send_wait<Response>(
         &self,
         message: String,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
         response_matcher: Arc<dyn Fn(&serde_json::Value) -> bool + Send + Sync>,
     ) -> EGResult<Response>
     where
@@ -466,15 +457,13 @@ where
         let listener = match self.websocket_listener.as_ref() {
             Some(listener) => listener,
             None => {
-                self.refund(costs);
-                return Err(EGError::WebsocketListenerMissing);
+                return Err(EGError::send_not_sent(EGError::WebsocketListenerMissing));
             }
         };
         let waiter = match listener.waiter_for_filtered_response(response_matcher) {
             Ok(waiter) => waiter,
             Err(error) => {
-                self.refund(costs);
-                return Err(error);
+                return Err(EGError::send_not_sent(error));
             }
         };
         let start = Instant::now();
@@ -483,16 +472,17 @@ where
         let mut waiter = Box::pin(waiter);
         let mut delay = Box::pin(Delay::new(remaining));
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
-            Poll::Ready(result) => Poll::Ready(result),
+            Poll::Ready(result) => Poll::Ready(result.map_err(EGError::send_unknown)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::TimedOut)),
+                Poll::Ready(()) => Poll::Ready(Err(EGError::send_unknown(EGError::TimedOut))),
                 Poll::Pending => Poll::Pending,
             },
         })
         .await?;
         let response = Response::try_from_websocket(response_value)
-            .map_err(|source| EGError::WebsocketParseError { source })?;
-        self.set_rate_limits(&response)?;
+            .map_err(|source| EGError::send_unknown(EGError::WebsocketParseError { source }))?;
+        self.set_rate_limits(&response)
+            .map_err(EGError::send_unknown)?;
         Ok(response)
     }
 }

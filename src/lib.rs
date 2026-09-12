@@ -19,7 +19,7 @@ pub mod prelude {
     pub use crate::auto_resync_connector::AutoResyncConnector;
     pub use crate::{
         connector::Connector,
-        error::{EGError, EGResult},
+        error::{EGError, EGResult, SendFailure},
     };
     pub use exchange_types::urls::TradingMode;
 }

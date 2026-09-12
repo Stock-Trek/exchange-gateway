@@ -36,7 +36,7 @@ impl IrisWebsocketClient {
         poll_fn(move |cx| match send.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.map_err(Self::map_send_error)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::NotSent(Box::new(EGError::TimedOut)))),
+                Poll::Ready(()) => Poll::Ready(Err(EGError::send_not_sent(EGError::TimedOut))),
                 Poll::Pending => Poll::Pending,
             },
         })
@@ -45,9 +45,9 @@ impl IrisWebsocketClient {
     fn map_send_error(error: ConnectionError) -> EGError {
         match error {
             ConnectionError::ConnectionClosed | ConnectionError::SendMessage(_) => {
-                EGError::NotSent(Box::new(EGError::External(Box::new(error))))
+                EGError::send_not_sent_external(error)
             }
-            error => EGError::External(Box::new(error)),
+            error => EGError::send_unknown_external(error),
         }
     }
 }
@@ -55,10 +55,7 @@ impl IrisWebsocketClient {
 #[async_trait]
 impl WebsocketClient for IrisWebsocketClient {
     async fn connect(&self) -> EGResult<()> {
-        self.client
-            .connect()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))
+        self.client.connect().await.map_err(EGError::external)
     }
     fn is_connected(&self) -> bool {
         self.client.is_connected()
@@ -68,10 +65,7 @@ impl WebsocketClient for IrisWebsocketClient {
             .await
     }
     async fn disconnect(&self) -> EGResult<()> {
-        self.client
-            .disconnect()
-            .await
-            .map_err(|e| EGError::External(Box::new(e)))
+        self.client.disconnect().await.map_err(EGError::external)
     }
 }
 
