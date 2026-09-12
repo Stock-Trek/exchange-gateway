@@ -230,15 +230,15 @@ where
             let _ = self.rate_limiters.refund(restriction, cost);
         }
     }
-    fn on_send_failure(
+    fn on_send_failure<T>(
         &self,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGError {
+    ) -> EGResult<T> {
         if error.was_not_sent() {
             self.refund(costs);
         }
-        error
+        Err(error)
     }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
@@ -271,7 +271,7 @@ where
         let start = Instant::now();
         let http_response = match self.client.send(http_request, self.request_timeout).await {
             Ok(http_response) => http_response,
-            Err(error) => return Err(self.on_send_failure(error, costs)),
+            Err(error) => return self.on_send_failure(error, costs),
         };
         let round_trip_time = start.elapsed();
         let response =
@@ -305,14 +305,14 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return Err(self.on_send_failure(EGError::send_not_sent(error), costs));
+                    return self.on_send_failure(EGError::send_not_sent(error), costs);
                 }
             };
             request.set_timestamp(timestamp);
             let http_request = match request.clone().try_into_http(&self.signer) {
                 Ok(http_request) => http_request,
                 Err(error) => {
-                    return Err(self.on_send_failure(EGError::send_not_sent_external(error), costs));
+                    return self.on_send_failure(EGError::send_not_sent_external(error), costs);
                 }
             };
             let error = match self.client.send(http_request, self.request_timeout).await {
@@ -323,7 +323,7 @@ where
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return Err(self.on_send_failure(error, costs));
+                return self.on_send_failure(error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
@@ -389,7 +389,7 @@ where
         let response: Exchange::ServerTimeResponseWebsocket =
             match self.send_wait(websocket_request, response_matcher).await {
                 Ok(response) => response,
-                Err(error) => return Err(self.on_send_failure(error, costs)),
+                Err(error) => return self.on_send_failure(error, costs),
             };
         let round_trip_time = start.elapsed();
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
@@ -421,26 +421,24 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return Err(self.on_send_failure(EGError::send_not_sent(error), costs));
+                    return self.on_send_failure(EGError::send_not_sent(error), costs);
                 }
             };
             request.set_timestamp(timestamp);
             let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
-            let (websocket_request, response_matcher) = match request
-                .clone()
-                .try_into_websocket(&self.signer, id)
-            {
-                Ok(request) => request,
-                Err(error) => {
-                    return Err(self.on_send_failure(EGError::send_not_sent_external(error), costs));
-                }
-            };
+            let (websocket_request, response_matcher) =
+                match request.clone().try_into_websocket(&self.signer, id) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return self.on_send_failure(EGError::send_not_sent_external(error), costs);
+                    }
+                };
             let error = match self.send_wait(websocket_request, response_matcher).await {
                 Ok(response) => return Ok(response),
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return Err(self.on_send_failure(error, costs));
+                return self.on_send_failure(error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
