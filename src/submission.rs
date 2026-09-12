@@ -52,7 +52,7 @@ impl AsRef<str> for SubmissionId {
 #[derive(Debug)]
 pub enum SubmissionOutcome<Response> {
     Confirmed(Response),
-    Indeterminate(SubmissionId),
+    Unknown(SubmissionId),
 }
 
 pub struct Submission<'a, Response> {
