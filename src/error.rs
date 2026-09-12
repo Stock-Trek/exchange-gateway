@@ -139,4 +139,13 @@ impl EGError {
             }
         )
     }
+    pub fn has_unknown_response(&self) -> bool {
+        matches!(
+            self,
+            EGError::Send {
+                failure: SendFailure::Unknown,
+                ..
+            }
+        )
+    }
 }
