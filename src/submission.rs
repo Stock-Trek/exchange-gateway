@@ -1,87 +1,71 @@
 use crate::error::EGResult;
+use exchange_types::request::{ETHttpRequest, ETWebsocketRequest};
 use std::{fmt, future::Future, pin::Pin};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SubmissionId(String);
-
-impl SubmissionId {
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4().to_string())
-    }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for SubmissionId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Display for SubmissionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl From<String> for SubmissionId {
-    fn from(id: String) -> Self {
-        Self(id)
-    }
-}
-
-impl From<&str> for SubmissionId {
-    fn from(id: &str) -> Self {
-        Self(id.to_owned())
-    }
-}
-
-impl From<SubmissionId> for String {
-    fn from(id: SubmissionId) -> Self {
-        id.0
-    }
-}
-
-impl AsRef<str> for SubmissionId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
+/// The outcome of submitting a request to an exchange.
+///
+/// On an [`Unknown`](Self::Unknown) outcome the exchange may or may not have
+/// received and processed the request, so it is not safe to blindly resend it.
+/// Instead the original request is returned so that the caller can derive the
+/// exchange's reconciliation request and query the true state of the
+/// submission.
+///
+/// For convenience, [`SubmissionOutcome::reconciliation_request_http`] and
+/// [`SubmissionOutcome::reconciliation_request_websocket`] will produce the
+/// reconciliation request for an unknown outcome directly.
 #[derive(Debug)]
-pub enum SubmissionOutcome<Response> {
+pub enum SubmissionOutcome<Response, Request> {
+    /// The exchange confirmed the outcome of the request.
     Confirmed(Response),
-    Unknown(SubmissionId),
+    /// The outcome of the request is unknown, so the original request is
+    /// returned to the caller.
+    Unknown(Request),
 }
 
-pub struct Submission<'a, Response> {
-    id: SubmissionId,
-    future: Pin<Box<dyn Future<Output = EGResult<SubmissionOutcome<Response>>> + 'a>>,
+impl<Response, Request: ETHttpRequest> SubmissionOutcome<Response, Request> {
+    /// The HTTP reconciliation request for an unknown outcome, if the exchange
+    /// provides one.
+    pub fn reconciliation_request_http(&self) -> Option<impl ETHttpRequest> {
+        match self {
+            Self::Unknown(request) => request.reconcilation_request_http(),
+            Self::Confirmed(_) => None,
+        }
+    }
 }
 
-impl<'a, Response> Submission<'a, Response> {
+impl<Response, Request: ETWebsocketRequest> SubmissionOutcome<Response, Request> {
+    /// The websocket reconciliation request for an unknown outcome, if the
+    /// exchange provides one.
+    pub fn reconciliation_request_websocket(&self) -> Option<impl ETWebsocketRequest> {
+        match self {
+            Self::Unknown(request) => request.reconcilation_request_websocket(),
+            Self::Confirmed(_) => None,
+        }
+    }
+}
+
+pub struct Submission<'a, Response, Request> {
+    future: BoxedFuture<'a, Response, Request>,
+}
+
+type BoxedFuture<'a, Response, Request> =
+    Pin<Box<dyn Future<Output = EGResult<SubmissionOutcome<Response, Request>>> + 'a>>;
+
+impl<'a, Response, Request> Submission<'a, Response, Request> {
     pub(crate) fn new(
-        id: SubmissionId,
-        future: impl Future<Output = EGResult<SubmissionOutcome<Response>>> + 'a,
+        future: impl Future<Output = EGResult<SubmissionOutcome<Response, Request>>> + 'a,
     ) -> Self {
         Self {
-            id,
             future: Box::pin(future),
         }
     }
-    pub fn id(&self) -> &SubmissionId {
-        &self.id
-    }
-    pub async fn wait(self) -> EGResult<SubmissionOutcome<Response>> {
+    pub async fn wait(self) -> EGResult<SubmissionOutcome<Response, Request>> {
         self.future.await
     }
 }
 
-impl<Response> fmt::Debug for Submission<'_, Response> {
+impl<Response, Request> fmt::Debug for Submission<'_, Response, Request> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Submission")
-            .field("id", &self.id)
-            .finish_non_exhaustive()
+        f.debug_struct("Submission").finish_non_exhaustive()
     }
 }

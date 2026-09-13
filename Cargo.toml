@@ -7,7 +7,7 @@ repository = "https://github.com/Stock-Trek/exchange-gateway"
 
 [dependencies]
 async-trait = "0.1.89"
-exchange-types = { version = "0.10.7", registry = "shipyard" }
+exchange-types = { version = "0.11.0", registry = "shipyard" }
 futures-timer = "3.0"
 httpdate = "1.0.3"
 iris = { version = "1.0.4", registry = "shipyard", optional = true }
