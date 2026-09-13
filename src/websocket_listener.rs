@@ -1,14 +1,12 @@
-#[cfg(feature = "iris")]
-use crate::panic_guard::PanicUtils;
-use crate::{
-    error::{EGError, EGResult},
-    functions::ArcPredicate,
-};
+use crate::error::{EGError, EGResult};
 use std::{
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll, Waker},
 };
+
+#[cfg(feature = "iris")]
+use crate::panic_guard::PanicUtils;
 
 type Handlers = Arc<Mutex<Vec<ResponseHandler>>>;
 
@@ -107,6 +105,8 @@ impl Drop for WaiterForResponse {
         }
     }
 }
+
+type ArcPredicate<T> = Arc<dyn for<'a> Fn(&'a T) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 struct ResponseHandler {

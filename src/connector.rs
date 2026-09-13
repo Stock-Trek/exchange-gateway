@@ -2,7 +2,6 @@ use crate::{
     clients::client::{HttpClient, WebsocketClient},
     clock::Clock,
     error::{EGError, EGResult},
-    functions::BoxTryCreateOnce,
     rate_limit::{
         rate_limiter::RateLimiter,
         rate_limiter_state::RateLimiterState,
@@ -62,7 +61,7 @@ impl Connector<(), ()> {
         trading_mode: TradingMode,
         exchange: Exchange,
         signer: Signer,
-        client_creator: BoxTryCreateOnce<String, Client>,
+        client_creator: impl FnOnce(String) -> EGResult<Client> + Send + Sync,
         request_timeout: Duration,
         max_retries: u8,
     ) -> EGResult<Connector<Exchange, Client>>
@@ -112,7 +111,7 @@ impl Connector<(), ()> {
         trading_mode: TradingMode,
         exchange: Exchange,
         signer: Signer,
-        client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
+        client_creator: impl FnOnce(String, Arc<WebsocketListener>) -> EGResult<Client> + Send + Sync,
         request_timeout: Duration,
         max_retries: u8,
     ) -> EGResult<Connector<Exchange, Client>>
@@ -125,7 +124,7 @@ impl Connector<(), ()> {
             exchange
                 .urls()
                 .env_var_or_default(exchange.name(), Protocol::Websocket, trading_mode);
-        let client = client_creator((url, websocket_listener.clone()))?;
+        let client = client_creator(url, websocket_listener.clone())?;
         let rate_limiters = Self::rate_limiters(exchange.default_capacity())?;
         Ok(Connector {
             exchange,
@@ -154,16 +153,13 @@ impl Connector<(), ()> {
         iris_config = iris_config
             .with_disconnected_behavior(DisconnectedBehavior::DropAllQueued)
             .with_server_close_behavior(ServerCloseBehavior::Reconnect);
-        let client_creator: BoxTryCreateOnce<
-            (String, Arc<WebsocketListener>),
-            IrisWebsocketClient,
-        > = Box::new(move |(url, websocket_listener)| {
+        let client_creator = move |url: String, websocket_listener| {
             Ok(IrisWebsocketClient::with_config(
                 &url,
                 iris_config,
                 websocket_listener,
             ))
-        });
+        };
         Self::try_new_websocket(
             trading_mode,
             exchange,
