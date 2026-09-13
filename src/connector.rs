@@ -245,10 +245,10 @@ where
     }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         self.apply_rate_limits(response);
-        if response.retry_after().is_some() {
-            return Err(EGError::RateLimited);
+        match response.retry_after() {
+            Some(_) => Err(EGError::RateLimited),
+            None => Ok(()),
         }
-        Ok(())
     }
     fn apply_rate_limits(&self, response: &impl ETResponse) {
         if let Some(usage) = response.rate_limit_usage() {
