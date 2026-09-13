@@ -53,7 +53,7 @@ pub struct Connector<Exchange, Client> {
     signer: Signer,
     client: Client,
     request_timeout: Duration,
-    max_retry_attempts: u8,
+    max_retries: u8,
     websocket_listener: Option<Arc<WebsocketListener>>,
 }
 
@@ -64,7 +64,7 @@ impl Connector<(), ()> {
         signer: Signer,
         client_creator: BoxTryCreateOnce<String, Client>,
         request_timeout: Duration,
-        max_retry_attempts: u8,
+        max_retries: u8,
     ) -> EGResult<Connector<Exchange, Client>>
     where
         Exchange: ETExchange,
@@ -82,7 +82,7 @@ impl Connector<(), ()> {
             signer,
             client,
             request_timeout,
-            max_retry_attempts,
+            max_retries,
             websocket_listener: None,
         })
     }
@@ -92,7 +92,7 @@ impl Connector<(), ()> {
         exchange: Exchange,
         signer: Signer,
         request_timeout: Duration,
-        max_retry_attempts: u8,
+        max_retries: u8,
     ) -> EGResult<Connector<Exchange, ReqwestHttpClient>>
     where
         Exchange: ETExchange,
@@ -104,7 +104,7 @@ impl Connector<(), ()> {
             signer,
             client_creator,
             request_timeout,
-            max_retry_attempts,
+            max_retries,
         )
     }
     #[allow(clippy::type_complexity)]
@@ -114,7 +114,7 @@ impl Connector<(), ()> {
         signer: Signer,
         client_creator: BoxTryCreateOnce<(String, Arc<WebsocketListener>), Client>,
         request_timeout: Duration,
-        max_retry_attempts: u8,
+        max_retries: u8,
     ) -> EGResult<Connector<Exchange, Client>>
     where
         Exchange: ETExchange,
@@ -134,7 +134,7 @@ impl Connector<(), ()> {
             signer,
             client,
             request_timeout,
-            max_retry_attempts,
+            max_retries,
             websocket_listener: Some(websocket_listener),
         })
     }
@@ -146,7 +146,7 @@ impl Connector<(), ()> {
         signer: Signer,
         mut iris_config: IrisConfig,
         request_timeout: Duration,
-        max_retry_attempts: u8,
+        max_retries: u8,
     ) -> EGResult<Connector<Exchange, IrisWebsocketClient>>
     where
         Exchange: ETExchange,
@@ -170,7 +170,7 @@ impl Connector<(), ()> {
             signer,
             client_creator,
             request_timeout,
-            max_retry_attempts,
+            max_retries,
         )
     }
     fn rate_limiters(default_capacity: HashMap<RateLimit, UsageCount>) -> EGResult<RateLimiters> {
@@ -320,11 +320,7 @@ where
     {
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
-        let mut retries_remaining = if is_idempotent {
-            self.max_retry_attempts
-        } else {
-            0
-        };
+        let mut retries_remaining = if is_idempotent { self.max_retries } else { 0 };
         loop {
             let timestamp = match if is_signed {
                 self.clock.server_time_estimate()
@@ -492,11 +488,7 @@ where
     {
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
-        let mut retries_remaining = if is_idempotent {
-            self.max_retry_attempts
-        } else {
-            0
-        };
+        let mut retries_remaining = if is_idempotent { self.max_retries } else { 0 };
         loop {
             let timestamp = match if is_signed {
                 self.clock.server_time_estimate()
