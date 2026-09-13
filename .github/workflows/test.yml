@@ -43,8 +43,12 @@ jobs:
       - name: Run checks
         run: |
           cargo fmt --check
-          cargo clippy
-          cargo clippy --features iris
-          cargo clippy --features reqwest
+          cargo clippy --no-default-features
+          cargo clippy --no-default-features --features auto-resync
+          cargo clippy --no-default-features --features iris
+          cargo clippy --no-default-features --features reqwest
+          cargo clippy --no-default-features --features auto-resync,iris
+          cargo clippy --no-default-features --features auto-resync,reqwest
+          cargo clippy --no-default-features --features iris,reqwest
           cargo clippy --all-features
           cargo test
