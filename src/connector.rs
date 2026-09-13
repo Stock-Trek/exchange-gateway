@@ -241,13 +241,12 @@ where
         }
         Err(error)
     }
-    fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
-        self.apply_rate_limits(response)?;
-        match response.retry_after() {
-            Some(_) => Err(EGError::RateLimited),
-            None => Ok(()),
-        }
-    }
+    /// Applies the rate-limit feedback carried by a successfully parsed response.
+    ///
+    /// A response that parses successfully is returned to the caller even when it
+    /// carries a `Retry-After` value, because the throttle is recorded separately
+    /// from the outcome. This keeps a successfully executed order recoverable
+    /// instead of turning it into an unknown outcome.
     fn apply_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
             self.rate_limiters.set_usage(usage)?;
@@ -362,6 +361,14 @@ where
             }
         }
     }
+    /// Maps an HTTP response to its parsed outcome, recording any rate-limit
+    /// feedback along the way.
+    ///
+    /// A `2xx` response carrying a `Retry-After` (header or parsed body) is
+    /// throttled *and* returned: the exchange executed the request, so discarding
+    /// the parsed outcome would make a successful order unrecoverable. Non-`2xx`
+    /// responses carrying a `Retry-After` remain `Unknown`, because the request
+    /// reached the exchange and may have been executed.
     fn handle_http_response<Response>(&self, http_response: HttpResponse) -> EGResult<Response>
     where
         Response: ETHttpResponse,
@@ -380,16 +387,15 @@ where
             }
             return Err(EGError::send_failed(EGError::RateLimited));
         }
-        if let Some(retry_after) = retry_after {
-            self.rate_limiters
-                .set_retry_after(retry_after)
-                .map_err(EGError::send_unknown)?;
-            // The exchange responded but is throttling us. The request reached the
-            // exchange, so it cannot be reported as not sent; a 2xx carrying a
-            // Retry-After may even have succeeded, so the outcome is unknown.
-            return Err(EGError::send_unknown(EGError::RateLimited));
-        }
         if !(200..300).contains(&status) {
+            if let Some(retry_after) = retry_after {
+                self.rate_limiters
+                    .set_retry_after(retry_after)
+                    .map_err(EGError::send_unknown)?;
+                // The exchange responded but is throttling us. The request reached
+                // the exchange, so it cannot be reported as not sent.
+                return Err(EGError::send_unknown(EGError::RateLimited));
+            }
             let error = EGError::HttpError { status };
             return Err(if status >= 500 {
                 EGError::send_unknown(error)
@@ -397,9 +403,14 @@ where
                 EGError::send_failed(error)
             });
         }
+        if let Some(retry_after) = retry_after {
+            self.rate_limiters
+                .set_retry_after(retry_after)
+                .map_err(EGError::send_unknown)?;
+        }
         let response = Response::try_from_http(http_response)
             .map_err(|source| EGError::send_unknown(EGError::HttpParseError { source }))?;
-        self.set_rate_limits(&response)
+        self.apply_rate_limits(&response)
             .map_err(EGError::send_unknown)?;
         Ok(response)
     }
@@ -572,7 +583,7 @@ where
         .await?;
         let response = Response::try_from_websocket(response_value)
             .map_err(|source| EGError::send_unknown(EGError::WebsocketParseError { source }))?;
-        self.set_rate_limits(&response)
+        self.apply_rate_limits(&response)
             .map_err(EGError::send_unknown)?;
         Ok(response)
     }
