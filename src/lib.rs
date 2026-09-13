@@ -21,7 +21,7 @@ pub mod prelude {
     pub use crate::{
         connector::Connector,
         error::{EGError, EGResult, SendFailure},
-        submission::{Submission, SubmissionId, SubmissionOutcome},
+        submission::{Submission, SubmissionOutcome},
     };
     pub use exchange_types::urls::TradingMode;
 }
