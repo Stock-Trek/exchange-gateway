@@ -30,11 +30,8 @@ pub enum EGError {
     ClockNotSynced,
     #[error(transparent)]
     External(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(
-        "HTTP request failed with status {status}: {body}",
-        body = String::from_utf8_lossy(body)
-    )]
-    HttpError { status: u16, body: Vec<u8> },
+    #[error("HTTP request failed with status {status}")]
+    HttpError { status: u16 },
     #[error("Failed to parse HTTP response: {source}")]
     HttpParseError {
         #[source]

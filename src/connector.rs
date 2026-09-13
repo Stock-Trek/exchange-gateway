@@ -390,10 +390,7 @@ where
             return Err(EGError::send_unknown(EGError::RateLimited));
         }
         if !(200..300).contains(&status) {
-            let error = EGError::HttpError {
-                status,
-                body: http_response.body,
-            };
+            let error = EGError::HttpError { status };
             return Err(if status >= 500 {
                 EGError::send_unknown(error)
             } else {
