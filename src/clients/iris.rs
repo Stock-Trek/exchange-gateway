@@ -88,7 +88,7 @@ impl IrisListener<serde_json::Value> for IrisListenerAdapter {
         let _ = match PanicUtils::catch_panic_async(future).await {
             Ok(result) => result,
             Err(payload) => {
-                let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
+                let _ = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
                 Ok(())
             }
         };
