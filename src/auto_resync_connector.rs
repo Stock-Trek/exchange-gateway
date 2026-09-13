@@ -9,7 +9,6 @@ use exchange_types::{
     new_types::{Milliseconds, UsageCount},
     rate_limited::RateLimit,
     request::{ETHttpRequest, ETWebsocketRequest},
-    response::{ETHttpResponse, ETWebsocketResponse},
 };
 use std::{
     collections::HashMap,
@@ -208,13 +207,12 @@ where
         })
         .await
     }
-    pub fn submit_http<'a, Response, Request>(
-        &'a self,
+    pub fn submit_http<'connector, Request>(
+        &'connector self,
         request: Request,
-    ) -> EGResult<Submission<'a, Response, Request>>
+    ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETHttpRequest<Exchange = Exchange, Response = Response> + 'a,
-        Response: ETHttpResponse + 'a,
+        Request: ETHttpRequest<Exchange = Exchange> + 'connector,
     {
         self.connector.submit_http(request)
     }
@@ -250,13 +248,12 @@ where
         })
         .await
     }
-    pub fn submit_websocket<'a, Response, Request>(
-        &'a self,
+    pub fn submit_websocket<'connector, Request>(
+        &'connector self,
         request: Request,
-    ) -> EGResult<Submission<'a, Response, Request>>
+    ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response> + 'a,
-        Response: ETWebsocketResponse + 'a,
+        Request: ETWebsocketRequest<Exchange = Exchange> + 'connector,
     {
         self.connector.submit_websocket(request)
     }

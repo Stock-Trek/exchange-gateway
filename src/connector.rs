@@ -241,18 +241,6 @@ where
         }
         Err(error)
     }
-    fn finish_submission<Response, Request>(
-        &self,
-        request: Request,
-        error: EGError,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<SubmissionOutcome<Response, Request>> {
-        if error.has_unknown_response() {
-            Ok(SubmissionOutcome::Unknown(request))
-        } else {
-            self.on_send_failure(error, costs)
-        }
-    }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
             let _ = self.rate_limiters.set_usage(usage);
@@ -293,13 +281,12 @@ where
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
-    pub fn submit_http<'connector, Response, Request>(
+    pub fn submit_http<'connector, Request>(
         &'connector self,
         request: Request,
-    ) -> EGResult<Submission<'connector, Response, Request>>
+    ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETHttpRequest<Exchange = Exchange, Response = Response> + 'connector,
-        Response: ETHttpResponse + 'connector,
+        Request: ETHttpRequest<Exchange = Exchange> + 'connector,
     {
         let costs = self
             .validate_rate_limits(&request)
@@ -307,14 +294,13 @@ where
         let future = self.send_http(request, costs);
         Ok(Submission::new(future))
     }
-    async fn send_http<Response, Request>(
+    async fn send_http<Request>(
         &self,
         mut request: Request,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<SubmissionOutcome<Response, Request>>
+    ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETHttpRequest<Exchange = Exchange, Response = Response>,
-        Response: ETHttpResponse,
+        Request: ETHttpRequest<Exchange = Exchange>,
     {
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
@@ -331,14 +317,18 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return self.finish_submission(request, EGError::send_not_sent(error), costs);
+                    return self.finish_submission_http(
+                        request,
+                        EGError::send_not_sent(error),
+                        costs,
+                    );
                 }
             };
             request.set_timestamp(timestamp);
             let http_request = match request.clone().try_into_http(&self.signer) {
                 Ok(http_request) => http_request,
                 Err(error) => {
-                    return self.finish_submission(
+                    return self.finish_submission_http(
                         request,
                         EGError::send_not_sent_external(error),
                         costs,
@@ -346,14 +336,14 @@ where
                 }
             };
             let error = match self.client.send(http_request, self.request_timeout).await {
-                Ok(http_response) => match self.handle_http_response::<Response>(http_response) {
+                Ok(http_response) => match self.handle_http_response(http_response) {
                     Ok(response) => return Ok(SubmissionOutcome::Confirmed(response)),
                     Err(error) => error,
                 },
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return self.finish_submission(request, error, costs);
+                return self.finish_submission_http(request, error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
@@ -386,6 +376,27 @@ where
         self.set_rate_limits(&response)
             .map_err(EGError::send_unknown)?;
         Ok(response)
+    }
+    fn finish_submission_http<Request>(
+        &self,
+        request: Request,
+        error: EGError,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
+    ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
+    where
+        Request: ETHttpRequest,
+    {
+        if error.has_unknown_response() {
+            let verify = request.verification_request_http();
+            let retry = if request.is_idempotent() {
+                Some(request)
+            } else {
+                None
+            };
+            Ok(SubmissionOutcome::Unknown { retry, verify })
+        } else {
+            self.on_send_failure(error, costs)
+        }
     }
 }
 
@@ -426,13 +437,12 @@ where
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
-    pub fn submit_websocket<'connector, Response, Request>(
+    pub fn submit_websocket<'connector, Request>(
         &'connector self,
         request: Request,
-    ) -> EGResult<Submission<'connector, Response, Request>>
+    ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response> + 'connector,
-        Response: ETWebsocketResponse + 'connector,
+        Request: ETWebsocketRequest<Exchange = Exchange> + 'connector,
     {
         let costs = self
             .validate_rate_limits(&request)
@@ -440,14 +450,13 @@ where
         let future = self.send_websocket(request, costs);
         Ok(Submission::new(future))
     }
-    async fn send_websocket<Response, Request>(
+    async fn send_websocket<Request>(
         &self,
         mut request: Request,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<SubmissionOutcome<Response, Request>>
+    ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response>,
-        Response: ETWebsocketResponse,
+        Request: ETWebsocketRequest<Exchange = Exchange>,
     {
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
@@ -464,7 +473,11 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return self.finish_submission(request, EGError::send_not_sent(error), costs);
+                    return self.finish_submission_websocket(
+                        request,
+                        EGError::send_not_sent(error),
+                        costs,
+                    );
                 }
             };
             request.set_timestamp(timestamp);
@@ -475,7 +488,7 @@ where
             {
                 Ok(request) => request,
                 Err(error) => {
-                    return self.finish_submission(
+                    return self.finish_submission_websocket(
                         request,
                         EGError::send_not_sent_external(error),
                         costs,
@@ -487,7 +500,7 @@ where
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return self.finish_submission(request, error, costs);
+                return self.finish_submission_websocket(request, error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
@@ -533,6 +546,27 @@ where
         self.set_rate_limits(&response)
             .map_err(EGError::send_unknown)?;
         Ok(response)
+    }
+    fn finish_submission_websocket<Request>(
+        &self,
+        request: Request,
+        error: EGError,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
+    ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
+    where
+        Request: ETWebsocketRequest,
+    {
+        if error.has_unknown_response() {
+            let verify = request.verification_request_websocket();
+            let retry = if request.is_idempotent() {
+                Some(request)
+            } else {
+                None
+            };
+            Ok(SubmissionOutcome::Unknown { retry, verify })
+        } else {
+            self.on_send_failure(error, costs)
+        }
     }
 }
 
