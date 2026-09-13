@@ -1,7 +1,11 @@
 use std::{
     any::Any,
-    future::{Future, poll_fn},
     panic::{AssertUnwindSafe, catch_unwind},
+};
+
+#[cfg(any(feature = "auto-resync", feature = "iris"))]
+use std::{
+    future::{Future, poll_fn},
     task::Poll,
 };
 
@@ -16,6 +20,7 @@ impl PanicUtils {
         catch_unwind(AssertUnwindSafe(f))
     }
     /// Polls `future` to completion, catching any panic raised while it is being polled and returning it as an `Err`
+    #[cfg(any(feature = "auto-resync", feature = "iris"))]
     pub(crate) async fn catch_panic_async<F, T>(future: F) -> Result<T, Box<dyn Any + Send>>
     where
         F: Future<Output = T>,
@@ -29,7 +34,6 @@ impl PanicUtils {
         .await
     }
     /// Renders a panic payload into a human-readable message
-    #[cfg(feature = "iris")]
     pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
         if let Some(message) = payload.downcast_ref::<&str>() {
             (*message).to_string()

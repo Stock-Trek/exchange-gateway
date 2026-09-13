@@ -76,10 +76,9 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
         Fut: Future<Output = EGResult<()>> + Send + 'static,
     {
         let first_sync_result = sync_clock_fn().await;
-        if let Err(error) = &first_sync_result {
-            Self::report_failure(&failure_callback, error);
+        if let Err(Err(error)) = first_sync_sender.send(first_sync_result) {
+            Self::report_failure(&failure_callback, &error);
         }
-        let _ = first_sync_sender.send(first_sync_result);
         let mut last_sync = tokio::time::Instant::now();
         loop {
             let deadline = last_sync + frequency;
@@ -405,12 +404,35 @@ mod tests {
 
         let first_sync_result = first_sync_receiver.await.unwrap();
         assert!(matches!(first_sync_result, Err(EGError::NotConnected)));
+        assert!(failure_receiver.try_recv().is_err());
+
+        tokio::time::advance(Duration::from_mins(30)).await;
         assert_eq!(
             failure_receiver.recv().await.unwrap(),
             EGError::NotConnected.to_string()
         );
 
-        tokio::time::advance(Duration::from_mins(30)).await;
+        join.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn first_sync_failure_is_reported_when_caller_is_gone() {
+        let (_command_sender, command_receiver) = unbounded_channel();
+        let (failure_sender, mut failure_receiver) = unbounded_channel();
+        let failure_callback: SharedClockSyncFailureCallback =
+            Arc::new(Mutex::new(Some(Arc::new(move |error: &EGError| {
+                let _ = failure_sender.send(error.to_string());
+            }))));
+        let (first_sync_sender, first_sync_receiver) = tokio::sync::oneshot::channel();
+        drop(first_sync_receiver);
+        let join = tokio::spawn(AutoResyncConnector::<(), ()>::clock_sync_loop(
+            Duration::from_mins(30),
+            first_sync_sender,
+            command_receiver,
+            failure_callback,
+            || std::future::ready(Err(EGError::NotConnected)),
+        ));
+
         assert_eq!(
             failure_receiver.recv().await.unwrap(),
             EGError::NotConnected.to_string()
