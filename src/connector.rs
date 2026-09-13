@@ -229,10 +229,11 @@ where
         self.rate_limiters.did_acquire(&costs)?;
         Ok(costs)
     }
-    fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) {
+    fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) -> EGResult<()> {
         for (restriction, cost) in costs {
-            let _ = self.rate_limiters.refund(restriction, cost);
+            self.rate_limiters.refund(restriction, cost)?;
         }
+        Ok(())
     }
     fn on_send_failure<T>(
         &self,
@@ -240,25 +241,26 @@ where
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<T> {
         if error.was_not_sent() {
-            self.refund(costs);
+            self.refund(costs)?;
         }
         Err(error)
     }
     fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
-        self.apply_rate_limits(response);
+        self.apply_rate_limits(response)?;
         match response.retry_after() {
             Some(_) => Err(EGError::RateLimited),
             None => Ok(()),
         }
     }
-    fn apply_rate_limits(&self, response: &impl ETResponse) {
+    fn apply_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
         if let Some(usage) = response.rate_limit_usage() {
-            let _ = self.rate_limiters.set_usage(usage);
+            self.rate_limiters.set_usage(usage)?;
         }
         if let Some(retry_after_seconds) = response.retry_after() {
             let retry_after = Duration::from_secs(retry_after_seconds.0.max(0) as u64);
-            let _ = self.rate_limiters.set_retry_after(retry_after);
+            self.rate_limiters.set_retry_after(retry_after)?;
         }
+        Ok(())
     }
 }
 
@@ -273,7 +275,7 @@ where
         let http_request = match server_time_request.try_into_http(&self.signer) {
             Ok(http_request) => http_request,
             Err(error) => {
-                self.refund(costs);
+                self.refund(costs)?;
                 return Err(EGError::external(error));
             }
         };
@@ -368,15 +370,20 @@ where
         let retry_after = RetryAfter::from_headers(&http_response.headers);
         if status == 429 {
             if let Ok(response) = Response::try_from_http(http_response) {
-                self.apply_rate_limits(&response);
+                self.apply_rate_limits(&response)
+                    .map_err(EGError::send_failed)?;
             }
             if let Some(retry_after) = retry_after {
-                let _ = self.rate_limiters.set_retry_after(retry_after);
+                self.rate_limiters
+                    .set_retry_after(retry_after)
+                    .map_err(EGError::send_failed)?;
             }
             return Err(EGError::send_failed(EGError::RateLimited));
         }
         if let Some(retry_after) = retry_after {
-            let _ = self.rate_limiters.set_retry_after(retry_after);
+            self.rate_limiters
+                .set_retry_after(retry_after)
+                .map_err(EGError::send_unknown)?;
             // The exchange responded but is throttling us. The request reached the
             // exchange, so it cannot be reported as not sent; a 2xx carrying a
             // Retry-After may even have succeeded, so the outcome is unknown.
@@ -444,7 +451,7 @@ where
             match server_time_request.try_into_websocket(&self.signer, id) {
                 Ok(request) => request,
                 Err(error) => {
-                    self.refund(costs);
+                    self.refund(costs)?;
                     return Err(EGError::external(error));
                 }
             };
