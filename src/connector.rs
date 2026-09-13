@@ -61,7 +61,7 @@ impl Connector<(), ()> {
         trading_mode: TradingMode,
         exchange: Exchange,
         signer: Signer,
-        client_creator: impl FnOnce(String) -> EGResult<Client> + Send + Sync,
+        client_creator: impl FnOnce(String) -> EGResult<Client>,
         request_timeout: Duration,
         max_retries: u8,
     ) -> EGResult<Connector<Exchange, Client>>
@@ -111,7 +111,7 @@ impl Connector<(), ()> {
         trading_mode: TradingMode,
         exchange: Exchange,
         signer: Signer,
-        client_creator: impl FnOnce(String, Arc<WebsocketListener>) -> EGResult<Client> + Send + Sync,
+        client_creator: impl FnOnce(String, Arc<WebsocketListener>) -> EGResult<Client>,
         request_timeout: Duration,
         max_retries: u8,
     ) -> EGResult<Connector<Exchange, Client>>
