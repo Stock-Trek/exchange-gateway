@@ -498,6 +498,7 @@ dependencies = [
  "strum",
  "thiserror",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

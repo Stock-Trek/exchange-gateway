@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 use strum::IntoEnumIterator;
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub struct RateLimiters {
@@ -53,6 +54,7 @@ impl RateLimiters {
             .map_err(|_| EGError::MutexPoisoned)?;
         for limiter in self.limiters.values() {
             if limiter.is_throttled()? {
+                debug!("rate limiter is throttled, rejecting request");
                 return Err(EGError::RateLimited);
             }
         }
@@ -93,6 +95,10 @@ impl RateLimiters {
         Ok(())
     }
     pub fn set_retry_after(&self, retry_after: Duration) -> EGResult<()> {
+        warn!(
+            ?retry_after,
+            "exchange requested Retry-After, throttling requests"
+        );
         for limiter in self.limiters.values() {
             limiter.throttle(retry_after)?;
         }
