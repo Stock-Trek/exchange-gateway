@@ -17,6 +17,7 @@ pub struct Submission<'connector, Request, Response, VerificationRequest> {
 type BoxedFuture<'connector, Request, Response, VerificationRequest> = Pin<
     Box<
         dyn Future<Output = EGResult<SubmissionOutcome<Request, Response, VerificationRequest>>>
+            + Send
             + 'connector,
     >,
 >;
@@ -27,7 +28,8 @@ impl<'connector, Request, Response, VerificationRequest>
     pub(crate) fn new(
         future: impl Future<
             Output = EGResult<SubmissionOutcome<Request, Response, VerificationRequest>>,
-        > + 'connector,
+        > + Send
+        + 'connector,
     ) -> Self {
         Self {
             future: Box::pin(future),
