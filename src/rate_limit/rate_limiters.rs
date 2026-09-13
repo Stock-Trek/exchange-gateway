@@ -60,7 +60,7 @@ impl RateLimiters {
         for &(restriction, cost) in costs {
             if let Some(limiter) = self.limiters.get(&restriction) {
                 if let Err(error) = limiter.did_acquire(cost) {
-                    self.refund_acquired(&acquired);
+                    self.refund_acquired(&acquired)?;
                     return Err(error);
                 }
                 acquired.push((restriction, cost));
@@ -68,10 +68,11 @@ impl RateLimiters {
         }
         Ok(())
     }
-    fn refund_acquired(&self, acquired: &[(RateLimitRestriction, UsageCount)]) {
+    fn refund_acquired(&self, acquired: &[(RateLimitRestriction, UsageCount)]) -> EGResult<()> {
         for &(restriction, cost) in acquired {
-            let _ = self.refund(restriction, cost);
+            self.refund(restriction, cost)?;
         }
+        Ok(())
     }
     pub fn refund(&self, restriction: RateLimitRestriction, cost: UsageCount) -> EGResult<()> {
         if let Some(limiter) = self.limiters.get(&restriction) {
