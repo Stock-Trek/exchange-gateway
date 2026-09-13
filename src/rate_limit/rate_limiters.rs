@@ -70,11 +70,18 @@ impl RateLimiters {
     }
     fn refund_acquired(&self, acquired: &[(RateLimitRestriction, UsageCount)]) -> EGResult<()> {
         for &(restriction, cost) in acquired {
-            self.refund(restriction, cost)?;
+            self.refund_unlocked(restriction, cost)?;
         }
         Ok(())
     }
     pub fn refund(&self, restriction: RateLimitRestriction, cost: UsageCount) -> EGResult<()> {
+        let _guard = self
+            .acquisition_lock
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?;
+        self.refund_unlocked(restriction, cost)
+    }
+    fn refund_unlocked(&self, restriction: RateLimitRestriction, cost: UsageCount) -> EGResult<()> {
         if let Some(limiter) = self.limiters.get(&restriction) {
             limiter.refund(cost)
         } else {
@@ -185,6 +192,33 @@ mod tests {
             let _guard = RateLimitGuard::new(&rate_limiters, costs);
         }
 
+        assert_eq!(remaining(&rate_limiters), UsageCount(10));
+    }
+
+    #[test]
+    fn partial_acquisition_failure_refunds_without_deadlock() {
+        let raw_requests = RateLimiterState::try_new(Nanoseconds(60_000_000_000), UsageCount(10))
+            .expect("valid rate limiter state");
+        let weight = RateLimiterState::try_new(Nanoseconds(60_000_000_000), UsageCount(2))
+            .expect("valid rate limiter state");
+        let rate_limiters = RateLimiters::new(HashMap::from([
+            (
+                RateLimitRestriction::RawRequests,
+                RateLimiter::new(&[raw_requests]),
+            ),
+            (RateLimitRestriction::Weight, RateLimiter::new(&[weight])),
+        ]));
+
+        let costs = vec![
+            (RateLimitRestriction::RawRequests, UsageCount(5)),
+            (RateLimitRestriction::Weight, UsageCount(5)),
+        ];
+        assert!(matches!(
+            rate_limiters.did_acquire(&costs),
+            Err(EGError::RequestExceedsRateLimit { .. })
+        ));
+
+        // RawRequests was acquired before Weight failed and must be rolled back.
         assert_eq!(remaining(&rate_limiters), UsageCount(10));
     }
 
