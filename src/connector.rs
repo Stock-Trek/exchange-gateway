@@ -8,7 +8,7 @@ use crate::{
         rate_limiters::RateLimiters,
     },
     retry_after::RetryAfter,
-    submission::{Submission, SubmissionId, SubmissionOutcome},
+    submission::{Submission, SubmissionOutcome},
     websocket_listener::WebsocketListener,
 };
 use exchange_types::{
@@ -241,14 +241,14 @@ where
         }
         Err(error)
     }
-    fn finish_submission<Response>(
+    fn finish_submission<Response, Request>(
         &self,
-        id: &SubmissionId,
+        request: Request,
         error: EGError,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<SubmissionOutcome<Response>> {
+    ) -> EGResult<SubmissionOutcome<Response, Request>> {
         if error.has_unknown_response() {
-            Ok(SubmissionOutcome::Unknown(id.clone()))
+            Ok(SubmissionOutcome::Unknown(request))
         } else {
             self.on_send_failure(error, costs)
         }
@@ -293,27 +293,27 @@ where
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
-    pub fn submit_http<'connector, Response>(
+    pub fn submit_http<'connector, Response, Request>(
         &'connector self,
-        request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone + 'connector,
-    ) -> EGResult<Submission<'connector, Response>>
+        request: Request,
+    ) -> EGResult<Submission<'connector, Response, Request>>
     where
+        Request: ETHttpRequest<Exchange = Exchange, Response = Response> + 'connector,
         Response: ETHttpResponse + 'connector,
     {
         let costs = self
             .validate_rate_limits(&request)
             .map_err(EGError::send_not_sent)?;
-        let id = SubmissionId::new();
-        let future = self.send_http(request, id.clone(), costs);
-        Ok(Submission::new(id, future))
+        let future = self.send_http(request, costs);
+        Ok(Submission::new(future))
     }
-    async fn send_http<Response>(
+    async fn send_http<Response, Request>(
         &self,
-        mut request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone,
-        id: SubmissionId,
+        mut request: Request,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<SubmissionOutcome<Response>>
+    ) -> EGResult<SubmissionOutcome<Response, Request>>
     where
+        Request: ETHttpRequest<Exchange = Exchange, Response = Response>,
         Response: ETHttpResponse,
     {
         let is_idempotent = request.is_idempotent();
@@ -331,7 +331,7 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return self.finish_submission(&id, EGError::send_not_sent(error), costs);
+                    return self.finish_submission(request, EGError::send_not_sent(error), costs);
                 }
             };
             request.set_timestamp(timestamp);
@@ -339,7 +339,7 @@ where
                 Ok(http_request) => http_request,
                 Err(error) => {
                     return self.finish_submission(
-                        &id,
+                        request,
                         EGError::send_not_sent_external(error),
                         costs,
                     );
@@ -353,7 +353,7 @@ where
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return self.finish_submission(&id, error, costs);
+                return self.finish_submission(request, error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
@@ -426,27 +426,27 @@ where
         self.clock.sync(server_time, round_trip_time)?;
         Ok(())
     }
-    pub fn submit_websocket<'connector, Response>(
+    pub fn submit_websocket<'connector, Response, Request>(
         &'connector self,
-        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone + 'connector,
-    ) -> EGResult<Submission<'connector, Response>>
+        request: Request,
+    ) -> EGResult<Submission<'connector, Response, Request>>
     where
+        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response> + 'connector,
         Response: ETWebsocketResponse + 'connector,
     {
         let costs = self
             .validate_rate_limits(&request)
             .map_err(EGError::send_not_sent)?;
-        let id = SubmissionId::new();
-        let future = self.send_websocket(request, id.clone(), costs);
-        Ok(Submission::new(id, future))
+        let future = self.send_websocket(request, costs);
+        Ok(Submission::new(future))
     }
-    async fn send_websocket<Response>(
+    async fn send_websocket<Response, Request>(
         &self,
-        mut request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone,
-        id: SubmissionId,
+        mut request: Request,
         costs: Vec<(RateLimitRestriction, UsageCount)>,
-    ) -> EGResult<SubmissionOutcome<Response>>
+    ) -> EGResult<SubmissionOutcome<Response, Request>>
     where
+        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response>,
         Response: ETWebsocketResponse,
     {
         let is_idempotent = request.is_idempotent();
@@ -464,7 +464,7 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return self.finish_submission(&id, EGError::send_not_sent(error), costs);
+                    return self.finish_submission(request, EGError::send_not_sent(error), costs);
                 }
             };
             request.set_timestamp(timestamp);
@@ -476,7 +476,7 @@ where
                 Ok(request) => request,
                 Err(error) => {
                     return self.finish_submission(
-                        &id,
+                        request,
                         EGError::send_not_sent_external(error),
                         costs,
                     );
@@ -487,7 +487,7 @@ where
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return self.finish_submission(&id, error, costs);
+                return self.finish_submission(request, error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {

@@ -208,11 +208,12 @@ where
         })
         .await
     }
-    pub fn submit_http<'a, Response>(
+    pub fn submit_http<'a, Response, Request>(
         &'a self,
-        request: impl ETHttpRequest<Exchange = Exchange, Response = Response> + Clone + 'a,
-    ) -> EGResult<Submission<'a, Response>>
+        request: Request,
+    ) -> EGResult<Submission<'a, Response, Request>>
     where
+        Request: ETHttpRequest<Exchange = Exchange, Response = Response> + 'a,
         Response: ETHttpResponse + 'a,
     {
         self.connector.submit_http(request)
@@ -249,11 +250,12 @@ where
         })
         .await
     }
-    pub fn submit_websocket<'a, Response>(
+    pub fn submit_websocket<'a, Response, Request>(
         &'a self,
-        request: impl ETWebsocketRequest<Exchange = Exchange, Response = Response> + Clone + 'a,
-    ) -> EGResult<Submission<'a, Response>>
+        request: Request,
+    ) -> EGResult<Submission<'a, Response, Request>>
     where
+        Request: ETWebsocketRequest<Exchange = Exchange, Response = Response> + 'a,
         Response: ETWebsocketResponse + 'a,
     {
         self.connector.submit_websocket(request)
