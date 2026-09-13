@@ -89,7 +89,6 @@ impl IrisListener<serde_json::Value> for IrisListenerAdapter {
             Ok(result) => result,
             Err(payload) => {
                 let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
-                eprintln!("Error when calling `on_message`: {}", error);
                 Ok(())
             }
         };
