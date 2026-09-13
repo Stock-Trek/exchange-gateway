@@ -14,7 +14,13 @@ pub struct ReqwestHttpClient {
 
 impl ReqwestHttpClient {
     pub fn new(base_url: &str) -> Self {
-        Self::with_client(base_url.trim_end_matches('/'), reqwest::Client::new())
+        Self::try_new(base_url).expect("failed to build the reqwest HTTP client")
+    }
+    pub fn try_new(base_url: &str) -> EGResult<Self> {
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(EGError::external)?;
+        Ok(Self::with_client(base_url.trim_end_matches('/'), client))
     }
     pub fn with_client(base_url: &str, client: reqwest::Client) -> Self {
         Self {
