@@ -32,6 +32,7 @@ use std::{
     time::{Duration, Instant},
 };
 use strum::IntoEnumIterator;
+use tracing::{debug, warn};
 
 #[cfg(feature = "auto-resync")]
 use crate::auto_resync_connector::AutoResyncConnector;
@@ -259,6 +260,7 @@ where
     Client: HttpClient,
 {
     pub async fn sync_clock_http(&self) -> EGResult<()> {
+        debug!(exchange = self.exchange.name(), "syncing clock over HTTP");
         let server_time_request = self.exchange.server_time_request_http();
         let costs = self.validate_rate_limits(&server_time_request)?;
         let http_request = match server_time_request.try_into_http(&self.signer) {
@@ -278,6 +280,11 @@ where
             self.handle_http_response::<Exchange::ServerTimeResponseHttp>(http_response)?;
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
+        debug!(
+            exchange = self.exchange.name(),
+            round_trip_ms = round_trip_time.as_millis() as u64,
+            "clock synced over HTTP"
+        );
         Ok(())
     }
     pub fn submit_http<'connector, Request>(
@@ -309,6 +316,7 @@ where
         Exchange: Sync,
         Client: Sync,
     {
+        debug!(exchange = self.exchange.name(), "submitting HTTP request");
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent { self.max_retries } else { 0 };
@@ -349,6 +357,12 @@ where
                 return self.submission_error_http(request, error, costs);
             }
             retries_remaining -= 1;
+            warn!(
+                exchange = self.exchange.name(),
+                retries_remaining,
+                error = %error,
+                "HTTP request failed, retrying"
+            );
             match self.validate_rate_limits(&request) {
                 Ok(retry_costs) => costs = retry_costs,
                 Err(_) => return self.submission_error_http(request, error, costs),
@@ -371,9 +385,17 @@ where
                     .set_retry_after(retry_after)
                     .map_err(EGError::send_failed)?;
             }
+            warn!(
+                exchange = self.exchange.name(),
+                status, "exchange rate limited the request"
+            );
             return Err(EGError::send_failed(EGError::RateLimited));
         }
         if !(200..300).contains(&status) {
+            warn!(
+                exchange = self.exchange.name(),
+                status, "HTTP request failed"
+            );
             if let Some(retry_after) = retry_after {
                 self.rate_limiters
                     .set_retry_after(retry_after)
@@ -410,6 +432,11 @@ where
         Request: ETHttpRequest,
     {
         if error.has_unknown_response() {
+            warn!(
+                exchange = self.exchange.name(),
+                error = %error,
+                "request outcome unknown, verification required"
+            );
             let verify = request.verification_request_http();
             let retry = if request.is_idempotent() {
                 Some(request)
@@ -429,15 +456,21 @@ where
     Client: WebsocketClient,
 {
     pub async fn connect(&self) -> EGResult<()> {
+        debug!(exchange = self.exchange.name(), "connecting websocket");
         self.client.connect().await
     }
     pub fn is_connected(&self) -> EGResult<bool> {
         Ok(self.client.is_connected())
     }
     pub async fn disconnect(&self) -> EGResult<()> {
+        debug!(exchange = self.exchange.name(), "disconnecting websocket");
         self.client.disconnect().await
     }
     pub async fn sync_clock_websocket(&self) -> EGResult<()> {
+        debug!(
+            exchange = self.exchange.name(),
+            "syncing clock over websocket"
+        );
         let server_time_request = self.exchange.server_time_request_websocket();
         let costs = self.validate_rate_limits(&server_time_request)?;
         let id = ETWebsocketId::Str(uuid::Uuid::new_v4().to_string());
@@ -458,6 +491,11 @@ where
         let round_trip_time = start.elapsed();
         let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
+        debug!(
+            exchange = self.exchange.name(),
+            round_trip_ms = round_trip_time.as_millis() as u64,
+            "clock synced over websocket"
+        );
         Ok(())
     }
     pub fn submit_websocket<'connector, Request>(
@@ -487,6 +525,10 @@ where
         Request: ETWebsocketRequest<Exchange = Exchange> + Send,
         Exchange: Sync,
     {
+        debug!(
+            exchange = self.exchange.name(),
+            "submitting websocket request"
+        );
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
         let mut retries_remaining = if is_idempotent { self.max_retries } else { 0 };
@@ -528,6 +570,12 @@ where
                 return self.submission_error_websocket(request, error, costs);
             }
             retries_remaining -= 1;
+            warn!(
+                exchange = self.exchange.name(),
+                retries_remaining,
+                error = %error,
+                "websocket request failed, retrying"
+            );
             match self.validate_rate_limits(&request) {
                 Ok(retry_costs) => costs = retry_costs,
                 Err(_) => return self.submission_error_websocket(request, error, costs),
@@ -554,7 +602,9 @@ where
                 return Err(EGError::send_not_sent(error));
             }
         };
+        let exchange = self.exchange.name();
         let start = Instant::now();
+        debug!(exchange, "sending websocket request");
         self.client.send(message, self.request_timeout).await?;
         let remaining = self.request_timeout.saturating_sub(start.elapsed());
         let mut waiter = Box::pin(waiter);
@@ -562,7 +612,10 @@ where
         let response_value = poll_fn(move |cx| match waiter.as_mut().poll(cx) {
             Poll::Ready(result) => Poll::Ready(result.map_err(EGError::send_unknown)),
             Poll::Pending => match delay.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(EGError::send_unknown(EGError::TimedOut))),
+                Poll::Ready(()) => {
+                    warn!(exchange, "websocket request timed out");
+                    Poll::Ready(Err(EGError::send_unknown(EGError::TimedOut)))
+                }
                 Poll::Pending => Poll::Pending,
             },
         })
@@ -583,6 +636,11 @@ where
         Request: ETWebsocketRequest,
     {
         if error.has_unknown_response() {
+            warn!(
+                exchange = self.exchange.name(),
+                error = %error,
+                "request outcome unknown, verification required"
+            );
             let verify = request.verification_request_websocket();
             let retry = if request.is_idempotent() {
                 Some(request)

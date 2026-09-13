@@ -13,6 +13,7 @@ use std::{
     task::Poll,
     time::Duration,
 };
+use tracing::error;
 
 pub struct IrisWebsocketClient {
     client: IrisClient<String, serde_json::Value>,
@@ -88,7 +89,8 @@ impl IrisListener<serde_json::Value> for IrisListenerAdapter {
         let _ = match PanicUtils::catch_panic_async(future).await {
             Ok(result) => result,
             Err(payload) => {
-                let _ = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
+                let error = EGError::CallbackPanicked(PanicUtils::panic_message(payload.as_ref()));
+                error!(error = %error, "websocket on_message callback panicked");
                 Ok(())
             }
         };

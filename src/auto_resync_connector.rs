@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
+use tracing::{debug, warn};
 
 type ClockSyncFailureCallback = Arc<dyn Fn(&EGError) + Send + Sync>;
 type SharedClockSyncFailureCallback = Arc<Mutex<Option<ClockSyncFailureCallback>>>;
@@ -99,6 +100,7 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
     }
 
     fn report_failure(failure_callback: &SharedClockSyncFailureCallback, error: &EGError) {
+        warn!(error = %error, "auto-resync clock sync failed");
         let callback = match failure_callback.lock() {
             Ok(callback) => callback.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -148,6 +150,7 @@ where
             .map_err(|_| EGError::MutexPoisoned)?
             .take();
         let Some(handle) = handle else { return Ok(()) };
+        debug!("stopping auto-resync clock sync");
         let _ = handle.sender.send(ClockSyncCommand::Stop);
         drop(handle.sender); // let the loop drain
         match handle.join.await {
@@ -184,9 +187,11 @@ where
                     *resync_handle = None;
                     return Err(EGError::AutoResyncClockStopped);
                 }
+                debug!(?frequency, "updating auto-resync clock sync frequency");
                 return Ok(());
             }
             let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            debug!(?frequency, "starting auto-resync clock sync");
             let join = tokio::spawn(Self::clock_sync_loop(
                 frequency,
                 first_sync_sender,
