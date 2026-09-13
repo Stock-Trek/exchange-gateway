@@ -40,7 +40,7 @@ enum ClockSyncCommand {
 impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
     async fn clock_sync_loop<F, Fut>(
         frequency: Duration,
-        first_sync_sender: tokio::sync::oneshot::Sender<()>,
+        first_sync_sender: tokio::sync::oneshot::Sender<EGResult<()>>,
         receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
         failure_callback: SharedClockSyncFailureCallback,
         sync_clock_fn: F,
@@ -66,7 +66,7 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
 
     async fn clock_sync_loop_inner<F, Fut>(
         mut frequency: Duration,
-        first_sync_sender: tokio::sync::oneshot::Sender<()>,
+        first_sync_sender: tokio::sync::oneshot::Sender<EGResult<()>>,
         mut receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
         failure_callback: SharedClockSyncFailureCallback,
         sync_clock_fn: F,
@@ -74,10 +74,11 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
         F: Fn() -> Fut + Send + 'static,
         Fut: Future<Output = EGResult<()>> + Send + 'static,
     {
-        if let Err(error) = sync_clock_fn().await {
-            Self::report_failure(&failure_callback, &error);
+        let first_sync_result = sync_clock_fn().await;
+        if let Err(error) = &first_sync_result {
+            Self::report_failure(&failure_callback, error);
         }
-        let _ = first_sync_sender.send(());
+        let _ = first_sync_sender.send(first_sync_result);
         let mut last_sync = tokio::time::Instant::now();
         loop {
             let deadline = last_sync + frequency;
@@ -196,8 +197,10 @@ where
             ));
             *resync_handle = Some(AutoResyncHandle { sender, join });
         }
-        let _ = first_sync_receiver.await;
-        Ok(())
+        match first_sync_receiver.await {
+            Ok(result) => result,
+            Err(_) => Err(EGError::AutoResyncClockPanicked),
+        }
     }
 }
 
@@ -395,7 +398,8 @@ mod tests {
             || std::future::ready(Err(EGError::NotConnected)),
         ));
 
-        first_sync_receiver.await.unwrap();
+        let first_sync_result = first_sync_receiver.await.unwrap();
+        assert!(matches!(first_sync_result, Err(EGError::NotConnected)));
         assert_eq!(
             failure_receiver.recv().await.unwrap(),
             EGError::NotConnected.to_string()
