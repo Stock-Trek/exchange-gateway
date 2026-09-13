@@ -311,7 +311,7 @@ where
     async fn send_http<Request>(
         &self,
         mut request: Request,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
+        mut costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
     where
         Request: ETHttpRequest<Exchange = Exchange> + Send,
@@ -358,6 +358,10 @@ where
                 return self.submission_error_http(request, error, costs);
             }
             retries_remaining -= 1;
+            match self.validate_rate_limits(&request) {
+                Ok(retry_costs) => costs = retry_costs,
+                Err(_) => return self.submission_error_http(request, error, costs),
+            }
         }
     }
     fn handle_http_response<Response>(&self, http_response: HttpResponse) -> EGResult<Response>
@@ -480,7 +484,7 @@ where
     async fn send_websocket<Request>(
         &self,
         mut request: Request,
-        costs: Vec<(RateLimitRestriction, UsageCount)>,
+        mut costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
     where
         Request: ETWebsocketRequest<Exchange = Exchange> + Send,
@@ -527,6 +531,10 @@ where
                 return self.submission_error_websocket(request, error, costs);
             }
             retries_remaining -= 1;
+            match self.validate_rate_limits(&request) {
+                Ok(retry_costs) => costs = retry_costs,
+                Err(_) => return self.submission_error_websocket(request, error, costs),
+            }
         }
     }
     async fn send_wait<Response>(
