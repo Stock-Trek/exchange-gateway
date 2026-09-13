@@ -5,7 +5,6 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-#[cfg(feature = "iris")]
 use crate::panic_guard::PanicUtils;
 
 type Handlers = Arc<Mutex<Vec<ResponseHandler>>>;
@@ -16,13 +15,12 @@ pub struct WebsocketListener {
 }
 
 impl WebsocketListener {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    #[cfg(feature = "iris")]
-    pub(crate) async fn on_message(&self, message: serde_json::Value) -> EGResult<()> {
+    pub async fn on_message(&self, message: serde_json::Value) -> EGResult<()> {
         let handlers = self
             .handlers
             .lock()
@@ -39,7 +37,7 @@ impl WebsocketListener {
         }
         Ok(())
     }
-    pub(crate) fn waiter_for_filtered_response(
+    pub fn waiter_for_filtered_response(
         &self,
         filter: ArcPredicate<serde_json::Value>,
     ) -> EGResult<WaiterForResponse> {
@@ -74,7 +72,7 @@ impl std::fmt::Debug for WebsocketListener {
     }
 }
 
-pub(crate) struct WaiterForResponse {
+pub struct WaiterForResponse {
     state: Arc<Mutex<WaiterState>>,
     handlers: Handlers,
 }
@@ -111,12 +109,10 @@ type ArcPredicate<T> = Arc<dyn for<'a> Fn(&'a T) -> bool + Send + Sync>;
 #[derive(Clone)]
 struct ResponseHandler {
     state: Arc<Mutex<WaiterState>>,
-    #[cfg_attr(not(feature = "iris"), allow(dead_code))]
     filter: ArcPredicate<serde_json::Value>,
 }
 
 impl ResponseHandler {
-    #[cfg(feature = "iris")]
     fn handle(&self, response: &serde_json::Value) -> EGResult<bool> {
         let is_handled = match PanicUtils::catch_panic(|| (self.filter)(response)) {
             Ok(is_handled) => is_handled,
