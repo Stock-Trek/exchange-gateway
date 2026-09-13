@@ -23,16 +23,19 @@ impl WebsocketListener {
         }
     }
     pub(crate) async fn on_message(&self, message: serde_json::Value) -> EGResult<()> {
-        let mut guard = self.handlers.lock().map_err(|_| EGError::MutexPoisoned)?;
-        let mut handler_index = None;
-        for (index, handler) in guard.iter().enumerate() {
+        let handlers = self
+            .handlers
+            .lock()
+            .map_err(|_| EGError::MutexPoisoned)?
+            .clone();
+        for handler in handlers {
             if handler.handle(&message)? {
-                handler_index = Some(index);
+                self.handlers
+                    .lock()
+                    .map_err(|_| EGError::MutexPoisoned)?
+                    .retain(|existing| !Arc::ptr_eq(&existing.state, &handler.state));
                 break;
             }
-        }
-        if let Some(index) = handler_index {
-            guard.swap_remove(index);
         }
         Ok(())
     }
@@ -103,6 +106,7 @@ impl Drop for WaiterForResponse {
     }
 }
 
+#[derive(Clone)]
 struct ResponseHandler {
     state: Arc<Mutex<WaiterState>>,
     filter: ArcPredicate<serde_json::Value>,
@@ -180,5 +184,21 @@ mod tests {
             .unwrap();
         block_on(listener.on_message(serde_json::json!({ "value": 42 }))).unwrap();
         assert_eq!(block_on(fresh).unwrap(), serde_json::json!({ "value": 42 }));
+    }
+
+    #[test]
+    fn filter_callback_does_not_hold_handlers_lock() {
+        let listener = WebsocketListener::new();
+        let lock_was_free = Arc::new(Mutex::new(None));
+        let lock_was_free_in_filter = lock_was_free.clone();
+        let probe = listener.clone();
+        let _waiter = listener
+            .waiter_for_filtered_response(Arc::new(move |_| {
+                *lock_was_free_in_filter.lock().unwrap() = Some(probe.handlers.try_lock().is_ok());
+                true
+            }))
+            .unwrap();
+        block_on(listener.on_message(serde_json::json!({ "value": 42 }))).unwrap();
+        assert_eq!(*lock_was_free.lock().unwrap(), Some(true));
     }
 }
