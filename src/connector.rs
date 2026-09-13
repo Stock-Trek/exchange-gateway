@@ -352,9 +352,6 @@ where
                 return self.submission_error_http(request, error, costs);
             }
             retries_remaining -= 1;
-            if error.was_not_sent() {
-                self.rate_limiters.did_acquire(&costs)?;
-            }
         }
     }
     fn handle_http_response<Response>(&self, http_response: HttpResponse) -> EGResult<Response>
@@ -517,9 +514,6 @@ where
                 return self.submission_error_websocket(request, error, costs);
             }
             retries_remaining -= 1;
-            if error.was_not_sent() {
-                self.rate_limiters.did_acquire(&costs)?;
-            }
         }
     }
     async fn send_wait<Response>(
