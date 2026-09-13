@@ -367,11 +367,17 @@ where
         if http_response.status == 429 {
             return Err(EGError::send_failed(EGError::RateLimited));
         }
-        if !(200..300).contains(&http_response.status) {
-            return Err(EGError::send_failed(EGError::HttpError {
-                status: http_response.status,
+        let status = http_response.status;
+        if !(200..300).contains(&status) {
+            let error = EGError::HttpError {
+                status,
                 body: http_response.body,
-            }));
+            };
+            return Err(if status >= 500 {
+                EGError::send_unknown(error)
+            } else {
+                EGError::send_failed(error)
+            });
         }
         let response = Response::try_from_http(http_response)
             .map_err(|source| EGError::send_unknown(EGError::HttpParseError { source }))?;
