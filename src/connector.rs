@@ -226,12 +226,6 @@ where
         self.rate_limiters.did_acquire(&costs)?;
         Ok(costs)
     }
-    fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) -> EGResult<()> {
-        for (restriction, cost) in costs {
-            self.rate_limiters.refund(restriction, cost)?;
-        }
-        Ok(())
-    }
     fn refund_if_not_sent(
         &self,
         error: &EGError,
@@ -239,6 +233,12 @@ where
     ) -> EGResult<()> {
         if error.was_not_sent() {
             self.refund(std::mem::take(costs))?;
+        }
+        Ok(())
+    }
+    fn refund(&self, costs: Vec<(RateLimitRestriction, UsageCount)>) -> EGResult<()> {
+        for (restriction, cost) in costs {
+            self.rate_limiters.refund(restriction, cost)?;
         }
         Ok(())
     }
