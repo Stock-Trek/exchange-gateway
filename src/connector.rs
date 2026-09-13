@@ -232,6 +232,16 @@ where
         }
         Ok(())
     }
+    fn refund_if_not_sent(
+        &self,
+        error: &EGError,
+        costs: &mut Vec<(RateLimitRestriction, UsageCount)>,
+    ) -> EGResult<()> {
+        if error.was_not_sent() {
+            self.refund(std::mem::take(costs))?;
+        }
+        Ok(())
+    }
     fn on_send_failure<T>(
         &self,
         error: EGError,
@@ -363,6 +373,7 @@ where
                 error = %error,
                 "HTTP request failed, retrying"
             );
+            self.refund_if_not_sent(&error, &mut costs)?;
             match self.validate_rate_limits(&request) {
                 Ok(retry_costs) => costs = retry_costs,
                 Err(_) => return self.submission_error_http(request, error, costs),
@@ -576,6 +587,7 @@ where
                 error = %error,
                 "websocket request failed, retrying"
             );
+            self.refund_if_not_sent(&error, &mut costs)?;
             match self.validate_rate_limits(&request) {
                 Ok(retry_costs) => costs = retry_costs,
                 Err(_) => return self.submission_error_websocket(request, error, costs),
