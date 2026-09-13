@@ -243,6 +243,13 @@ where
         }
         Err(error)
     }
+    fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
+        self.apply_rate_limits(response);
+        if response.retry_after().is_some() {
+            return Err(EGError::RateLimited);
+        }
+        Ok(())
+    }
     fn apply_rate_limits(&self, response: &impl ETResponse) {
         if let Some(usage) = response.rate_limit_usage() {
             let _ = self.rate_limiters.set_usage(usage);
@@ -251,13 +258,6 @@ where
             let retry_after = Duration::from_secs(retry_after_seconds.0.max(0) as u64);
             let _ = self.rate_limiters.set_retry_after(retry_after);
         }
-    }
-    fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
-        self.apply_rate_limits(response);
-        if response.retry_after().is_some() {
-            return Err(EGError::RateLimited);
-        }
-        Ok(())
     }
 }
 
