@@ -2,6 +2,7 @@ use crate::{
     clients::client::{HttpClient, WebsocketClient},
     connector::Connector,
     error::{EGError, EGResult},
+    panic_guard::PanicUtils,
     submission::Submission,
 };
 use exchange_types::{
@@ -38,6 +39,32 @@ enum ClockSyncCommand {
 
 impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
     async fn clock_sync_loop<F, Fut>(
+        frequency: Duration,
+        first_sync_sender: tokio::sync::oneshot::Sender<()>,
+        receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
+        failure_callback: SharedClockSyncFailureCallback,
+        sync_clock_fn: F,
+    ) where
+        F: Fn() -> Fut + Send + 'static,
+        Fut: Future<Output = EGResult<()>> + Send + 'static,
+    {
+        let panic_callback = failure_callback.clone();
+        let result = PanicUtils::catch_panic_async(Self::clock_sync_loop_inner(
+            frequency,
+            first_sync_sender,
+            receiver,
+            failure_callback,
+            sync_clock_fn,
+        ))
+        .await;
+        if let Err(payload) = result {
+            // Surface the panic before letting it propagate so the task never dies silently.
+            Self::report_failure(&panic_callback, &EGError::AutoResyncClockPanicked);
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    async fn clock_sync_loop_inner<F, Fut>(
         mut frequency: Duration,
         first_sync_sender: tokio::sync::oneshot::Sender<()>,
         mut receiver: tokio::sync::mpsc::UnboundedReceiver<ClockSyncCommand>,
@@ -77,7 +104,8 @@ impl<Exchange, Client> AutoResyncConnector<Exchange, Client> {
             Err(poisoned) => poisoned.into_inner().clone(),
         };
         if let Some(callback) = callback.as_ref() {
-            callback(error);
+            // A panicking failure callback must not bring down the task silently.
+            let _ = PanicUtils::catch_panic(|| callback(error));
         }
     }
 }
@@ -380,5 +408,30 @@ mod tests {
         );
 
         join.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn panicking_syncs_are_reported_to_failure_callback() {
+        let (_command_sender, command_receiver) = unbounded_channel();
+        let (failure_sender, mut failure_receiver) = unbounded_channel();
+        let failure_callback: SharedClockSyncFailureCallback =
+            Arc::new(Mutex::new(Some(Arc::new(move |error: &EGError| {
+                let _ = failure_sender.send(error.to_string());
+            }))));
+        let (first_sync_sender, first_sync_receiver) = tokio::sync::oneshot::channel();
+        let join = tokio::spawn(AutoResyncConnector::<(), ()>::clock_sync_loop(
+            Duration::from_mins(30),
+            first_sync_sender,
+            command_receiver,
+            failure_callback,
+            || -> std::future::Ready<EGResult<()>> { panic!("sync clock panicked") },
+        ));
+
+        assert_eq!(
+            failure_receiver.recv().await.unwrap(),
+            EGError::AutoResyncClockPanicked.to_string()
+        );
+        assert!(first_sync_receiver.await.is_err());
+        assert!(join.await.unwrap_err().is_panic());
     }
 }
