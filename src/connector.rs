@@ -96,7 +96,7 @@ impl Connector<(), ()> {
     where
         Exchange: ETExchange,
     {
-        let client_creator = Box::new(move |url: String| Ok(ReqwestHttpClient::new(&url)));
+        let client_creator = Box::new(move |url: String| ReqwestHttpClient::try_new(&url));
         Self::try_new_http(
             trading_mode,
             exchange,
