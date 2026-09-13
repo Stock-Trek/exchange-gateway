@@ -24,7 +24,7 @@ tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
 
 [features]
 default = ["auto-resync", "iris", "reqwest"]
-auto-resync = ["dep:tokio"]
+auto-resync = ["dep:tokio", "tokio/macros", "tokio/sync"]
 iris = ["dep:iris"]
 reqwest = ["dep:reqwest"]
 

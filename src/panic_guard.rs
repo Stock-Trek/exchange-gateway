@@ -29,6 +29,7 @@ impl PanicUtils {
         .await
     }
     /// Renders a panic payload into a human-readable message
+    #[cfg(feature = "iris")]
     pub(crate) fn panic_message(payload: &(dyn Any + Send)) -> String {
         if let Some(message) = payload.downcast_ref::<&str>() {
             (*message).to_string()

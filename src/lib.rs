@@ -5,6 +5,7 @@ mod clock;
 pub mod connector;
 pub mod error;
 pub mod functions;
+#[cfg(any(feature = "auto-resync", feature = "iris"))]
 mod panic_guard;
 pub mod rate_limit;
 mod retry_after;
