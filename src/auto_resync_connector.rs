@@ -212,7 +212,9 @@ where
         request: Request,
     ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETHttpRequest<Exchange = Exchange> + 'connector,
+        Request: ETHttpRequest<Exchange = Exchange> + Send + 'connector,
+        Exchange: Sync,
+        Client: Sync,
     {
         self.connector.submit_http(request)
     }
@@ -253,7 +255,8 @@ where
         request: Request,
     ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETWebsocketRequest<Exchange = Exchange> + 'connector,
+        Request: ETWebsocketRequest<Exchange = Exchange> + Send + 'connector,
+        Exchange: Sync,
     {
         self.connector.submit_websocket(request)
     }

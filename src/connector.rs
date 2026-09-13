@@ -288,7 +288,9 @@ where
         request: Request,
     ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETHttpRequest<Exchange = Exchange> + 'connector,
+        Request: ETHttpRequest<Exchange = Exchange> + Send + 'connector,
+        Exchange: Sync,
+        Client: Sync,
     {
         let costs = self
             .validate_rate_limits(&request)
@@ -302,7 +304,9 @@ where
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETHttpRequest<Exchange = Exchange>,
+        Request: ETHttpRequest<Exchange = Exchange> + Send,
+        Exchange: Sync,
+        Client: Sync,
     {
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
@@ -450,7 +454,8 @@ where
         request: Request,
     ) -> EGResult<Submission<'connector, Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETWebsocketRequest<Exchange = Exchange> + 'connector,
+        Request: ETWebsocketRequest<Exchange = Exchange> + Send + 'connector,
+        Exchange: Sync,
     {
         let costs = self
             .validate_rate_limits(&request)
@@ -464,7 +469,8 @@ where
         costs: Vec<(RateLimitRestriction, UsageCount)>,
     ) -> EGResult<SubmissionOutcome<Request, Request::Response, Request::VerificationRequest>>
     where
-        Request: ETWebsocketRequest<Exchange = Exchange>,
+        Request: ETWebsocketRequest<Exchange = Exchange> + Send,
+        Exchange: Sync,
     {
         let is_idempotent = request.is_idempotent();
         let is_signed = request.is_signed();
