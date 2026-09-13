@@ -351,7 +351,7 @@ where
             };
             let error = match self.client.send(http_request, self.request_timeout).await {
                 Ok(http_response) => match self.handle_http_response(http_response) {
-                    Ok(response) => return Ok(SubmissionOutcome::Confirmed(response)),
+                    Ok(response) => return Ok(SubmissionOutcome::Submitted(response)),
                     Err(error) => error,
                 },
                 Err(error) => error,
@@ -531,7 +531,7 @@ where
                 }
             };
             let error = match self.send_wait(websocket_request, response_matcher).await {
-                Ok(response) => return Ok(SubmissionOutcome::Confirmed(response)),
+                Ok(response) => return Ok(SubmissionOutcome::Submitted(response)),
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {

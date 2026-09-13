@@ -3,7 +3,7 @@ use std::{fmt, future::Future, pin::Pin};
 
 #[derive(Debug)]
 pub enum SubmissionOutcome<Request, Response, VerificationRequest> {
-    Confirmed(Response),
+    Submitted(Response),
     Unknown {
         retry: Option<Request>,
         verify: Option<VerificationRequest>,
