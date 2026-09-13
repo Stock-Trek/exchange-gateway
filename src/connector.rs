@@ -317,7 +317,7 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return self.finish_submission_http(
+                    return self.submission_error_http(
                         request,
                         EGError::send_not_sent(error),
                         costs,
@@ -328,7 +328,7 @@ where
             let http_request = match request.clone().try_into_http(&self.signer) {
                 Ok(http_request) => http_request,
                 Err(error) => {
-                    return self.finish_submission_http(
+                    return self.submission_error_http(
                         request,
                         EGError::send_not_sent_external(error),
                         costs,
@@ -343,7 +343,7 @@ where
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return self.finish_submission_http(request, error, costs);
+                return self.submission_error_http(request, error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
@@ -377,7 +377,7 @@ where
             .map_err(EGError::send_unknown)?;
         Ok(response)
     }
-    fn finish_submission_http<Request>(
+    fn submission_error_http<Request>(
         &self,
         request: Request,
         error: EGError,
@@ -473,7 +473,7 @@ where
             } {
                 Ok(timestamp) => timestamp,
                 Err(error) => {
-                    return self.finish_submission_websocket(
+                    return self.submission_error_websocket(
                         request,
                         EGError::send_not_sent(error),
                         costs,
@@ -488,7 +488,7 @@ where
             {
                 Ok(request) => request,
                 Err(error) => {
-                    return self.finish_submission_websocket(
+                    return self.submission_error_websocket(
                         request,
                         EGError::send_not_sent_external(error),
                         costs,
@@ -500,7 +500,7 @@ where
                 Err(error) => error,
             };
             if retries_remaining == 0 || !error.is_retryable() {
-                return self.finish_submission_websocket(request, error, costs);
+                return self.submission_error_websocket(request, error, costs);
             }
             retries_remaining -= 1;
             if error.was_not_sent() {
@@ -547,7 +547,7 @@ where
             .map_err(EGError::send_unknown)?;
         Ok(response)
     }
-    fn finish_submission_websocket<Request>(
+    fn submission_error_websocket<Request>(
         &self,
         request: Request,
         error: EGError,
