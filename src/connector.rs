@@ -243,13 +243,18 @@ where
         }
         Err(error)
     }
-    fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
+    fn apply_rate_limits(&self, response: &impl ETResponse) {
         if let Some(usage) = response.rate_limit_usage() {
             let _ = self.rate_limiters.set_usage(usage);
         }
         if let Some(retry_after_seconds) = response.retry_after() {
             let retry_after = Duration::from_secs(retry_after_seconds.0.max(0) as u64);
             let _ = self.rate_limiters.set_retry_after(retry_after);
+        }
+    }
+    fn set_rate_limits(&self, response: &impl ETResponse) -> EGResult<()> {
+        self.apply_rate_limits(response);
+        if response.retry_after().is_some() {
             return Err(EGError::RateLimited);
         }
         Ok(())
@@ -361,17 +366,24 @@ where
     where
         Response: ETHttpResponse,
     {
-        if let Some(retry_after) = RetryAfter::from_headers(&http_response.headers) {
+        let status = http_response.status;
+        let retry_after = RetryAfter::from_headers(&http_response.headers);
+        if status == 429 {
+            if let Ok(response) = Response::try_from_http(http_response) {
+                self.apply_rate_limits(&response);
+            }
+            if let Some(retry_after) = retry_after {
+                let _ = self.rate_limiters.set_retry_after(retry_after);
+            }
+            return Err(EGError::send_failed(EGError::RateLimited));
+        }
+        if let Some(retry_after) = retry_after {
             let _ = self.rate_limiters.set_retry_after(retry_after);
             // The exchange responded but is throttling us. The request reached the
             // exchange, so it cannot be reported as not sent; a 2xx carrying a
             // Retry-After may even have succeeded, so the outcome is unknown.
             return Err(EGError::send_unknown(EGError::RateLimited));
         }
-        if http_response.status == 429 {
-            return Err(EGError::send_failed(EGError::RateLimited));
-        }
-        let status = http_response.status;
         if !(200..300).contains(&status) {
             let error = EGError::HttpError {
                 status,
