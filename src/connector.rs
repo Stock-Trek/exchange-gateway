@@ -4,8 +4,9 @@ use crate::{
     error::{EGError, EGResult},
     functions::BoxTryCreateOnce,
     rate_limit::{
-        rate_limiter::RateLimiter, rate_limiter_state::RateLimiterState,
-        rate_limiters::RateLimiters,
+        rate_limiter::RateLimiter,
+        rate_limiter_state::RateLimiterState,
+        rate_limiters::{RateLimitGuard, RateLimiters},
     },
     retry_after::RetryAfter,
     submission::{Submission, SubmissionOutcome},
@@ -295,7 +296,11 @@ where
         let costs = self
             .validate_rate_limits(&request)
             .map_err(EGError::send_not_sent)?;
-        let future = self.send_http(request, costs);
+        let guard = RateLimitGuard::new(&self.rate_limiters, costs.clone());
+        let future = async move {
+            guard.disarm();
+            self.send_http(request, costs).await
+        };
         Ok(Submission::new(future))
     }
     async fn send_http<Request>(
@@ -457,7 +462,11 @@ where
         let costs = self
             .validate_rate_limits(&request)
             .map_err(EGError::send_not_sent)?;
-        let future = self.send_websocket(request, costs);
+        let guard = RateLimitGuard::new(&self.rate_limiters, costs.clone());
+        let future = async move {
+            guard.disarm();
+            self.send_websocket(request, costs).await
+        };
         Ok(Submission::new(future))
     }
     async fn send_websocket<Request>(

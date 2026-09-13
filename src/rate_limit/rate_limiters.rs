@@ -99,6 +99,38 @@ impl RateLimiters {
     }
 }
 
+pub(crate) struct RateLimitGuard<'a> {
+    rate_limiters: &'a RateLimiters,
+    costs: Vec<(RateLimitRestriction, UsageCount)>,
+    armed: bool,
+}
+
+impl<'a> RateLimitGuard<'a> {
+    pub(crate) fn new(
+        rate_limiters: &'a RateLimiters,
+        costs: Vec<(RateLimitRestriction, UsageCount)>,
+    ) -> Self {
+        Self {
+            rate_limiters,
+            costs,
+            armed: true,
+        }
+    }
+    pub(crate) fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RateLimitGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            for &(restriction, cost) in &self.costs {
+                let _ = self.rate_limiters.refund(restriction, cost);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +161,40 @@ mod tests {
     fn zero_cost_requests_are_allowed_without_retry_after() {
         let rate_limiters = rate_limiters();
         assert!(rate_limiters.did_acquire(&[]).is_ok());
+    }
+
+    fn remaining(rate_limiters: &RateLimiters) -> UsageCount {
+        rate_limiters
+            .remaining_capacity()
+            .expect("remaining capacity")
+            .into_iter()
+            .find(|(rate_limit, _)| rate_limit.restriction == RateLimitRestriction::RawRequests)
+            .map(|(_, remaining)| remaining)
+            .expect("raw requests restriction present")
+    }
+
+    #[test]
+    fn guard_refunds_acquired_cost_on_drop() {
+        let rate_limiters = rate_limiters();
+        let costs = vec![(RateLimitRestriction::RawRequests, UsageCount(3))];
+        rate_limiters.did_acquire(&costs).expect("acquire");
+        assert_eq!(remaining(&rate_limiters), UsageCount(7));
+
+        {
+            let _guard = RateLimitGuard::new(&rate_limiters, costs);
+        }
+
+        assert_eq!(remaining(&rate_limiters), UsageCount(10));
+    }
+
+    #[test]
+    fn disarmed_guard_keeps_acquired_cost() {
+        let rate_limiters = rate_limiters();
+        let costs = vec![(RateLimitRestriction::RawRequests, UsageCount(3))];
+        rate_limiters.did_acquire(&costs).expect("acquire");
+
+        RateLimitGuard::new(&rate_limiters, costs).disarm();
+
+        assert_eq!(remaining(&rate_limiters), UsageCount(7));
     }
 }
