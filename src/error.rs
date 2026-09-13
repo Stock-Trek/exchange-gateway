@@ -112,6 +112,7 @@ impl EGError {
             source: Box::new(source),
         }
     }
+    #[cfg(any(feature = "iris", feature = "reqwest"))]
     pub(crate) fn send_unknown_external(
         source: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {

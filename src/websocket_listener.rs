@@ -1,7 +1,8 @@
+#[cfg(feature = "iris")]
+use crate::panic_guard::PanicUtils;
 use crate::{
     error::{EGError, EGResult},
     functions::ArcPredicate,
-    panic_guard::PanicUtils,
 };
 use std::{
     pin::Pin,
@@ -22,6 +23,7 @@ impl WebsocketListener {
             handlers: Arc::new(Mutex::new(Vec::new())),
         }
     }
+    #[cfg(feature = "iris")]
     pub(crate) async fn on_message(&self, message: serde_json::Value) -> EGResult<()> {
         let handlers = self
             .handlers
@@ -109,10 +111,12 @@ impl Drop for WaiterForResponse {
 #[derive(Clone)]
 struct ResponseHandler {
     state: Arc<Mutex<WaiterState>>,
+    #[cfg_attr(not(feature = "iris"), allow(dead_code))]
     filter: ArcPredicate<serde_json::Value>,
 }
 
 impl ResponseHandler {
+    #[cfg(feature = "iris")]
     fn handle(&self, response: &serde_json::Value) -> EGResult<bool> {
         let is_handled = match PanicUtils::catch_panic(|| (self.filter)(response)) {
             Ok(is_handled) => is_handled,
@@ -147,8 +151,11 @@ struct WaiterState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{future::Future, sync::Arc, task::Waker};
+    use std::sync::Arc;
+    #[cfg(feature = "iris")]
+    use std::{future::Future, task::Waker};
 
+    #[cfg(feature = "iris")]
     fn block_on<F: Future>(future: F) -> F::Output {
         let waker = Waker::noop();
         let mut context = Context::from_waker(waker);
@@ -172,6 +179,7 @@ mod tests {
         assert_eq!(listener.handlers.lock().unwrap().len(), 0);
     }
 
+    #[cfg(feature = "iris")]
     #[test]
     fn dropped_waiter_does_not_swallow_response() {
         let listener = WebsocketListener::new();
@@ -186,6 +194,7 @@ mod tests {
         assert_eq!(block_on(fresh).unwrap(), serde_json::json!({ "value": 42 }));
     }
 
+    #[cfg(feature = "iris")]
     #[test]
     fn filter_callback_does_not_hold_handlers_lock() {
         let listener = WebsocketListener::new();
