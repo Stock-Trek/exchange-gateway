@@ -13,9 +13,6 @@ pub struct ReqwestHttpClient {
 }
 
 impl ReqwestHttpClient {
-    pub fn new(base_url: &str) -> Self {
-        Self::try_new(base_url).expect("failed to build the reqwest HTTP client")
-    }
     pub fn try_new(base_url: &str) -> EGResult<Self> {
         let client = reqwest::Client::builder()
             .build()
