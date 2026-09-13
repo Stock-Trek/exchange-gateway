@@ -39,7 +39,7 @@ use crate::auto_resync_connector::AutoResyncConnector;
 #[cfg(feature = "iris")]
 use {
     crate::clients::iris::IrisWebsocketClient,
-    iris::{Config as IrisConfig, DisconnectedBehavior},
+    iris::{Config as IrisConfig, DisconnectedBehavior, ServerCloseBehavior},
 };
 
 #[cfg(feature = "reqwest")]
@@ -150,7 +150,9 @@ impl Connector<(), ()> {
     where
         Exchange: ETExchange,
     {
-        iris_config = iris_config.with_disconnected_behavior(DisconnectedBehavior::DropAllQueued);
+        iris_config = iris_config
+            .with_disconnected_behavior(DisconnectedBehavior::DropAllQueued)
+            .with_server_close_behavior(ServerCloseBehavior::Reconnect);
         let client_creator: BoxTryCreateOnce<
             (String, Arc<WebsocketListener>),
             IrisWebsocketClient,
