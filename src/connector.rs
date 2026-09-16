@@ -288,7 +288,9 @@ where
         let round_trip_time = start.elapsed();
         let response =
             self.handle_http_response::<Exchange::ServerTimeResponseHttp>(http_response)?;
-        let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
+        let server_time = response
+            .server_time()
+            .map_err(|_| EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
         debug!(
             exchange = self.exchange.name(),
@@ -500,7 +502,9 @@ where
                 Err(error) => return self.on_send_failure(error, costs),
             };
         let round_trip_time = start.elapsed();
-        let server_time = response.server_time().ok_or(EGError::MissingServerTime)?;
+        let server_time = response
+            .server_time()
+            .map_err(|_| EGError::MissingServerTime)?;
         self.clock.sync(server_time, round_trip_time)?;
         debug!(
             exchange = self.exchange.name(),
